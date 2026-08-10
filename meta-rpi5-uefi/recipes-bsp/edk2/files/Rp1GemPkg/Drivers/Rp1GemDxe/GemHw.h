@@ -70,6 +70,15 @@
 #define  GEM_NET_STAT_PHY_MGMT_IDLE      BIT2
 
 //
+// User I/O register: PHY interface select on SAMA-style GEM integrations.
+// RP1's GEM uses the sama7g5 layout (u-boot rp1_gem_config ->
+// sama7g5_usrio: mii=0, rmii=1, rgmii=2); the working u-boot port writes
+// the RGMII value here before touching the PHY.
+//
+#define GEM_USER_IO                      0x00C
+#define  GEM_USER_IO_RGMII               0x2
+
+//
 // DMA Configuration Register
 //
 #define GEM_DMA_CFG                      0x010

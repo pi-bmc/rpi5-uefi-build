@@ -95,6 +95,22 @@ Rp1GemPhyDetect (
     Status = GemMdioRead (Gem, PhyAddr, PHY_IDR1, &Id1);
     if (!EFI_ERROR (Status)) {
       Status = GemMdioRead (Gem, PhyAddr, PHY_IDR2, &Id2);
+      //
+      // Log raw reads for the configured address: on a dead bus this
+      // distinguishes all-ones (nothing driving MDIO) from all-zeroes
+      // (transactions complete, data line stuck) at a glance.
+      //
+      if (Try == 0) {
+        DEBUG ((
+          DEBUG_INFO,
+          "Rp1GemDxe: MDIO probe addr 0x%02x: %r ID 0x%04x:0x%04x\n",
+          PhyAddr,
+          Status,
+          Id1,
+          Id2
+          ));
+      }
+
       if (!EFI_ERROR (Status) && (Id1 != 0xFFFF) && (Id2 != 0xFFFF) &&
           ((Id1 != 0) || (Id2 != 0)))
       {

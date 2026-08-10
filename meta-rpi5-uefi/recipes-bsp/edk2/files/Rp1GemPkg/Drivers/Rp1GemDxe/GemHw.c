@@ -216,6 +216,14 @@ GemMacReset (
 {
   GemWrite32 (Gem, GEM_NET_CTRL, 0);
   GemWrite32 (Gem, GEM_NET_CFG, GemNetCfgBase (Gem));
+  //
+  // Select the RGMII PHY interface. RP1 integrates the GEM with the
+  // SAMA-style USER_IO interface mux (the Zynq reference this driver's
+  // register layer derives from muxes via SLCR instead and never touches
+  // this register); u-boot's working rp1-gem port programs it before any
+  // PHY access.
+  //
+  GemWrite32 (Gem, GEM_USER_IO, GEM_USER_IO_RGMII);
   GemWrite32 (Gem, GEM_NET_CTRL, GEM_NET_CTRL_CLR_STAT_REGS);
   GemWrite32 (Gem, GEM_TX_STAT, GEM_TX_STAT_ALL);
   GemWrite32 (Gem, GEM_RX_STAT, GEM_RX_STAT_ALL);
