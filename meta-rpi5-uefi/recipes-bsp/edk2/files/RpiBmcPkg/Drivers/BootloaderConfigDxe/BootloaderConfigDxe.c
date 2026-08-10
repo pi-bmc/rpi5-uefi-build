@@ -35,6 +35,7 @@
 #include <Library/BaseLib.h>
 #include <Library/DebugLib.h>
 #include <Library/FdtLib.h>
+#include <Library/MemoryAllocationLib.h>
 #include <Library/PcdLib.h>
 #include <Library/UefiBootServicesTableLib.h>
 #include <Library/UefiLib.h>
@@ -185,9 +186,12 @@ BootloaderConfigOnReadyToBoot (
   UINT32        DtbTimestamp;
   UINT32        StoredTimestamp;
   UINTN         VarSize;
-  UINT64        RegionAddress;
-  UINT64        RegionSize;
-  UINTN         DataLen;
+  UINT64                 RegionAddress;
+  UINT64                 RegionSize;
+  UINTN                  DataLen;
+  UINT8                  *Data;
+  CONST volatile UINT8   *Region;
+  UINTN                  Index;
 
   //
   // Run once per boot: ReadyToBoot can be signaled again on a later boot
@@ -266,13 +270,33 @@ BootloaderConfigOnReadyToBoot (
       ));
   }
 
+  //
+  // The blconfig region is a VPU carve-out outside the UEFI system-memory
+  // map, mapped as device memory -- unaligned/wide accesses to it take an
+  // alignment fault (seen in the field as a data abort inside
+  // VariableRuntimeDxe's CopyMem when this pointer was passed straight to
+  // SetVariable). Stage the bytes into a pool buffer with single-byte
+  // reads, which are always aligned and therefore legal on device memory.
+  //
+  Data = AllocatePool (DataLen);
+  if (Data == NULL) {
+    DEBUG ((DEBUG_WARN, "BootloaderConfig: out of memory staging config\n"));
+    return;
+  }
+
+  Region = (CONST volatile UINT8 *)(UINTN)RegionAddress;
+  for (Index = 0; Index < DataLen; Index++) {
+    Data[Index] = Region[Index];
+  }
+
   Status = gRT->SetVariable (
                   BMC_VAR_BOOTLOADER_CONFIG,
                   &gRpiBmcBootloaderVendorGuid,
                   BL_VAR_ATTRIBUTES,
                   DataLen,
-                  (VOID *)(UINTN)RegionAddress
+                  Data
                   );
+  FreePool (Data);
   if (EFI_ERROR (Status)) {
     //
     // Do not advance the timestamp: the gate stays open and the config

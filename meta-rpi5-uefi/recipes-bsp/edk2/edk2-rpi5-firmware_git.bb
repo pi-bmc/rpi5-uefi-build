@@ -42,6 +42,11 @@ SRCREV_platforms = "4e426104a1f6371484f417650e339a43480cf701"
 SRCREV_nonosi = "07fe302e6eaff27b4afaef5eb868c6759923ba45"
 SRCREV_FORMAT = "edk2_platforms_nonosi"
 
+# UNPACKDIR only exists from styhead (Yocto 5.1) on; scarthgap unpacks
+# straight into WORKDIR. Without this shim, S = "${UNPACKDIR}/git" never
+# expands and do_unpack fails its unexpanded-variable QA check.
+UNPACKDIR ?= "${WORKDIR}"
+
 EDK2_PLATFORMS_PATH = "${UNPACKDIR}/edk2-platforms"
 EDK2_NON_OSI_PATH = "${UNPACKDIR}/edk2-non-osi"
 
@@ -54,11 +59,11 @@ S = "${UNPACKDIR}/git"
 do_compile[depends] += "arm-trusted-firmware:do_deploy"
 do_compile[depends] += "${@bb.utils.contains('RPI5_IPXE', '1', 'ipxe-efi:do_deploy', '', d)}"
 
-# Embed the iPXE UNDI/SNP driver by default -- see ipxe-efi_git.bb's
-# DESCRIPTION for exactly what this does and does not cover (add-on NIC PXE
-# boot: yes; RP1's onboard Ethernet: now covered natively by RPI5_RP1_ETH's
-# Rp1GemDxe instead). Set to "0" to build a plain, unmodified RPi5.fdf.
-RPI5_IPXE ??= "1"
+# iPXE embedding, now OFF by default: the onboard RJ45 PXE/HTTP-boots
+# natively via Rp1GemDxe (RPI5_RP1_ETH) + NetworkPkg's own UefiPxeBcDxe, so
+# iPXE's only remaining coverage is add-on NICs (a PCIe card on the FPC, or
+# a USB dongle from iPXE's driver table). Set to "1" to embed it for those.
+RPI5_IPXE ??= "0"
 
 # Native RP1 GEM (onboard RJ45) SNP driver, built from the local Rp1GemPkg
 # source package. Coexists with iPXE: disjoint hardware, both SNPs feed the
@@ -153,25 +158,34 @@ do_compile() {
         bbfatal "RPi5.fdf: '${fdf_marker}' not found -- edk2-platforms layout changed, update this recipe"
 
     # BMC-integration driver set (local RpiBmcPkg source package).
+    # Every insertion below is grep-guarded so a re-run of do_compile against
+    # the persisted WORKDIR checkout stays idempotent -- duplicate includes
+    # mean duplicate FFS files and a GenFv failure.
     if [ "${RPI5_BMC}" = "1" ]; then
         printf '%s\n' '!include RpiBmcPkg/RpiBmc.dsc.inc' > "${B}/rpibmc-dsc-line.inc"
         printf '%s\n' '!include RpiBmcPkg/RpiBmc.fdf.inc' > "${B}/rpibmc-fdf-line.inc"
-        sed -i "\|${dsc_marker}|r ${B}/rpibmc-dsc-line.inc" "${dsc}"
-        sed -i "\|${fdf_marker}|r ${B}/rpibmc-fdf-line.inc" "${fdf}"
+        grep -qF 'RpiBmcPkg/RpiBmc.dsc.inc' "${dsc}" || \
+            sed -i "\|${dsc_marker}|r ${B}/rpibmc-dsc-line.inc" "${dsc}"
+        grep -qF 'RpiBmcPkg/RpiBmc.fdf.inc' "${fdf}" || \
+            sed -i "\|${fdf_marker}|r ${B}/rpibmc-fdf-line.inc" "${fdf}"
     fi
 
     # Native RP1 GEM onboard-Ethernet SNP driver (local Rp1GemPkg).
     if [ "${RPI5_RP1_ETH}" = "1" ]; then
         printf '%s\n' '!include Rp1GemPkg/Rp1Gem.dsc.inc' > "${B}/rp1gem-dsc-line.inc"
         printf '%s\n' '!include Rp1GemPkg/Rp1Gem.fdf.inc' > "${B}/rp1gem-fdf-line.inc"
-        sed -i "\|${dsc_marker}|r ${B}/rp1gem-dsc-line.inc" "${dsc}"
-        sed -i "\|${fdf_marker}|r ${B}/rp1gem-fdf-line.inc" "${fdf}"
+        grep -qF 'Rp1GemPkg/Rp1Gem.dsc.inc' "${dsc}" || \
+            sed -i "\|${dsc_marker}|r ${B}/rp1gem-dsc-line.inc" "${dsc}"
+        grep -qF 'Rp1GemPkg/Rp1Gem.fdf.inc' "${fdf}" || \
+            sed -i "\|${fdf_marker}|r ${B}/rp1gem-fdf-line.inc" "${fdf}"
     fi
 
     # edk2's own USB CDC-ECM/NCM/RNDIS drivers (in-tree, unwired upstream).
     if [ "${RPI5_USBNET}" = "1" ]; then
-        sed -i "\|${dsc_marker}|r ${WORKDIR}/usbnet-dsc-snippet.inc" "${dsc}"
-        sed -i "\|${fdf_marker}|r ${WORKDIR}/usbnet-fdf-snippet.fdf.inc" "${fdf}"
+        grep -qF 'UsbNetwork/NetworkCommon/NetworkCommon.inf' "${dsc}" || \
+            sed -i "\|${dsc_marker}|r ${WORKDIR}/usbnet-dsc-snippet.inc" "${dsc}"
+        grep -qF 'INF MdeModulePkg/Bus/Usb/UsbNetwork/NetworkCommon/NetworkCommon.inf' "${fdf}" || \
+            sed -i "\|${fdf_marker}|r ${WORKDIR}/usbnet-fdf-snippet.fdf.inc" "${fdf}"
     fi
 
     # --- embed the iPXE UNDI/SNP driver, if built -----------------------
@@ -186,7 +200,8 @@ do_compile() {
             -e "s|@IPXE_DRIVER_FILE_GUID@|${IPXE_DRIVER_FILE_GUID}|" \
             -e "s|@IPXE_EFIDRV_PATH@|${DEPLOY_DIR_IMAGE}/ipxe.efidrv|" \
             "${WORKDIR}/ipxe-fdf-snippet.fdf.inc" > "${snippet}"
-        sed -i "\|${fdf_marker}|r ${snippet}" "${fdf}"
+        grep -qF "${IPXE_DRIVER_FILE_GUID}" "${fdf}" || \
+            sed -i "\|${fdf_marker}|r ${snippet}" "${fdf}"
     fi
 
     build \
@@ -198,13 +213,19 @@ do_compile() {
         ${RPI5_EDK2_EXTRA_FLAGS} \
         -y ${B}/RPI_EFI.report.txt
 
-    [ -f "${S}/Build/RPi5/${RPI5_BUILD_TARGET}_GCC/FV/RPI_EFI.fd" ] || \
+    [ -f "${WORKDIR}/Build/RPi5/${RPI5_BUILD_TARGET}_GCC/FV/RPI_EFI.fd" ] || \
         bbfatal "edk2 build produced no RPI_EFI.fd -- see ${B}/RPI_EFI.report.txt"
 }
 
 do_deploy() {
     install -d ${DEPLOYDIR}
-    install -m 0644 ${S}/Build/RPi5/${RPI5_BUILD_TARGET}_GCC/FV/RPI_EFI.fd ${DEPLOYDIR}/RPI_EFI.fd
+    install -m 0644 ${WORKDIR}/Build/RPi5/${RPI5_BUILD_TARGET}_GCC/FV/RPI_EFI.fd ${DEPLOYDIR}/RPI_EFI.fd
+    # Same bytes under the BCM2712 default armstub filename: the VPU
+    # bootloader auto-loads armstub8-2712.bin from the boot partition at
+    # address 0x0 (= PcdFdBaseAddress), so config.txt needs no armstub=
+    # line. RPI_EFI.fd is kept for anyone following the upstream
+    # rpi5-uefi install flow with an explicit armstub= entry.
+    install -m 0644 ${WORKDIR}/Build/RPi5/${RPI5_BUILD_TARGET}_GCC/FV/RPI_EFI.fd ${DEPLOYDIR}/armstub8-2712.bin
     install -m 0644 ${WORKDIR}/config.txt ${DEPLOYDIR}/config.txt
     install -m 0644 ${B}/RPI_EFI.report.txt ${DEPLOYDIR}/RPI_EFI.report.txt
 }

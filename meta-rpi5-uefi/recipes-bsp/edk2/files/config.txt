@@ -1,13 +1,16 @@
 # Raspberry Pi 5 GPU/EEPROM bootloader config for booting into our custom
-# TF-A+EDK2 armstub instead of Linux, exactly matching
-# NumberOneGit/rpi5-uefi's config.txt (which is itself worproject/rpi5-uefi's,
-# updated for the current RPi5.fdf memory map -- device_tree_address must sit
-# right after the firmware image: RPi5.fdf sizes the FD region at 0x3e0000
-# bytes (gArmTokenSpaceGuid.PcdFdSize) and places the DTB immediately after it
-# (gRaspberryPiTokenSpaceGuid.PcdFdtBaseAddress|0x003e0000), so these two
-# values are NOT independent of the firmware build -- if RPi5.fdf's FD size
-# ever changes, this file needs to change with it).
-armstub=RPI_EFI.fd
+# TF-A+EDK2 bootloader instead of Linux (worproject/NumberOneGit rpi5-uefi
+# lineage). No armstub= line: the firmware ships on the boot partition as
+# armstub8-2712.bin, the default BCM2712 stub filename the VPU bootloader
+# auto-loads at address 0x0 -- exactly where RPi5.fdf links the FD
+# (gArmTokenSpaceGuid.PcdFdBaseAddress|0x0).
+#
+# device_tree_address must sit right after the firmware image: RPi5.fdf
+# sizes the FD region at 0x3e0000 bytes (gArmTokenSpaceGuid.PcdFdSize) and
+# the DTB window follows immediately (PcdFdtBaseAddress|0x003e0000, also
+# baked into TF-A as RPI3_PRELOADED_DTB_BASE and read by BootloaderConfigDxe
+# / PlatformSmbiosDxe). These two values are NOT independent of the firmware
+# build -- if RPi5.fdf's FD size ever changes, this file changes with it.
 device_tree_address=0x3e0000
 device_tree_end=0x400000
 
@@ -22,3 +25,15 @@ usb_max_current_enable=1
 
 # Force maximum CPU speed.
 force_turbo=1
+
+[pi5]
+usb_max_current_enable=1
+# Keep the dedicated 3-pin debug UART up: the UEFI console is hardwired to
+# it (PL011 @ 0x107d001000, 115200 8N1, PcdSerialRegisterBase in RPi5.dsc)
+# *in addition to* HDMI -- ConSplitter mirrors to both, so whichever is
+# connected shows the console. Set BOOT_UART=1 in the EEPROM config for the
+# VPU bootloader's own early log on the same pins.
+enable_uart=1
+framebuffer_depth=32
+framebuffer_ignore_alpha=1
+hdmi_force_hotplug=1

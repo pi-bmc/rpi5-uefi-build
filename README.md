@@ -7,18 +7,34 @@ for the Raspberry Pi 5, structured the same way as
 recipe (fetched by pinned `SRCREV`, no submodules) rather than a git submodule
 checked directly into this repo.
 
-Output: `RPI_EFI.fd` + `config.txt`, deployed to
-`build/tmp/deploy/images/raspberrypi5-uefi/`. Flash `RPI_EFI.fd` as
-`pieeprom.upd`-style firmware per the
-[upstream README](https://github.com/NumberOneGit/rpi5-uefi#usage), or place
-both files on the boot partition per that project's install instructions.
+Output: `rpi5-uefi-sd.img`, deployed to
+`build/tmp/deploy/images/raspberrypi5-uefi/` -- a flashable MBR image with a
+single FAT32 boot partition carrying `armstub8-2712.bin` (the UEFI firmware
+under the default BCM2712 armstub filename, auto-loaded by the VPU bootloader
+at address 0x0 with no `armstub=` line), `config.txt`, the `bcm2712*.dtb`
+device trees and `overlays/` (pinned raspberrypi/firmware release, see
+`rpi-boot-dtbs`). Write it with `dd`/Raspberry Pi Imager. The raw
+`RPI_EFI.fd`/`armstub8-2712.bin` + `config.txt` are deployed alongside for
+hand-made boot partitions.
+
+This image is an **alternative bootloader** and deliberately incompatible
+with the u-boot-based image from `../nanokvm-build`: both stacks claim the
+`armstub8-2712.bin` name with different payloads (bare BL31 +
+`kernel=u-boot.bin` there; BL31+UEFI, no kernel, here). One card carries one
+bootloader.
 
 ## Build
 
 ```sh
 pip3 install kas
 kas build kas.yml
+hack/flash-sd.sh        # write rpi5-uefi-sd.img to the first SD card found
 ```
+
+`hack/flash-sd.sh` picks the first non-system SD/MMC disk (then removable USB
+disk), shows it, and asks before erasing; `-y` skips the prompt, `--dry-run`
+only shows the choice, `-d /dev/sdX` overrides detection (system disks are
+refused even then).
 
 ## Layer / recipe layout
 
@@ -107,8 +123,8 @@ sed-marker idiom the iPXE embedding uses.
 
 Set any of these in `kas.yml`'s `local_conf_header` (or `local.conf`):
 
-- `RPI5_IPXE` (default `"1"`) -- embed the iPXE driver; `"0"` for an
-  unmodified `RPi5.fdf`.
+- `RPI5_IPXE` (default `"0"` since the native Rp1GemDxe covers onboard
+  PXE) -- embed the iPXE driver for add-on PCIe/USB NICs.
 - `RPI5_RP1_ETH` (default `"1"`) -- build/embed the native RP1 GEM
   onboard-Ethernet SNP driver (`Rp1GemPkg`).
 - `RPI5_BMC` (default `"1"`) -- build/embed the BMC-integration driver set

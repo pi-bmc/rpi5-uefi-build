@@ -29,6 +29,7 @@
   BaseLib
   DebugLib
   FdtLib
+  MemoryAllocationLib
   PcdLib
   UefiBootServicesTableLib
   UefiDriverEntryPoint

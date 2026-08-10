@@ -58,7 +58,9 @@ do_compile() {
 do_deploy() {
     install -d ${DEPLOYDIR}
     install -m 0644 ${S}/build/rpi5/${TFA_BUILD_TYPE}/bl31.bin ${DEPLOYDIR}/bl31.bin
-    install -m 0644 ${S}/build/rpi5/${TFA_BUILD_TYPE}/bl31.elf ${DEPLOYDIR}/bl31.elf
+    # TF-A links the ELF under a per-image subdir (build/<plat>/<type>/bl31/);
+    # only the objcopy'd .bin lands at the build-type root.
+    install -m 0644 ${S}/build/rpi5/${TFA_BUILD_TYPE}/bl31/bl31.elf ${DEPLOYDIR}/bl31.elf
 }
 
 addtask deploy after do_compile

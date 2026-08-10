@@ -49,8 +49,11 @@ COMPATIBLE_MACHINE = "raspberrypi5-uefi"
 # the target sysroot -- but unlike meta-nuc-bios's x86_64-native ipxe-efi
 # recipe, this one genuinely cross-compiles (build host is normally x86_64,
 # target is AArch64), so the default DEPENDS chain (virtual/${TARGET_PREFIX}gcc
-# and friends) is left enabled rather than inhibited.
-INHIBIT_DEFAULT_DEPS = "0"
+# and friends) must stay enabled. NOTE: that means NOT setting
+# INHIBIT_DEFAULT_DEPS at all -- base.bbclass tests the variable for python
+# truthiness, so the seemingly-innocent string "0" actually *inhibits* the
+# cross-toolchain dependency and do_compile then races the toolchain build
+# ("aarch64-...-gcc: command not found").
 
 do_configure[noexec] = "1"
 

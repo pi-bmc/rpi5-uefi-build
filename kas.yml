@@ -1,6 +1,8 @@
 # kas configuration for the standalone Raspberry Pi 5 UEFI firmware build
-# Usage: kas build kas.yml           -> deploys RPI_EFI.fd + config.txt under
-#        build/tmp/deploy/images/raspberrypi5-uefi/
+# Usage: kas build kas.yml           -> deploys rpi5-uefi-sd.img (flashable SD
+#        image: armstub8-2712.bin + config.txt + DTBs + overlays on one FAT32
+#        boot partition) plus the raw RPI_EFI.fd/armstub8-2712.bin artifacts,
+#        under build/tmp/deploy/images/raspberrypi5-uefi/
 # Install kas: pip3 install kas
 
 header:
@@ -8,7 +10,7 @@ header:
 
 machine: raspberrypi5-uefi
 distro: poky
-target: edk2-rpi5-firmware
+target: rpi5-uefi-sdimg
 
 build_system: openembedded
 
@@ -45,7 +47,7 @@ local_conf_header:
     # unmodified RPi5.fdf build.
     # RPI5_IPXE = "1"
     # RELEASE (default), DEBUG or NOOPT.
-    # RPI5_BUILD_TARGET = "RELEASE"
+    RPI5_BUILD_TARGET = "DEBUG"
     # Shared download and sstate directories (can be overridden per user)
     DL_DIR = "/opt/yocto/downloads"
     SSTATE_DIR = "/opt/yocto/sstate-cache"
