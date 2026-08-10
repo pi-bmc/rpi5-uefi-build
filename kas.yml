@@ -1,0 +1,49 @@
+# kas configuration for the standalone Raspberry Pi 5 UEFI firmware build
+# Usage: kas build kas.yml           -> deploys RPI_EFI.fd + config.txt under
+#        build/tmp/deploy/images/raspberrypi5-uefi/
+# Install kas: pip3 install kas
+
+header:
+  version: 14
+
+machine: raspberrypi5-uefi
+distro: poky
+target: edk2-rpi5-firmware
+
+build_system: openembedded
+
+repos:
+  poky:
+    url: https://git.yoctoproject.org/poky
+    branch: scarthgap
+    layers:
+      meta:
+      meta-poky:
+
+  # Local layer (inside this repo)
+  meta-rpi5-uefi:
+    path: meta-rpi5-uefi
+    layers:
+      .:
+
+local_conf_header:
+  rpi5-uefi: |
+    # Raspberry Pi 5 UEFI firmware build configuration
+    MACHINE = "raspberrypi5-uefi"
+    DISTRO = "poky"
+    # Parallel build tuning
+    BB_NUMBER_THREADS = "${@oe.utils.cpu_count()}"
+    PARALLEL_MAKE = "-j ${@oe.utils.cpu_count()}"
+    # Shared download and sstate directories (can be overridden per user)
+    # DL_DIR = "${TOPDIR}/downloads"
+    # SSTATE_DIR = "${TOPDIR}/sstate-cache"
+    # Disable interactive prompts
+    CONNECTIVITY_CHECK_URIS = ""
+    # Embed the iPXE UNDI/SNP driver (built by the ipxe-efi recipe) into the
+    # DXE firmware volume, since RP1's onboard Ethernet has no edk2 driver of
+    # its own. This enables PXE boot from an add-on PCIe or USB NIC that iPXE
+    # recognises -- NOT the onboard RJ45 jack. Set to "0" for a plain,
+    # unmodified RPi5.fdf build.
+    # RPI5_IPXE = "1"
+    # RELEASE (default), DEBUG or NOOPT.
+    # RPI5_BUILD_TARGET = "RELEASE"

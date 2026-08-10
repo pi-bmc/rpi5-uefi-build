@@ -18,10 +18,16 @@ HOMEPAGE = "https://github.com/NumberOneGit/rpi5-uefi"
 LICENSE = "BSD-2-Clause-Patent"
 LIC_FILES_CHKSUM = "file://License.txt;md5=2b415520383f7964e96700ae12b4570a"
 
+DEPENDS = "acpica-native arm-trusted-firmware util-linux-native"
+DEPENDS += "${@bb.utils.contains('RPI5_IPXE', '1', 'ipxe-efi', '', d)}"
+
+PV = "202405+git${SRCPV}"
+
 SRC_URI = "gitsm://github.com/NumberOneGit/edk2.git;protocol=https;branch=master;name=edk2;destsuffix=git \
            git://github.com/NumberOneGit/edk2-platforms.git;protocol=https;branch=master;name=platforms;destsuffix=edk2-platforms \
            git://github.com/NumberOneGit/edk2-non-osi.git;protocol=https;branch=master;name=nonosi;destsuffix=edk2-non-osi \
            file://config.txt \
+           file://ipxe-fdf-snippet.fdf.inc \
            "
 # All three pinned to the exact commits NumberOneGit/rpi5-uefi's own
 # submodules point at (see that repo's git tree), i.e. what its published
@@ -31,17 +37,14 @@ SRCREV_platforms = "4e426104a1f6371484f417650e339a43480cf701"
 SRCREV_nonosi = "07fe302e6eaff27b4afaef5eb868c6759923ba45"
 SRCREV_FORMAT = "edk2_platforms_nonosi"
 
-PV = "202405+git${SRCPV}"
-S = "${WORKDIR}/git"
-EDK2_PLATFORMS_PATH = "${WORKDIR}/edk2-platforms"
-EDK2_NON_OSI_PATH = "${WORKDIR}/edk2-non-osi"
+EDK2_PLATFORMS_PATH = "${UNPACKDIR}/edk2-platforms"
+EDK2_NON_OSI_PATH = "${UNPACKDIR}/edk2-non-osi"
 
 COMPATIBLE_MACHINE = "raspberrypi5-uefi"
 
 inherit deploy
 
-DEPENDS = "acpica-native util-linux-native arm-trusted-firmware"
-DEPENDS += "${@bb.utils.contains('RPI5_IPXE', '1', 'ipxe-efi', '', d)}"
+S = "${UNPACKDIR}/git"
 
 do_compile[depends] += "arm-trusted-firmware:do_deploy"
 do_compile[depends] += "${@bb.utils.contains('RPI5_IPXE', '1', 'ipxe-efi:do_deploy', '', d)}"
@@ -69,13 +72,6 @@ do_configure[noexec] = "1"
 # within RPi5.fdf; it has no meaning outside this build (freshly generated,
 # not reused from anywhere else).
 IPXE_DRIVER_FILE_GUID = "c3e36d1a-8f42-4b3e-9a5d-2f6c7b8e9a10"
-
-python do_patch_append() {
-    # Not a real patch task use -- see the comment in do_compile() below for
-    # why the RPi5.fdf edit happens there (as a plain sed) instead of here as
-    # an actual patch file.
-    pass
-}
 
 do_compile() {
     cd ${S}
@@ -124,23 +120,21 @@ do_compile() {
     # exact upstream whitespace/formatting isn't reliably knowable ahead of
     # time (only reviewed via a web-rendered copy), so a hand-written unified
     # diff risks failing to apply on a real checkout. Anchoring on the exact,
-    # well-known EDK2 include line below is far more robust.
+    # well-known EDK2 include line below, and appending the pre-rendered
+    # snippet file with sed's "r" command, avoids that risk entirely (no
+    # multi-line shell/sed escaping to get wrong).
     if [ "${RPI5_IPXE}" = "1" ]; then
         fdf="${EDK2_PLATFORMS_PATH}/Platform/RaspberryPi/RPi5/RPi5.fdf"
         marker='!include NetworkPkg/Network.fdf.inc'
         grep -qF "${marker}" "${fdf}" || \
             bbfatal "RPi5.fdf: '${marker}' not found -- edk2-platforms layout changed, update this recipe"
-        sed -i "\\|${marker}|a\\\\
-\\\\
-  #\\\\
-  # iPXE UNDI/SNP driver (prebuilt by the ipxe-efi Yocto recipe). RP1's\\\\
-  # onboard Ethernet has no edk2 driver of its own, so without this PXE has\\\\
-  # no NIC to bind to. Driven by whatever NIC iPXE recognises: a PCIe card\\\\
-  # on the M.2/PCIe FPC connector, or a USB Ethernet dongle.\\\\
-  #\\\\
-  FILE DRIVER = ${IPXE_DRIVER_FILE_GUID} {\\\\
-    SECTION PE32 = ${DEPLOY_DIR_IMAGE}/ipxe.efidrv\\\\
-  }" "${fdf}"
+
+        snippet="${B}/ipxe-fdf-snippet.fdf.inc"
+        sed \
+            -e "s|@IPXE_DRIVER_FILE_GUID@|${IPXE_DRIVER_FILE_GUID}|" \
+            -e "s|@IPXE_EFIDRV_PATH@|${DEPLOY_DIR_IMAGE}/ipxe.efidrv|" \
+            "${WORKDIR}/ipxe-fdf-snippet.fdf.inc" > "${snippet}"
+        sed -i "/${marker}/r ${snippet}" "${fdf}"
     fi
 
     build \
