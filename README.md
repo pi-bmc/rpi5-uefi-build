@@ -75,12 +75,46 @@ too). It does **not** make the onboard jack usable in UEFI. This matches the
 task's own "*This should enable ethernet/PXE*" hedge -- it does, but only for
 add-on NICs.
 
+## Local driver packages (pi-bmc port)
+
+Beyond the upstream build, `meta-rpi5-uefi/recipes-bsp/edk2/files/` carries
+two out-of-tree EDK2 source packages plus one small patch, porting the
+`../u-boot` RPi 5 driver set to EDK2 (all fresh BSD-2-Clause-Patent code;
+the GPL u-boot drivers were behavioral/wire-format reference only):
+
+- **`Rp1GemPkg`** (`RPI5_RP1_ETH`) -- `Rp1GemDxe`, a native SNP driver for
+  the onboard RJ45 (Cadence GEM_GXL in RP1), registers from Xilinx UG585 /
+  FreeBSD `if_cgem.c`. What iPXE never covered.
+- **`RpiBmcPkg`** (`RPI5_BMC`) -- the host side of the BMC shared-EEPROM
+  contract (24c256 @0x50 on RP1 I2C1, real or BMC-emulated): `Rp1DwI2cDxe`
+  (DesignWare I2C master), `EepromVarStoreDxe` (UbEfiVa variable blob at
+  0x0000: restore at BDS, sync-back at ReadyToBoot/reset),
+  `SmbiosEepromMirrorDxe` (SM3 blob at 0x6000), `BlkInfoMirrorDxe`
+  (BLK1+JSON at 0x6800), `BootloaderConfigDxe` (blconfig -> UEFI variable,
+  timestamp-gated), plus `Rp1GpioLib`/`BmcEepromLib`.
+- **`0001-Rp1BusDxe-...patch`** -- extends upstream `Rp1BusDxe` to register
+  the GEM and I2C1 blocks as vendor NonDiscoverable children (the xHCI
+  pattern); the only upstream file change the set needs.
+- **`RPI5_USBNET`** -- wires edk2's own (present-but-unwired) USB
+  CDC-ECM/NCM/RNDIS class drivers into the platform, so the BMC's
+  `g_ether` gadget is a bootable NIC.
+
+Integration is patch-light by design: the packages ride an extra
+`PACKAGES_PATH` entry and are pulled into `RPi5.dsc`/`.fdf` via the same
+sed-marker idiom the iPXE embedding uses.
+
 ## Variables
 
 Set any of these in `kas.yml`'s `local_conf_header` (or `local.conf`):
 
 - `RPI5_IPXE` (default `"1"`) -- embed the iPXE driver; `"0"` for an
   unmodified `RPi5.fdf`.
+- `RPI5_RP1_ETH` (default `"1"`) -- build/embed the native RP1 GEM
+  onboard-Ethernet SNP driver (`Rp1GemPkg`).
+- `RPI5_BMC` (default `"1"`) -- build/embed the BMC-integration driver set
+  (`RpiBmcPkg`).
+- `RPI5_USBNET` (default `"1"`) -- wire edk2's USB CDC-ECM/NCM/RNDIS
+  drivers into the build.
 - `RPI5_BUILD_TARGET` (default `"RELEASE"`) -- `RELEASE`, `DEBUG` or `NOOPT`.
 - `RPI5_FW_VERSION` (default `${PV}`) -- `PcdFirmwareVersionString`.
 - `RPI5_EDK2_EXTRA_FLAGS` (default empty) -- extra `build` args

@@ -1,0 +1,28 @@
+#/** @file
+#
+#  Stateless MMIO helpers for the RP1 GPIO banks
+#  (io_bank / sys_rio / pads windows).
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+#
+#**/
+
+[Defines]
+  INF_VERSION                    = 0x0001001A
+  BASE_NAME                      = Rp1GpioLib
+  FILE_GUID                      = a6d3a239-132b-4d0b-8ca1-cc8798eaaa89
+  MODULE_TYPE                    = BASE
+  VERSION_STRING                 = 1.0
+  LIBRARY_CLASS                  = Rp1GpioLib
+
+[Sources]
+  Rp1GpioLib.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  RpiBmcPkg/RpiBmcPkg.dec
+  Silicon/RaspberryPi/RpiSiliconPkg/RpiSiliconPkg.dec
+
+[LibraryClasses]
+  DebugLib
+  IoLib

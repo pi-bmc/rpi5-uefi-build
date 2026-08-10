@@ -28,15 +28,14 @@ repos:
 
 local_conf_header:
   rpi5-uefi: |
-    # Raspberry Pi 5 UEFI firmware build configuration
+    # NanoKVM build configuration
     MACHINE = "raspberrypi5-uefi"
     DISTRO = "poky"
+    # Use musl libc to match the original Buildroot build
+    TCLIBC = "musl"
     # Parallel build tuning
     BB_NUMBER_THREADS = "${@oe.utils.cpu_count()}"
     PARALLEL_MAKE = "-j ${@oe.utils.cpu_count()}"
-    # Shared download and sstate directories (can be overridden per user)
-    # DL_DIR = "${TOPDIR}/downloads"
-    # SSTATE_DIR = "${TOPDIR}/sstate-cache"
     # Disable interactive prompts
     CONNECTIVITY_CHECK_URIS = ""
     # Embed the iPXE UNDI/SNP driver (built by the ipxe-efi recipe) into the
@@ -47,3 +46,6 @@ local_conf_header:
     # RPI5_IPXE = "1"
     # RELEASE (default), DEBUG or NOOPT.
     # RPI5_BUILD_TARGET = "RELEASE"
+    # Shared download and sstate directories (can be overridden per user)
+    DL_DIR = "/opt/yocto/downloads"
+    SSTATE_DIR = "/opt/yocto/sstate-cache"

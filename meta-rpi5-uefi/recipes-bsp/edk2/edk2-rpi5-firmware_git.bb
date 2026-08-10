@@ -28,6 +28,11 @@ SRC_URI = "gitsm://github.com/NumberOneGit/edk2.git;protocol=https;branch=master
            git://github.com/NumberOneGit/edk2-non-osi.git;protocol=https;branch=master;name=nonosi;destsuffix=edk2-non-osi \
            file://config.txt \
            file://ipxe-fdf-snippet.fdf.inc \
+           file://0001-Rp1BusDxe-register-GEM-and-I2C1-vendor-devices.patch;patchdir=../edk2-platforms \
+           file://RpiBmcPkg \
+           file://Rp1GemPkg \
+           file://usbnet-dsc-snippet.inc \
+           file://usbnet-fdf-snippet.fdf.inc \
            "
 # All three pinned to the exact commits NumberOneGit/rpi5-uefi's own
 # submodules point at (see that repo's git tree), i.e. what its published
@@ -51,9 +56,25 @@ do_compile[depends] += "${@bb.utils.contains('RPI5_IPXE', '1', 'ipxe-efi:do_depl
 
 # Embed the iPXE UNDI/SNP driver by default -- see ipxe-efi_git.bb's
 # DESCRIPTION for exactly what this does and does not cover (add-on NIC PXE
-# boot: yes; RP1's onboard Ethernet specifically: no). Set to "0" to build a
-# plain, unmodified RPi5.fdf.
+# boot: yes; RP1's onboard Ethernet: now covered natively by RPI5_RP1_ETH's
+# Rp1GemDxe instead). Set to "0" to build a plain, unmodified RPi5.fdf.
 RPI5_IPXE ??= "1"
+
+# Native RP1 GEM (onboard RJ45) SNP driver, built from the local Rp1GemPkg
+# source package. Coexists with iPXE: disjoint hardware, both SNPs feed the
+# same NetworkPkg stack.
+RPI5_RP1_ETH ??= "1"
+
+# BMC-integration driver set (local RpiBmcPkg): RP1 I2C1 master, EEPROM-backed
+# UEFI variable sync (UbEfiVa blob at 0x0000), SMBIOS mirror (0x6000), block
+# inventory (0x6800), BootloaderConfig publishing -- the host side of the
+# shared-24c256 contract with the BMC (see RpiBmcPkg.dec's region map).
+RPI5_BMC ??= "1"
+
+# Wire edk2's own USB CDC-ECM/NCM/RNDIS class drivers (present in the pinned
+# tree, not in RPi5.dsc) into the build, so a BMC g_ether/f_ecm gadget on an
+# RP1 USB port becomes a bootable SNP interface.
+RPI5_USBNET ??= "1"
 
 # RELEASE, DEBUG or NOOPT, per RPi5.dsc's [Defines] BUILD_TARGETS.
 RPI5_BUILD_TARGET ??= "RELEASE"
@@ -91,8 +112,16 @@ do_compile() {
     # common parent, exactly mirroring upstream rpi5-uefi/build.sh's own
     # layout (WORKSPACE=repo root, with edk2/edk2-platforms/edk2-non-osi as
     # direct siblings under it).
+    # Local out-of-tree EDK2 packages (RpiBmcPkg, Rp1GemPkg), staged into a
+    # dedicated PACKAGES_PATH root so EDK2's path resolution sees exactly the
+    # two package dirs and nothing else from WORKDIR.
+    local_pkgs="${B}/edk2-local-pkgs"
+    rm -rf "${local_pkgs}"
+    mkdir -p "${local_pkgs}"
+    cp -r "${WORKDIR}/RpiBmcPkg" "${WORKDIR}/Rp1GemPkg" "${local_pkgs}/"
+
     export WORKSPACE="${WORKDIR}"
-    export PACKAGES_PATH="${S}:${EDK2_PLATFORMS_PATH}:${EDK2_NON_OSI_PATH}"
+    export PACKAGES_PATH="${S}:${EDK2_PLATFORMS_PATH}:${EDK2_NON_OSI_PATH}:${local_pkgs}"
     export EDK_TOOLS_PATH="${S}/BaseTools"
     export CONF_PATH="${WORKDIR}/Conf"
     export PYTHON_COMMAND="python3"
@@ -108,33 +137,56 @@ do_compile() {
     # not $CC, so leaving CC unset from the BaseTools step above is fine.
     export GCC_AARCH64_PREFIX="${TARGET_PREFIX}"
 
+    # --- wire optional feature modules into RPi5.dsc / RPi5.fdf ---------
+    # Sed insertions rather than patch files: RPi5.dsc/.fdf's exact upstream
+    # whitespace/formatting isn't reliably knowable ahead of time, so all
+    # insertions anchor on edk2's own well-known NetworkPkg include lines and
+    # append pre-rendered snippet files with sed's "r" command. The \| |
+    # address delimiters matter: the markers contain slashes.
+    dsc="${EDK2_PLATFORMS_PATH}/Platform/RaspberryPi/RPi5/RPi5.dsc"
+    fdf="${EDK2_PLATFORMS_PATH}/Platform/RaspberryPi/RPi5/RPi5.fdf"
+    dsc_marker='!include NetworkPkg/Network.dsc.inc'
+    fdf_marker='!include NetworkPkg/Network.fdf.inc'
+    grep -qF "${dsc_marker}" "${dsc}" || \
+        bbfatal "RPi5.dsc: '${dsc_marker}' not found -- edk2-platforms layout changed, update this recipe"
+    grep -qF "${fdf_marker}" "${fdf}" || \
+        bbfatal "RPi5.fdf: '${fdf_marker}' not found -- edk2-platforms layout changed, update this recipe"
+
+    # BMC-integration driver set (local RpiBmcPkg source package).
+    if [ "${RPI5_BMC}" = "1" ]; then
+        printf '%s\n' '!include RpiBmcPkg/RpiBmc.dsc.inc' > "${B}/rpibmc-dsc-line.inc"
+        printf '%s\n' '!include RpiBmcPkg/RpiBmc.fdf.inc' > "${B}/rpibmc-fdf-line.inc"
+        sed -i "\|${dsc_marker}|r ${B}/rpibmc-dsc-line.inc" "${dsc}"
+        sed -i "\|${fdf_marker}|r ${B}/rpibmc-fdf-line.inc" "${fdf}"
+    fi
+
+    # Native RP1 GEM onboard-Ethernet SNP driver (local Rp1GemPkg).
+    if [ "${RPI5_RP1_ETH}" = "1" ]; then
+        printf '%s\n' '!include Rp1GemPkg/Rp1Gem.dsc.inc' > "${B}/rp1gem-dsc-line.inc"
+        printf '%s\n' '!include Rp1GemPkg/Rp1Gem.fdf.inc' > "${B}/rp1gem-fdf-line.inc"
+        sed -i "\|${dsc_marker}|r ${B}/rp1gem-dsc-line.inc" "${dsc}"
+        sed -i "\|${fdf_marker}|r ${B}/rp1gem-fdf-line.inc" "${fdf}"
+    fi
+
+    # edk2's own USB CDC-ECM/NCM/RNDIS drivers (in-tree, unwired upstream).
+    if [ "${RPI5_USBNET}" = "1" ]; then
+        sed -i "\|${dsc_marker}|r ${WORKDIR}/usbnet-dsc-snippet.inc" "${dsc}"
+        sed -i "\|${fdf_marker}|r ${WORKDIR}/usbnet-fdf-snippet.fdf.inc" "${fdf}"
+    fi
+
     # --- embed the iPXE UNDI/SNP driver, if built -----------------------
     # ipxe-efi's do_deploy publishes bin-arm64-efi/ipxe.efidrv to
     # DEPLOY_DIR_IMAGE; wire it into the DXE firmware volume as a prebuilt
     # driver FFS file, right after the point where RPi5.fdf pulls in edk2's
-    # own NetworkPkg PXE/HTTP stack -- that stack has no NIC of its own, and
-    # neither does Rp1BusDxe, so without an SNP provider PXE has nothing to
-    # bind to.
-    #
-    # This is a sed insertion rather than a proper patch file: RPi5.fdf's
-    # exact upstream whitespace/formatting isn't reliably knowable ahead of
-    # time (only reviewed via a web-rendered copy), so a hand-written unified
-    # diff risks failing to apply on a real checkout. Anchoring on the exact,
-    # well-known EDK2 include line below, and appending the pre-rendered
-    # snippet file with sed's "r" command, avoids that risk entirely (no
-    # multi-line shell/sed escaping to get wrong).
+    # own NetworkPkg PXE/HTTP stack. Covers add-on PCIe/USB NICs iPXE
+    # recognises; the onboard RJ45 is Rp1GemDxe's job (see RPI5_RP1_ETH).
     if [ "${RPI5_IPXE}" = "1" ]; then
-        fdf="${EDK2_PLATFORMS_PATH}/Platform/RaspberryPi/RPi5/RPi5.fdf"
-        marker='!include NetworkPkg/Network.fdf.inc'
-        grep -qF "${marker}" "${fdf}" || \
-            bbfatal "RPi5.fdf: '${marker}' not found -- edk2-platforms layout changed, update this recipe"
-
         snippet="${B}/ipxe-fdf-snippet.fdf.inc"
         sed \
             -e "s|@IPXE_DRIVER_FILE_GUID@|${IPXE_DRIVER_FILE_GUID}|" \
             -e "s|@IPXE_EFIDRV_PATH@|${DEPLOY_DIR_IMAGE}/ipxe.efidrv|" \
             "${WORKDIR}/ipxe-fdf-snippet.fdf.inc" > "${snippet}"
-        sed -i "/${marker}/r ${snippet}" "${fdf}"
+        sed -i "\|${fdf_marker}|r ${snippet}" "${fdf}"
     fi
 
     build \

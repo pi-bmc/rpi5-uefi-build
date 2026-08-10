@@ -1,0 +1,28 @@
+#/** @file
+#
+#  Rp1GemPkg - Simple Network Protocol driver for the Raspberry Pi 5's
+#  onboard Ethernet: the Cadence GEM_GXL (r1p09) MAC inside the RP1
+#  southbridge, reached through the vendor NON_DISCOVERABLE_DEVICE that
+#  Rp1BusDxe registers (gRp1GemNonDiscoverableDeviceGuid, two MMIO
+#  resources: GEM core + eth_cfg wrapper).
+#
+#  Out-of-tree package added to PACKAGES_PATH by meta-rpi5-uefi; kept
+#  separate from RpiBmcPkg because it is a candidate for upstreaming to
+#  NumberOneGit/edk2-platforms as RpiSiliconPkg/Drivers/Rp1GemDxe.
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+#
+#**/
+
+[Defines]
+  DEC_SPECIFICATION              = 0x0001001A
+  PACKAGE_NAME                   = Rp1GemPkg
+  PACKAGE_GUID                   = c5a3b32d-87a0-415b-85a4-397f68015cd6
+  PACKAGE_VERSION                = 1.0
+
+[Guids]
+  gRp1GemPkgTokenSpaceGuid = { 0xa712f626, 0x1f19, 0x48aa, { 0x97, 0x02, 0x70, 0x94, 0x35, 0xb8, 0xf8, 0xb6 } }
+
+[PcdsFixedAtBuild]
+  ## MDIO address of the onboard BCM54213PE PHY (firmware DTB: ethernet-phy@1).
+  gRp1GemPkgTokenSpaceGuid.PcdRp1GemPhyAddress|1|UINT8|0x00000001

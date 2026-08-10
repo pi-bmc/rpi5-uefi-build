@@ -1,0 +1,49 @@
+## @file
+#
+#  BootloaderConfigDxe - publish the VPU bootloader EEPROM config
+#  (blconfig nvmem-rmem region) as the BootloaderConfig UEFI variable,
+#  gated on /chosen/bootloader/update-timestamp.
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+#
+##
+
+[Defines]
+  INF_VERSION                    = 0x0001001A
+  BASE_NAME                      = BootloaderConfigDxe
+  FILE_GUID                      = 195722bb-52f4-4a4c-b09f-61e13007a1e6
+  MODULE_TYPE                    = DXE_DRIVER
+  VERSION_STRING                 = 1.0
+  ENTRY_POINT                    = BootloaderConfigEntryPoint
+
+[Sources]
+  BootloaderConfigDxe.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  MdeModulePkg/MdeModulePkg.dec
+  RpiBmcPkg/RpiBmcPkg.dec
+  Platform/RaspberryPi/RaspberryPi.dec
+
+[LibraryClasses]
+  BaseLib
+  DebugLib
+  FdtLib
+  PcdLib
+  UefiBootServicesTableLib
+  UefiDriverEntryPoint
+  UefiLib
+  UefiRuntimeServicesTableLib
+
+[Protocols]
+  gEfiVariableWriteArchProtocolGuid             ## CONSUMES
+
+[Guids]
+  gRpiBmcBootloaderVendorGuid                   ## PRODUCES ## Variable:L"BootloaderConfig"
+  gEfiEventReadyToBootGuid                      ## CONSUMES ## Event
+
+[FixedPcd]
+  gRaspberryPiTokenSpaceGuid.PcdFdtBaseAddress  ## CONSUMES
+
+[Depex]
+  gEfiVariableWriteArchProtocolGuid

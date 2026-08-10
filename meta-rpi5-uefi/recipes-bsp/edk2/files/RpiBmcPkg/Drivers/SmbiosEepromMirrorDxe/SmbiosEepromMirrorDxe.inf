@@ -1,0 +1,44 @@
+#/** @file
+#
+#  Mirror the SMBIOS 3.0 entry point and structure table into the BMC
+#  shared EEPROM's SMBIOS region at ReadyToBoot.
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+#
+#**/
+
+[Defines]
+  INF_VERSION                    = 0x0001001A
+  BASE_NAME                      = SmbiosEepromMirrorDxe
+  FILE_GUID                      = BFDB4A6A-5E22-4085-9D9D-B38A263DCDD2
+  MODULE_TYPE                    = DXE_DRIVER
+  VERSION_STRING                 = 1.0
+  ENTRY_POINT                    = SmbiosEepromMirrorEntryPoint
+
+[Sources]
+  SmbiosEepromMirrorDxe.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  MdeModulePkg/MdeModulePkg.dec
+  RpiBmcPkg/RpiBmcPkg.dec
+
+[LibraryClasses]
+  BaseMemoryLib
+  BmcEepromLib
+  DebugLib
+  MemoryAllocationLib
+  PcdLib
+  UefiBootServicesTableLib
+  UefiDriverEntryPoint
+  UefiLib
+
+[Guids]
+  gEfiSmbios3TableGuid  ## CONSUMES ## SystemTable
+
+[FixedPcd]
+  gRpiBmcTokenSpaceGuid.PcdBmcEepromSmbiosOffset
+  gRpiBmcTokenSpaceGuid.PcdBmcEepromSmbiosSize
+
+[Depex]
+  TRUE

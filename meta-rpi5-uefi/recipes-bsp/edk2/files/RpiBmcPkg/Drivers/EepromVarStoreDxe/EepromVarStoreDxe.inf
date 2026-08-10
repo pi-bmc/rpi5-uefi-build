@@ -1,0 +1,57 @@
+#/** @file
+#
+#  EEPROM-backed UEFI variable restore and sync-back.
+#
+#  Restores NV variables from the BMC shared EEPROM's UbEfiVa blob when
+#  the RP1 I2C master appears (during BDS), and serializes them back at
+#  ReadyToBoot and on reset notification, BMC-relevant variables first.
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+#
+#**/
+
+[Defines]
+  INF_VERSION                    = 0x0001001A
+  BASE_NAME                      = EepromVarStoreDxe
+  FILE_GUID                      = eae83e50-697c-4bb1-a98e-78f5cc743f04
+  MODULE_TYPE                    = DXE_DRIVER
+  VERSION_STRING                 = 1.0
+  ENTRY_POINT                    = EepromVarStoreDxeEntryPoint
+
+[Sources]
+  EepromVarStoreDxe.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  RpiBmcPkg/RpiBmcPkg.dec
+
+[LibraryClasses]
+  BaseLib
+  BaseMemoryLib
+  BmcEepromLib
+  DebugLib
+  MemoryAllocationLib
+  PcdLib
+  UefiBootServicesTableLib
+  UefiDriverEntryPoint
+  UefiLib
+  UefiRuntimeServicesTableLib
+
+[Protocols]
+  gEfiI2cMasterProtocolGuid                       ## CONSUMES
+  gEfiResetNotificationProtocolGuid               ## SOMETIMES_CONSUMES
+  gEfiVariableArchProtocolGuid                    ## CONSUMES
+  gEfiVariableWriteArchProtocolGuid               ## CONSUMES
+
+[Guids]
+  gEfiEventReadyToBootGuid                        ## CONSUMES ## Event
+  gEfiGlobalVariableGuid                          ## CONSUMES
+  gRpiBmcTokenSpaceGuid                           ## CONSUMES
+  gRpiBmcBootloaderVendorGuid                     ## CONSUMES
+
+[Pcd]
+  gRpiBmcTokenSpaceGuid.PcdBmcEepromVarStoreOffset  ## CONSUMES
+  gRpiBmcTokenSpaceGuid.PcdBmcEepromVarStoreSize    ## CONSUMES
+
+[Depex]
+  gEfiVariableArchProtocolGuid AND gEfiVariableWriteArchProtocolGuid

@@ -1,0 +1,43 @@
+#/** @file
+#
+#  EEPROM region accessors for the BMC shared 24c256 on RP1 I2C1.
+#
+#  Speaks EFI_I2C_MASTER_PROTOCOL directly: 2-byte big-endian addressing,
+#  page-chunked writes with ACK-poll, compare-skip rewrites. Usable from
+#  any DXE-phase module (uses gBS->Stall and gBS->LocateProtocol).
+#
+#  Copyright (C) 2016 Marvell International Ltd.
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+#
+#**/
+
+[Defines]
+  INF_VERSION                    = 0x0001001A
+  BASE_NAME                      = BmcEepromLib
+  FILE_GUID                      = 8418b59f-9c36-4049-8796-c81232597f06
+  MODULE_TYPE                    = BASE
+  VERSION_STRING                 = 1.0
+  LIBRARY_CLASS                  = BmcEepromLib|DXE_DRIVER DXE_RUNTIME_DRIVER UEFI_DRIVER UEFI_APPLICATION
+
+[Sources]
+  BmcEepromLib.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  RpiBmcPkg/RpiBmcPkg.dec
+
+[LibraryClasses]
+  BaseMemoryLib
+  DebugLib
+  MemoryAllocationLib
+  PcdLib
+  UefiBootServicesTableLib
+
+[Protocols]
+  gEfiI2cMasterProtocolGuid                       ## CONSUMES
+
+[Pcd]
+  gRpiBmcTokenSpaceGuid.PcdBmcEepromSlaveAddress  ## CONSUMES
+  gRpiBmcTokenSpaceGuid.PcdBmcEepromCapacity      ## CONSUMES
+  gRpiBmcTokenSpaceGuid.PcdBmcEepromPageSize      ## CONSUMES

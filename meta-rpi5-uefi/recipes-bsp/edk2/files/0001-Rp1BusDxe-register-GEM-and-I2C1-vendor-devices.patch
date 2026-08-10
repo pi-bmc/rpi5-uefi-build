@@ -1,0 +1,270 @@
+diff --git a/Silicon/RaspberryPi/RpiSiliconPkg/Drivers/Rp1BusDxe/Rp1BusDxe.c b/Silicon/RaspberryPi/RpiSiliconPkg/Drivers/Rp1BusDxe/Rp1BusDxe.c
+index aed8ae81..ba035394 100644
+--- a/Silicon/RaspberryPi/RpiSiliconPkg/Drivers/Rp1BusDxe/Rp1BusDxe.c
++++ b/Silicon/RaspberryPi/RpiSiliconPkg/Drivers/Rp1BusDxe/Rp1BusDxe.c
+@@ -8,16 +8,28 @@
+ 
+ #include <Uefi.h>
+ #include <IndustryStandard/Pci.h>
++#include <Library/BaseMemoryLib.h>
+ #include <Library/DebugLib.h>
++#include <Library/DevicePathLib.h>
+ #include <Library/IoLib.h>
+ #include <Library/MemoryAllocationLib.h>
+ #include <Library/NonDiscoverableDeviceRegistrationLib.h>
+ #include <Library/UefiBootServicesTableLib.h>
+ #include <Library/UefiLib.h>
++#include <Protocol/NonDiscoverableDevice.h>
+ #include <Rp1.h>
+ 
+ #include "Rp1BusDxe.h"
+ 
++#pragma pack (1)
++typedef struct {
++  VENDOR_DEVICE_PATH          Vendor;
++  UINT64                      BaseAddress;
++  UINT8                       ResourceType;
++  EFI_DEVICE_PATH_PROTOCOL    End;
++} RP1_BUS_VENDOR_DEVICE_PATH;
++#pragma pack ()
++
+ STATIC
+ VOID
+ EFIAPI
+@@ -77,6 +89,167 @@ Rp1BusRegisterDwc3Controllers (
+   }
+ }
+ 
++//
++// Register an RP1 peripheral as a NON_DISCOVERABLE_DEVICE with a
++// vendor-specific type GUID, for peripherals with no generic EDK2 class
++// (GEM ethernet, DesignWare I2C). NonDiscoverablePciDeviceDxe ignores
++// these GUIDs, so no PciIo is fabricated: the driver that recognizes the
++// GUID does its own MMIO using the resource descriptors installed here.
++//
++STATIC
++EFI_STATUS
++EFIAPI
++Rp1BusRegisterVendorMmioDevice (
++  IN RP1_BUS_DATA                      *Rp1Data,
++  IN CONST EFI_GUID                    *TypeGuid,
++  IN NON_DISCOVERABLE_DEVICE_DMA_TYPE  DmaType,
++  IN UINTN                             NumMmioResources,
++  IN CONST UINT64                      *MmioOffsets,
++  IN CONST UINT64                      *MmioSizes
++  )
++{
++  NON_DISCOVERABLE_DEVICE            *Device;
++  RP1_BUS_VENDOR_DEVICE_PATH         *DevicePath;
++  EFI_ACPI_ADDRESS_SPACE_DESCRIPTOR  *Desc;
++  EFI_ACPI_END_TAG_DESCRIPTOR        *End;
++  EFI_HANDLE                         DeviceHandle;
++  EFI_STATUS                         Status;
++  UINTN                              AllocSize;
++  UINTN                              Index;
++  UINT64                             Base;
++  RP1_BUS_PROTOCOL                   *Rp1Bus;
++
++  AllocSize = sizeof (*Device) +
++              NumMmioResources * sizeof (EFI_ACPI_ADDRESS_SPACE_DESCRIPTOR) +
++              sizeof (EFI_ACPI_END_TAG_DESCRIPTOR);
++  Device = (NON_DISCOVERABLE_DEVICE *)AllocateZeroPool (AllocSize);
++  if (Device == NULL) {
++    return EFI_OUT_OF_RESOURCES;
++  }
++
++  Device->Type       = TypeGuid;
++  Device->DmaType    = DmaType;
++  Device->Initialize = NULL;
++  Device->Resources  = (EFI_ACPI_ADDRESS_SPACE_DESCRIPTOR *)(Device + 1);
++
++  for (Index = 0; Index < NumMmioResources; Index++) {
++    Desc = &Device->Resources[Index];
++    Base = Rp1Data->PeripheralBase + MmioOffsets[Index];
++
++    Desc->Desc                  = ACPI_ADDRESS_SPACE_DESCRIPTOR;
++    Desc->Len                   = sizeof (*Desc) - 3;
++    Desc->AddrRangeMin          = Base;
++    Desc->AddrLen               = MmioSizes[Index];
++    Desc->AddrRangeMax          = Base + MmioSizes[Index] - 1;
++    Desc->ResType               = ACPI_ADDRESS_SPACE_TYPE_MEM;
++    Desc->AddrSpaceGranularity  = ((EFI_PHYSICAL_ADDRESS)Base + MmioSizes[Index] > SIZE_4GB) ? 64 : 32;
++    Desc->AddrTranslationOffset = 0;
++  }
++
++  End           = (EFI_ACPI_END_TAG_DESCRIPTOR *)&Device->Resources[NumMmioResources];
++  End->Desc     = ACPI_END_TAG_DESCRIPTOR;
++  End->Checksum = 0;
++
++  DevicePath = (RP1_BUS_VENDOR_DEVICE_PATH *)CreateDeviceNode (
++                                               HARDWARE_DEVICE_PATH,
++                                               HW_VENDOR_DP,
++                                               sizeof (*DevicePath)
++                                               );
++  if (DevicePath == NULL) {
++    Status = EFI_OUT_OF_RESOURCES;
++    goto FreeDevice;
++  }
++
++  CopyGuid (&DevicePath->Vendor.Guid, TypeGuid);
++  DevicePath->BaseAddress  = Device->Resources[0].AddrRangeMin;
++  DevicePath->ResourceType = Device->Resources[0].ResType;
++
++  SetDevicePathNodeLength (
++    &DevicePath->Vendor,
++    sizeof (*DevicePath) - sizeof (DevicePath->End)
++    );
++  SetDevicePathEndNode (&DevicePath->End);
++
++  DeviceHandle = NULL;
++  Status       = gBS->InstallMultipleProtocolInterfaces (
++                        &DeviceHandle,
++                        &gEdkiiNonDiscoverableDeviceProtocolGuid,
++                        Device,
++                        &gEfiDevicePathProtocolGuid,
++                        DevicePath,
++                        NULL
++                        );
++  if (EFI_ERROR (Status)) {
++    goto FreeDevicePath;
++  }
++
++  Status = gBS->OpenProtocol (
++                  Rp1Data->ControllerHandle,
++                  &gRp1BusProtocolGuid,
++                  (VOID **)&Rp1Bus,
++                  Rp1Data->DriverBinding->DriverBindingHandle,
++                  DeviceHandle,
++                  EFI_OPEN_PROTOCOL_BY_CHILD_CONTROLLER
++                  );
++  if (EFI_ERROR (Status)) {
++    DEBUG ((
++      DEBUG_ERROR,
++      "RP1: Failed to open bus protocol by child %g. Status=%r\n",
++      TypeGuid,
++      Status
++      ));
++  }
++
++  return EFI_SUCCESS;
++
++FreeDevicePath:
++  FreePool (DevicePath);
++
++FreeDevice:
++  FreePool (Device);
++
++  return Status;
++}
++
++STATIC
++VOID
++EFIAPI
++Rp1BusRegisterVendorDevices (
++  IN RP1_BUS_DATA  *Rp1Data
++  )
++{
++  EFI_STATUS  Status;
++
++  STATIC CONST UINT64  GemOffsets[]  = { RP1_ETH_BASE, RP1_ETH_CFG_BASE };
++  STATIC CONST UINT64  GemSizes[]    = { RP1_ETH_SIZE, RP1_ETH_CFG_SIZE };
++  STATIC CONST UINT64  I2c1Offsets[] = { RP1_I2C1_BASE };
++  STATIC CONST UINT64  I2c1Sizes[]   = { RP1_I2C_SIZE };
++
++  Status = Rp1BusRegisterVendorMmioDevice (
++             Rp1Data,
++             &gRp1GemNonDiscoverableDeviceGuid,
++             NonDiscoverableDeviceDmaTypeNonCoherent,
++             ARRAY_SIZE (GemOffsets),
++             GemOffsets,
++             GemSizes
++             );
++  if (EFI_ERROR (Status)) {
++    DEBUG ((DEBUG_ERROR, "RP1: Failed to register GEM device. Status=%r\n", Status));
++  }
++
++  Status = Rp1BusRegisterVendorMmioDevice (
++             Rp1Data,
++             &gRp1DwI2cNonDiscoverableDeviceGuid,
++             NonDiscoverableDeviceDmaTypeNonCoherent,
++             ARRAY_SIZE (I2c1Offsets),
++             I2c1Offsets,
++             I2c1Sizes
++             );
++  if (EFI_ERROR (Status)) {
++    DEBUG ((DEBUG_ERROR, "RP1: Failed to register I2C1 device. Status=%r\n", Status));
++  }
++}
++
+ STATIC
+ VOID
+ EFIAPI
+@@ -85,6 +258,7 @@ Rp1BusRegisterDevices (
+   )
+ {
+   Rp1BusRegisterDwc3Controllers (Rp1Data);
++  Rp1BusRegisterVendorDevices (Rp1Data);
+ }
+ 
+ STATIC
+diff --git a/Silicon/RaspberryPi/RpiSiliconPkg/Drivers/Rp1BusDxe/Rp1BusDxe.inf b/Silicon/RaspberryPi/RpiSiliconPkg/Drivers/Rp1BusDxe/Rp1BusDxe.inf
+index 671ec77f..927bad90 100644
+--- a/Silicon/RaspberryPi/RpiSiliconPkg/Drivers/Rp1BusDxe/Rp1BusDxe.inf
++++ b/Silicon/RaspberryPi/RpiSiliconPkg/Drivers/Rp1BusDxe/Rp1BusDxe.inf
+@@ -24,7 +24,9 @@
+   Silicon/RaspberryPi/RpiSiliconPkg/RpiSiliconPkg.dec
+ 
+ [LibraryClasses]
++  BaseMemoryLib
+   DebugLib
++  DevicePathLib
+   IoLib
+   MemoryAllocationLib
+   NonDiscoverableDeviceRegistrationLib
+@@ -38,5 +40,9 @@
+   gEdkiiNonDiscoverableDeviceProtocolGuid       ## BY_START
+   gEfiDevicePathProtocolGuid                    ## BY_START
+ 
++[Guids]
++  gRp1GemNonDiscoverableDeviceGuid
++  gRp1DwI2cNonDiscoverableDeviceGuid
++
+ [Depex]
+   TRUE
+diff --git a/Silicon/RaspberryPi/RpiSiliconPkg/Include/Rp1.h b/Silicon/RaspberryPi/RpiSiliconPkg/Include/Rp1.h
+index d136c518..24d46399 100644
+--- a/Silicon/RaspberryPi/RpiSiliconPkg/Include/Rp1.h
++++ b/Silicon/RaspberryPi/RpiSiliconPkg/Include/Rp1.h
+@@ -43,6 +43,7 @@
+ #define RP1_SPI6_BASE                               0x00068000
+ #define RP1_SPI7_BASE                               0x0006c000
+ #define RP1_I2C0_BASE                               0x00070000
++#define RP1_I2C_SIZE                                0x00001000
+ #define RP1_I2C1_BASE                               0x00074000
+ #define RP1_I2C2_BASE                               0x00078000
+ #define RP1_I2C3_BASE                               0x0007c000
+@@ -73,7 +74,9 @@
+ #define RP1_PADS_BANK2_BASE                         0x000f8000
+ #define RP1_PADS_ETH_BASE                           0x000fc000
+ #define RP1_ETH_BASE                                0x00100000
++#define RP1_ETH_SIZE                                0x00004000
+ #define RP1_ETH_CFG_BASE                            0x00104000
++#define RP1_ETH_CFG_SIZE                            0x00001000
+ #define RP1_PCIE_BASE                               0x00108000
+ #define RP1_MIPI0_CSIDMA_BASE                       0x00110000
+ #define RP1_MIPI0_CSIHOST_BASE                      0x00114000
+diff --git a/Silicon/RaspberryPi/RpiSiliconPkg/RpiSiliconPkg.dec b/Silicon/RaspberryPi/RpiSiliconPkg/RpiSiliconPkg.dec
+index ce74ec7b..d928b87d 100644
+--- a/Silicon/RaspberryPi/RpiSiliconPkg/RpiSiliconPkg.dec
++++ b/Silicon/RaspberryPi/RpiSiliconPkg/RpiSiliconPkg.dec
+@@ -18,5 +18,10 @@
+ [Guids]
+   gRpiSiliconTokenSpaceGuid = { 0x0b3ce57a, 0xa82b, 0x4ada, { 0x8f, 0xb5, 0x52, 0xc8, 0x72, 0x30, 0x1f, 0xdb } }
+ 
++  ## NON_DISCOVERABLE_DEVICE type GUIDs for RP1 peripherals registered by
++  ## Rp1BusDxe that have no generic EDK2 device class.
++  gRp1GemNonDiscoverableDeviceGuid = { 0x9c1ca504, 0xcdc9, 0x43bb, { 0xa1, 0x32, 0x67, 0x55, 0x59, 0x6d, 0x3a, 0x56 } }
++  gRp1DwI2cNonDiscoverableDeviceGuid = { 0x9af3f93f, 0xcc1c, 0x443c, { 0x99, 0xe8, 0x2e, 0xa4, 0x54, 0x7b, 0x2b, 0x6a } }
++
+ [Protocols]
+   gRp1BusProtocolGuid = { 0xf1417a30, 0x5418, 0x4cd5, { 0x8e, 0x65, 0xf9, 0x02, 0x51, 0x21, 0xb5, 0x7f } }

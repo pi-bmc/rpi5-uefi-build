@@ -1,0 +1,64 @@
+#/** @file
+#
+#  Simple Network Protocol driver for the Cadence GEM_GXL (r1p09) Gigabit
+#  Ethernet MAC inside the Raspberry Pi 5's RP1 southbridge. Binds to the
+#  vendor NON_DISCOVERABLE_DEVICE registered by Rp1BusDxe
+#  (gRp1GemNonDiscoverableDeviceGuid) and installs SNP on a child handle
+#  with a MAC device path node for BDS network boot options.
+#
+#  Copyright (c) 2025, the Rp1GemDxe contributors.
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+#
+#**/
+
+[Defines]
+  INF_VERSION                    = 0x0001001A
+  BASE_NAME                      = Rp1GemDxe
+  FILE_GUID                      = 904fa3dd-4a8a-479e-b513-ad278906bd4e
+  MODULE_TYPE                    = UEFI_DRIVER
+  VERSION_STRING                 = 1.0
+  ENTRY_POINT                    = Rp1GemDxeEntryPoint
+
+[Sources]
+  ComponentName.c
+  DriverBinding.c
+  GemHw.c
+  GemHw.h
+  Phy.c
+  Rp1GemDxe.h
+  Snp.c
+
+[Packages]
+  EmbeddedPkg/EmbeddedPkg.dec
+  MdeModulePkg/MdeModulePkg.dec
+  MdePkg/MdePkg.dec
+  Platform/RaspberryPi/RaspberryPi.dec
+  Rp1GemPkg/Rp1GemPkg.dec
+  Silicon/RaspberryPi/RpiSiliconPkg/RpiSiliconPkg.dec
+
+[LibraryClasses]
+  BaseLib
+  BaseMemoryLib
+  DebugLib
+  DevicePathLib
+  DmaLib
+  IoLib
+  MemoryAllocationLib
+  PcdLib
+  UefiBootServicesTableLib
+  UefiDriverEntryPoint
+  UefiLib
+
+[Protocols]
+  gEdkiiNonDiscoverableDeviceProtocolGuid       ## TO_START
+  gEfiDevicePathProtocolGuid                    ## BY_START
+  gEfiSimpleNetworkProtocolGuid                 ## BY_START
+  gRaspberryPiFirmwareProtocolGuid              ## CONSUMES
+
+[Guids]
+  gEfiEventExitBootServicesGuid                 ## CONSUMES ## Event
+  gRp1GemNonDiscoverableDeviceGuid              ## CONSUMES
+
+[Pcd]
+  gRp1GemPkgTokenSpaceGuid.PcdRp1GemPhyAddress  ## CONSUMES

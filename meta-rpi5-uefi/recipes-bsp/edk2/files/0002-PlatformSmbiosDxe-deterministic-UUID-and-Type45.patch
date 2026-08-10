@@ -1,0 +1,229 @@
+diff --git a/Platform/RaspberryPi/Drivers/PlatformSmbiosDxe/PlatformSmbiosDxe.c b/Platform/RaspberryPi/Drivers/PlatformSmbiosDxe/PlatformSmbiosDxe.c
+index 09766c99..00f69f73 100644
+--- a/Platform/RaspberryPi/Drivers/PlatformSmbiosDxe/PlatformSmbiosDxe.c
++++ b/Platform/RaspberryPi/Drivers/PlatformSmbiosDxe/PlatformSmbiosDxe.c
+@@ -22,6 +22,7 @@
+  *    IPMI Device Information (Type 38) - Required for platforms with IPMIv1.0 BMC Host Interface (not applicable to RPi)
+  *    Onboard Devices Extended Information (Type 41) - Recommended
+  *    Redfish Host Interface (Type 42) - Required for platforms supporting Redfish Host Interface (not applicable to RPi)
++ *    Firmware Inventory Information (Type 45) - VPU bootloader (rpi-eeprom), when described by the device tree
+  *
+  *  Copyright (c) 2017-2018, Andrey Warkentin <andrey.warkentin@gmail.com>
+  *  Copyright (c) 2013, Linaro.org
+@@ -53,6 +54,8 @@
+ #include <Library/PrintLib.h>
+ #include <Library/BoardInfoLib.h>
+ #include <Library/BoardRevisionHelperLib.h>
++#include <Library/FdtLib.h>
++#include <Library/FdtPlatformLib.h>
+ #include <ConfigVars.h>
+ 
+ #define SMB_IS_DIGIT(c)  (((c) >= '0') && ((c) <= '9'))
+@@ -622,6 +625,42 @@ CHAR8 *mBootInfoType32Strings[] = {
+   NULL
+ };
+ 
++/***********************************************************************
++        SMBIOS data definition  TYPE45  Firmware Inventory Information
++************************************************************************/
++SMBIOS_TABLE_TYPE45 mFwInventoryType45 = {
++  { SMBIOS_TYPE_FIRMWARE_INVENTORY_INFORMATION, sizeof (SMBIOS_TABLE_TYPE45), 0 },
++  1,                            // FirmwareComponentName String
++  2,                            // FirmwareVersion String
++  VersionFormatTypeFreeForm,    // FirmwareVersionFormat
++  3,                            // FirmwareId String
++  FirmwareIdFormatTypeFreeForm, // FirmwareIdFormat
++  4,                            // ReleaseDate String
++  5,                            // Manufacturer String
++  0,                            // LowestSupportedVersion String (not specified)
++  0xFFFFFFFFFFFFFFFFULL,        // ImageSize (unknown)
++  {                             // Characteristics
++    1,  // Updatable       :1
++    0,  // WriteProtected  :1
++    0   // Reserved        :14
++  },
++  FirmwareInventoryStateEnabled,  // State
++  0                               // AssociatedComponentCount
++};
++
++CHAR8 mFwInventoryVersion[16] = "unknown";
++CHAR8 mFwInventoryId[80]      = "unknown";
++CHAR8 mFwInventoryDate[16]    = "unknown";
++
++CHAR8 *mFwInventoryType45Strings[] = {
++  "rpi-eeprom",         // FirmwareComponentName
++  mFwInventoryVersion,  // FirmwareVersion
++  mFwInventoryId,       // FirmwareId
++  mFwInventoryDate,     // ReleaseDate
++  "Raspberry Pi Ltd",   // Manufacturer
++  NULL
++};
++
+ 
+ /**
+ 
+@@ -864,6 +903,8 @@ SysInfoUpdateSmbiosType1 (
+ {
+   EFI_STATUS Status = EFI_SUCCESS;
+   UINT64 BoardSerial = 0;
++  UINT8 *UuidBytes;
++  UINTN Index;
+ 
+   AsciiStrCpyS (mSysInfoProductName, sizeof (mSysInfoProductName),
+     BoardRevisionGetModelName (mBoardRevisionCode));
+@@ -883,12 +924,32 @@ SysInfoUpdateSmbiosType1 (
+ 
+   DEBUG ((DEBUG_ERROR, "Board Serial Number: %a\n", mSysInfoSerial));
+ 
+-  mSysInfoType1.Uuid.Data1 = mBoardRevisionCode;
+-  mSysInfoType1.Uuid.Data2 = 0x0;
+-  mSysInfoType1.Uuid.Data3 = 0x0;
+-  // Swap endianness, so that the serial is more user-friendly as a UUID
+-  BoardSerial = SwapBytes64 (BoardSerial);
+-  CopyMem (mSysInfoType1.Uuid.Data4, &BoardSerial, sizeof (BoardSerial));
++  //
++  // Derive a deterministic UUID from the board serial and revision, using
++  // the same construction as U-Boot's Raspberry Pi sysinfo driver, so that
++  // the reported system identity is identical under either firmware:
++  //   bytes 0..7   = 64-bit board serial, little-endian
++  //   bytes 8..11  = 32-bit board revision, little-endian
++  //   bytes 12..15 = 'R', 'P', 'i', 0x00
++  // then stamped as UUID version 4, variant 1.
++  //
++  // Fill the field byte-wise through a UINT8 view so the bytes stored in
++  // the table match that byte array exactly, independent of EFI_GUID's
++  // mixed-endian field layout.
++  //
++  UuidBytes = (UINT8 *)&mSysInfoType1.Uuid;
++  for (Index = 0; Index < 8; Index++) {
++    UuidBytes[Index] = (UINT8)(BoardSerial >> (8 * Index));
++  }
++  for (Index = 0; Index < 4; Index++) {
++    UuidBytes[8 + Index] = (UINT8)(mBoardRevisionCode >> (8 * Index));
++  }
++  UuidBytes[12] = 'R';
++  UuidBytes[13] = 'P';
++  UuidBytes[14] = 'i';
++  UuidBytes[15] = 0x00;
++  UuidBytes[6]  = (UuidBytes[6] & 0x0F) | 0x40; // version 4
++  UuidBytes[8]  = (UuidBytes[8] & 0x3F) | 0x80; // variant 1
+ 
+   LogSmbiosData ((EFI_SMBIOS_TABLE_HEADER*)&mSysInfoType1, mSysInfoType1Strings, NULL);
+ }
+@@ -1104,6 +1165,95 @@ BootInfoUpdateSmbiosType32 (
+   LogSmbiosData ((EFI_SMBIOS_TABLE_HEADER*)&mBootInfoType32, mBootInfoType32Strings, NULL);
+ }
+ 
++/***********************************************************************
++        SMBIOS data update  TYPE45  Firmware Inventory Information
++************************************************************************/
++VOID
++FwInventoryUpdateSmbiosType45 (
++  VOID
++  )
++{
++  STATIC CONST CHAR8 Hex[] = "0123456789abcdef";
++  VOID          *Fdt;
++  INT32         Node;
++  CONST UINT8   *Property;
++  INT32         Length;
++  INT32         Index;
++  INT32         CopyLength;
++  BOOLEAN       IsString;
++  UINT32        EpochSeconds;
++  EFI_TIME      Time;
++
++  Fdt = FdtPlatformGetBase ();
++  if (Fdt == NULL) {
++    return;
++  }
++
++  //
++  // The VPU bootloader (rpi-eeprom) describes itself under
++  // /chosen/bootloader in the firmware-provided device tree. If the node
++  // is absent (e.g. older VPU firmware), skip the record silently.
++  //
++  Node = FdtPathOffset (Fdt, "/chosen/bootloader");
++  if (Node < 0) {
++    return;
++  }
++
++  //
++  // 'version' holds the bootloader git hash, either as a printable string
++  // or as a raw byte array; render the latter as a hex string.
++  //
++  Property = FdtGetProp (Fdt, Node, "version", &Length);
++  if ((Property != NULL) && (Length > 0)) {
++    IsString = (BOOLEAN)(Property[Length - 1] == '\0' && Length > 1);
++    for (Index = 0; IsString && (Index < Length - 1); Index++) {
++      if ((Property[Index] < 0x20) || (Property[Index] > 0x7E)) {
++        IsString = FALSE;
++      }
++    }
++
++    if (IsString) {
++      CopyLength = MIN (Length - 1, (INT32)sizeof (mFwInventoryId) - 1);
++      CopyMem (mFwInventoryId, Property, CopyLength);
++      mFwInventoryId[CopyLength] = '\0';
++    } else {
++      CopyLength = MIN (Length, (INT32)(sizeof (mFwInventoryId) - 1) / 2);
++      for (Index = 0; Index < CopyLength; Index++) {
++        mFwInventoryId[Index * 2]     = Hex[Property[Index] >> 4];
++        mFwInventoryId[Index * 2 + 1] = Hex[Property[Index] & 0xF];
++      }
++      mFwInventoryId[CopyLength * 2] = '\0';
++    }
++  }
++
++  //
++  // 'build-timestamp' (or, failing that, 'update-timestamp') is the
++  // bootloader build time as a big-endian epoch value.
++  //
++  Property = FdtGetProp (Fdt, Node, "build-timestamp", &Length);
++  if ((Property == NULL) ||
++      ((Length != sizeof (UINT32)) && (Length != sizeof (UINT64)))) {
++    Property = FdtGetProp (Fdt, Node, "update-timestamp", &Length);
++  }
++
++  if ((Property != NULL) &&
++      ((Length == sizeof (UINT32)) || (Length == sizeof (UINT64)))) {
++    if (Length == sizeof (UINT64)) {
++      EpochSeconds = (UINT32)Fdt64ToCpu (*(CONST UINT64 *)(CONST VOID *)Property);
++    } else {
++      EpochSeconds = Fdt32ToCpu (*(CONST UINT32 *)(CONST VOID *)Property);
++    }
++
++    EpochToEfiTime (EpochSeconds, &Time);
++    AsciiSPrint (mFwInventoryVersion, sizeof (mFwInventoryVersion),
++      "%04d.%02d%02d", Time.Year, Time.Month, Time.Day);
++    AsciiSPrint (mFwInventoryDate, sizeof (mFwInventoryDate),
++      "%04d-%02d-%02d", Time.Year, Time.Month, Time.Day);
++  }
++
++  LogSmbiosData ((EFI_SMBIOS_TABLE_HEADER*)&mFwInventoryType45, mFwInventoryType45Strings, NULL);
++}
++
+ /***********************************************************************
+         Driver Entry
+ ************************************************************************/
+@@ -1154,5 +1304,7 @@ PlatformSmbiosDriverEntryPoint (
+ 
+   BootInfoUpdateSmbiosType32 ();
+ 
++  FwInventoryUpdateSmbiosType45 ();
++
+   return EFI_SUCCESS;
+ }
+diff --git a/Platform/RaspberryPi/Drivers/PlatformSmbiosDxe/PlatformSmbiosDxe.inf b/Platform/RaspberryPi/Drivers/PlatformSmbiosDxe/PlatformSmbiosDxe.inf
+index 74865d79..1fbdf4f7 100644
+--- a/Platform/RaspberryPi/Drivers/PlatformSmbiosDxe/PlatformSmbiosDxe.inf
++++ b/Platform/RaspberryPi/Drivers/PlatformSmbiosDxe/PlatformSmbiosDxe.inf
+@@ -43,6 +43,8 @@
+   TimeBaseLib
+   BoardInfoLib
+   BoardRevisionHelperLib
++  FdtLib
++  FdtPlatformLib
+ 
+ [Protocols]
+   gEfiSmbiosProtocolGuid           # PROTOCOL SOMETIMES_CONSUMED
