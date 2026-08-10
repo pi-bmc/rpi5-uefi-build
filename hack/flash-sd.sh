@@ -111,16 +111,29 @@ fi
 SUDO=""
 [ "$(id -u)" = "0" ] || SUDO="sudo"
 
+unmount_all() {
+    local mp
+    while read -r mp; do
+        [ -n "${mp}" ] || continue
+        echo "unmounting ${mp}"
+        ${SUDO} umount "${mp}"
+    done < <(lsblk -rnpo MOUNTPOINTS "${DEVICE}")
+}
+
 # Unmount anything auto-mounted from the card.
-while read -r mp; do
-    [ -n "${mp}" ] || continue
-    echo "unmounting ${mp}"
-    ${SUDO} umount "${mp}"
-done < <(lsblk -rnpo MOUNTPOINTS "${DEVICE}")
+unmount_all
 
 ${SUDO} dd if="${IMG}" of="${DEVICE}" bs=4M conv=fsync oflag=direct status=progress
 sync
 ${SUDO} blockdev --rereadpt "${DEVICE}" 2>/dev/null || true
 
+# The partition re-read makes desktop automounters grab the fresh FAT
+# partition; wait for udev to finish and unmount again so the card can be
+# pulled straight away.
+udevadm settle 2>/dev/null || true
+sleep 2
+unmount_all
+
 echo "done: ${DEVICE} now carries the RPi 5 UEFI bootloader image"
 echo "(partition 1 is FAT32 'RPI5-UEFI': armstub8-2712.bin + config.txt + DTBs + overlays)"
+echo "all partitions unmounted -- safe to remove the card"

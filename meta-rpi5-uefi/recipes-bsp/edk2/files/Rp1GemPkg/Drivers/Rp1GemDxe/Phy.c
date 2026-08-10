@@ -18,6 +18,21 @@
 
 #include "Rp1GemDxe.h"
 
+#include <Library/Rp1GpioLib.h>
+#include <Protocol/Rp1Bus.h>
+
+//
+// The BCM54213PE's RESET_N pin is wired to RP1 GPIO 32, active-low, with a
+// 5 ms assert time (board DT: mdio { reset-gpios = <&rp1_gpio 32
+// GPIO_ACTIVE_LOW>; reset-delay-us = <5000>; }). The VPU firmware leaves it
+// asserted unless it network-boots, so the PHY tristates MDIO (every read
+// returns 0xFFFF) until this pulse - u-boot's macb does the same before
+// every bus scan, with a 15 ms post-release settle.
+//
+#define PHY_RESET_GPIO           32
+#define PHY_RESET_ASSERT_US      5000
+#define PHY_RESET_SETTLE_US      15000
+
 //
 // Basic Mode Control Register
 //
@@ -65,6 +80,25 @@
 //
 #define PHY_GBSR                 0x0A
 
+//
+// Broadcom BCM54xx vendor registers: the auxiliary control register at
+// 0x18 (shadow selected by the low bits, read-select in bits 14:12) and
+// the shadow register file behind 0x1c. The Pi 5 wires the BCM54213PE in
+// "rgmii-id" mode -- both RGMII clock delays live inside the PHY -- and a
+// hardware reset clears them, so they must be re-applied after every
+// reset pulse or nothing is received (TX may still work off strap
+// defaults, giving one-way traffic).
+//
+#define PHY_BCM_AUXCTL                  0x18
+#define  PHY_BCM_AUXCTL_SHD_MISC        0x0007
+#define  PHY_BCM_AUXCTL_MISC_WREN       0x8000
+#define  PHY_BCM_AUXCTL_MISC_RGMII_SKEW 0x0100
+#define PHY_BCM_SHD                     0x1C
+#define  PHY_BCM_SHD_WRITE              0x8000
+#define  PHY_BCM_SHD_CLK_CTL            0x03
+#define  PHY_BCM_SHD_CLK_CTL_GTXCLK_EN  BIT9
+#define PHY_ID1_BCM54XX                 0x600D
+
 #define PHY_RESET_TIMEOUT        500   // x 1 ms
 
 /**
@@ -77,6 +111,47 @@
   @retval EFI_NOT_FOUND  No PHY responded.
 
 **/
+/**
+  Pulse the PHY's hardware reset line (RP1 GPIO 32, active-low) so it comes
+  out of reset and answers MDIO. Best-effort: if the RP1 bus protocol is not
+  around the scan still runs (and diagnoses a dead bus).
+
+  @param  Gem[in]  Driver private data.
+
+**/
+STATIC
+VOID
+Rp1GemPhyHwReset (
+  IN RP1_GEM_PRIVATE_DATA  *Gem
+  )
+{
+  EFI_STATUS            Status;
+  RP1_BUS_PROTOCOL      *Rp1Bus;
+  EFI_PHYSICAL_ADDRESS  PeripheralBase;
+
+  Status = gBS->LocateProtocol (&gRp1BusProtocolGuid, NULL, (VOID **)&Rp1Bus);
+  if (EFI_ERROR (Status)) {
+    DEBUG ((
+      DEBUG_WARN,
+      "Rp1GemDxe: no RP1 bus protocol (%r) - skipping PHY reset pulse\n",
+      Status
+      ));
+    return;
+  }
+
+  PeripheralBase = Rp1Bus->GetPeripheralBase (Rp1Bus);
+
+  //
+  // u-boot ordering: preload the output value, then enable the driver
+  // (OE + funcsel RIO), then release after the assert time.
+  //
+  Rp1GpioWrite (PeripheralBase, PHY_RESET_GPIO, FALSE);
+  Rp1GpioSetDirection (PeripheralBase, PHY_RESET_GPIO, TRUE);
+  gBS->Stall (PHY_RESET_ASSERT_US);
+  Rp1GpioWrite (PeripheralBase, PHY_RESET_GPIO, TRUE);
+  gBS->Stall (PHY_RESET_SETTLE_US);
+}
+
 STATIC
 EFI_STATUS
 Rp1GemPhyDetect (
@@ -88,6 +163,8 @@ Rp1GemPhyDetect (
   UINT8       Try;
   UINT16      Id1;
   UINT16      Id2;
+
+  Rp1GemPhyHwReset (Gem);
 
   PhyAddr = PcdGet8 (PcdRp1GemPhyAddress) & 0x1F;
 
@@ -129,7 +206,58 @@ Rp1GemPhyDetect (
     PhyAddr = (PhyAddr + 1) & 0x1F;
   }
 
+  //
+  // Nothing answered: dump a full diagnostic block in one place so a lossy
+  // serial capture still tells the whole story. All-ones IDs = nothing
+  // drives MDIO (pad/power/routing); all-zeroes = transactions complete
+  // but the data line is stuck low. The USER_IO readback shows whether
+  // RP1's GEM even implements the SAMA-style interface mux (reads back
+  // the written RGMII value) or ignores it (interface select lives in the
+  // eth_cfg wrapper instead).
+  //
   DEBUG ((DEBUG_ERROR, "Rp1GemDxe: no PHY detected on MDIO bus\n"));
+  DEBUG ((
+    DEBUG_ERROR,
+    "Rp1GemDxe: NET_CTRL %08x NET_CFG %08x NET_STAT %08x USER_IO %08x\n",
+    MmioRead32 ((UINTN)Gem->GemBase + GEM_NET_CTRL),
+    MmioRead32 ((UINTN)Gem->GemBase + GEM_NET_CFG),
+    MmioRead32 ((UINTN)Gem->GemBase + GEM_NET_STAT),
+    MmioRead32 ((UINTN)Gem->GemBase + GEM_USER_IO)
+    ));
+  DEBUG ((
+    DEBUG_ERROR,
+    "Rp1GemDxe: eth_cfg +0x00 %08x +0x04 %08x +0x08 %08x +0x0c %08x\n",
+    MmioRead32 ((UINTN)Gem->EthCfgBase + 0x0),
+    MmioRead32 ((UINTN)Gem->EthCfgBase + 0x4),
+    MmioRead32 ((UINTN)Gem->EthCfgBase + 0x8),
+    MmioRead32 ((UINTN)Gem->EthCfgBase + 0xc)
+    ));
+
+  for (PhyAddr = 0; PhyAddr < 32; PhyAddr += 8) {
+    UINT16  Ids[8];
+    UINT8   Sub;
+
+    for (Sub = 0; Sub < 8; Sub++) {
+      Ids[Sub] = 0xDEAD;
+      GemMdioRead (Gem, PhyAddr + Sub, PHY_IDR1, &Ids[Sub]);
+    }
+
+    DEBUG ((
+      DEBUG_ERROR,
+      "Rp1GemDxe: ID1[%02x..%02x] %04x %04x %04x %04x %04x %04x %04x %04x\n",
+      PhyAddr,
+      PhyAddr + 7,
+      Ids[0],
+      Ids[1],
+      Ids[2],
+      Ids[3],
+      Ids[4],
+      Ids[5],
+      Ids[6],
+      Ids[7]
+      ));
+  }
+
   return EFI_NOT_FOUND;
 }
 
@@ -171,6 +299,102 @@ Rp1GemPhyReset (
   }
 
   return EFI_TIMEOUT;
+}
+
+/**
+  Program the "rgmii-id" clock delays into a BCM54xx PHY: RXC-RXD skew via
+  the auxiliary-control misc shadow, GTXCLK delay via shadow register 0x03.
+  Reading an auxctl shadow needs the register number in both the select
+  (bits 2:0) and read-select (bits 14:12) fields; a write carries it in the
+  select field alongside the data. No-op for non-Broadcom PHYs.
+
+  @param  Gem[in]  Driver private data.
+
+  @retval EFI_SUCCESS  Delays programmed, or PHY is not a BCM54xx.
+  @retval other        MDIO access failure.
+
+**/
+STATIC
+EFI_STATUS
+Rp1GemPhyConfigRgmiiDelays (
+  IN RP1_GEM_PRIVATE_DATA  *Gem
+  )
+{
+  EFI_STATUS  Status;
+  UINT16      Id1;
+  UINT16      Value;
+
+  Status = GemMdioRead (Gem, Gem->PhyAddr, PHY_IDR1, &Id1);
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+
+  if (Id1 != PHY_ID1_BCM54XX) {
+    return EFI_SUCCESS;
+  }
+
+  //
+  // RX clock skew (auxctl shadow 7): read-modify-write with the write
+  // enable bit set.
+  //
+  Status = GemMdioWrite (
+             Gem,
+             Gem->PhyAddr,
+             PHY_BCM_AUXCTL,
+             (PHY_BCM_AUXCTL_SHD_MISC << 12) | PHY_BCM_AUXCTL_SHD_MISC
+             );
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+
+  Status = GemMdioRead (Gem, Gem->PhyAddr, PHY_BCM_AUXCTL, &Value);
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+
+  Value |= PHY_BCM_AUXCTL_MISC_WREN | PHY_BCM_AUXCTL_MISC_RGMII_SKEW;
+  Status  = GemMdioWrite (
+              Gem,
+              Gem->PhyAddr,
+              PHY_BCM_AUXCTL,
+              PHY_BCM_AUXCTL_SHD_MISC | Value
+              );
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+
+  //
+  // TX clock delay (shadow 0x03, clock alignment control): the shadow
+  // data field is 10 bits, so mask the readback before setting BIT9.
+  //
+  Status = GemMdioWrite (
+             Gem,
+             Gem->PhyAddr,
+             PHY_BCM_SHD,
+             PHY_BCM_SHD_CLK_CTL << 10
+             );
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+
+  Status = GemMdioRead (Gem, Gem->PhyAddr, PHY_BCM_SHD, &Value);
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+
+  Value = (Value & 0x3FF) | PHY_BCM_SHD_CLK_CTL_GTXCLK_EN;
+  Status = GemMdioWrite (
+             Gem,
+             Gem->PhyAddr,
+             PHY_BCM_SHD,
+             PHY_BCM_SHD_WRITE | (PHY_BCM_SHD_CLK_CTL << 10) | Value
+             );
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+
+  DEBUG ((DEBUG_INFO, "Rp1GemDxe: RGMII rgmii-id clock delays enabled\n"));
+  return EFI_SUCCESS;
 }
 
 /**
@@ -257,6 +481,16 @@ Rp1GemPhyInit (
   }
 
   Status = Rp1GemPhyReset (Gem);
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+
+  //
+  // The BMCR reset (and the hardware reset pulse before it) clears the
+  // vendor RGMII delay configuration; without it RX is dead even though
+  // TX works, so re-apply before autonegotiation.
+  //
+  Status = Rp1GemPhyConfigRgmiiDelays (Gem);
   if (EFI_ERROR (Status)) {
     return Status;
   }

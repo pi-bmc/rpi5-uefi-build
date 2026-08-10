@@ -5,6 +5,8 @@
 # NonCoherentDmaLib globally in RPi5.dsc.
 
   Rp1GemPkg/Drivers/Rp1GemDxe/Rp1GemDxe.inf {
+    <LibraryClasses>
+      Rp1GpioLib|RpiBmcPkg/Library/Rp1GpioLib/Rp1GpioLib.inf
     <PcdsFixedAtBuild>
       gEmbeddedTokenSpaceGuid.PcdDmaDeviceOffset|0x0
       gEmbeddedTokenSpaceGuid.PcdDmaDeviceLimit|0xBFFFFFFF

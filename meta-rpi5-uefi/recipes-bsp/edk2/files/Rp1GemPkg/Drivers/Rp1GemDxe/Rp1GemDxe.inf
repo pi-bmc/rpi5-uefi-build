@@ -35,6 +35,7 @@
   MdePkg/MdePkg.dec
   Platform/RaspberryPi/RaspberryPi.dec
   Rp1GemPkg/Rp1GemPkg.dec
+  RpiBmcPkg/RpiBmcPkg.dec
   Silicon/RaspberryPi/RpiSiliconPkg/RpiSiliconPkg.dec
 
 [LibraryClasses]
@@ -46,6 +47,7 @@
   IoLib
   MemoryAllocationLib
   PcdLib
+  Rp1GpioLib
   UefiBootServicesTableLib
   UefiDriverEntryPoint
   UefiLib
@@ -55,6 +57,7 @@
   gEfiDevicePathProtocolGuid                    ## BY_START
   gEfiSimpleNetworkProtocolGuid                 ## BY_START
   gRaspberryPiFirmwareProtocolGuid              ## CONSUMES
+  gRp1BusProtocolGuid                           ## SOMETIMES_CONSUMES
 
 [Guids]
   gEfiEventExitBootServicesGuid                 ## CONSUMES ## Event
