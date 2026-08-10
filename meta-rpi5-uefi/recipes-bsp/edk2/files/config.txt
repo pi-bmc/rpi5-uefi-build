@@ -1,0 +1,24 @@
+# Raspberry Pi 5 GPU/EEPROM bootloader config for booting into our custom
+# TF-A+EDK2 armstub instead of Linux, exactly matching
+# NumberOneGit/rpi5-uefi's config.txt (which is itself worproject/rpi5-uefi's,
+# updated for the current RPi5.fdf memory map -- device_tree_address must sit
+# right after the firmware image: RPi5.fdf sizes the FD region at 0x3e0000
+# bytes (gArmTokenSpaceGuid.PcdFdSize) and places the DTB immediately after it
+# (gRaspberryPiTokenSpaceGuid.PcdFdtBaseAddress|0x003e0000), so these two
+# values are NOT independent of the firmware build -- if RPi5.fdf's FD size
+# ever changes, this file needs to change with it).
+armstub=RPI_EFI.fd
+device_tree_address=0x3e0000
+device_tree_end=0x400000
+
+# Force 32bpp framebuffer allocation.
+framebuffer_depth=32
+
+# Disable compensation for displays with overscan.
+disable_overscan=1
+
+# Force maximum USB power regardless of the power supply.
+usb_max_current_enable=1
+
+# Force maximum CPU speed.
+force_turbo=1
