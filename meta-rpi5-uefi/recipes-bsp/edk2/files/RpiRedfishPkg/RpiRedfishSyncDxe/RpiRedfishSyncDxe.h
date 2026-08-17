@@ -43,6 +43,13 @@
 #define RPI_REDFISH_SYSTEM_URI        L"/redfish/v1/Systems/1"
 #define RPI_REDFISH_MEMORY_URI        L"/redfish/v1/Systems/1/Memory"
 #define RPI_REDFISH_DRIVES_URI        L"/redfish/v1/Systems/1/Storage/1/Drives"
+#define RPI_REDFISH_THERMAL_URI       L"/redfish/v1/Chassis/1/Thermal"
+
+//
+// Thermal telemetry cadence while the firmware phase lasts (BDS wait, Setup,
+// the shell). 10 s keeps the BMC's view fresh without loading the link.
+//
+#define RPI_REDFISH_THERMAL_PERIOD    100000000ULL   // 10 s, in 100 ns units
 
 //
 // Boot progress state reported at the point the config handler runs: DXE is

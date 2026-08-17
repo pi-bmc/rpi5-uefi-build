@@ -10,7 +10,8 @@
   BCM2712 AVS monitor's AVS_RO_TEMP_STATUS - the same register
   SsdtThermal.asl exposes to the OS (milli-C = 450000 - 550 * raw, raw in
   bits 9:0, validity bits 16 and 10) - and maps the temperature onto the
-  exact cooling policy the VPU DTB ships for Linux's pwm-fan:
+  cooling policy. By default that is the exact curve the VPU DTB ships for
+  Linux's pwm-fan:
 
     level  duty/255  trip (up)   release (down, 5 C hysteresis)
       0        0        -            < 45.0 C
@@ -18,6 +19,17 @@
       2      125      >= 60.0 C      < 62.5 C
       3      175      >= 67.5 C      < 70.0 C
       4      250      >= 75.0 C        -
+
+  Control precedence, decided fresh every tick:
+
+    1. A volatile override staged through RPI_FAN_PROTOCOL.SetOverride
+       (the BMC steering via RpiRedfishSyncDxe, or any in-firmware tool).
+    2. The persistent FanPolicy variable (FanConfigDxe's Setup page or a
+       BMC-side variable write): FIXED pins a level, CUSTOM replaces the
+       trip temperatures (duties and hysteresis stay), AUTO is the table
+       above. The variable is re-read every tick, so Setup changes apply
+       live without a reset; a missing or invalid variable means AUTO.
+    3. The automatic loop.
 
   The fan PWM line is RP1 GPIO45 (funcsel 0 = pwm1, pull-down per the DTB),
   RP1 PWM1 channel 3, 41566 ns period, inverted polarity, clocked from
@@ -48,8 +60,11 @@
 #include <Library/IoLib.h>
 #include <Library/Rp1GpioLib.h>
 #include <Library/UefiBootServicesTableLib.h>
+#include <Library/UefiRuntimeServicesTableLib.h>
 
+#include <Guid/RpiFanPolicy.h>
 #include <Protocol/Rp1Bus.h>
+#include <Protocol/RpiFan.h>
 #include <Rp1.h>
 
 //
@@ -108,12 +123,22 @@ STATIC CONST FAN_LEVEL  mFanLevels[] = {
 };
 
 #define FAN_LEVEL_COUNT  (sizeof (mFanLevels) / sizeof (mFanLevels[0]))
+#define FAN_LEVEL_MAX    (FAN_LEVEL_COUNT - 1)
 #define FAN_LEVEL_SAFE   2    // commanded while the sensor reads invalid
+
+//
+// Custom-trip sanity window, in whole C (matches the Setup page's numeric
+// limits; a BMC-written variable gets the same treatment).
+//
+#define FAN_TRIP_MIN_C  30
+#define FAN_TRIP_MAX_C  90
 
 STATIC EFI_EVENT             mPollTimer;
 STATIC EFI_EVENT             mExitBootServicesEvent;
-STATIC EFI_PHYSICAL_ADDRESS  mRp1Base;      // 0 until RP1_BUS_PROTOCOL appears
-STATIC INTN                  mLevel = -1;   // -1 until first command
+STATIC EFI_PHYSICAL_ADDRESS  mRp1Base;             // 0 until RP1_BUS_PROTOCOL appears
+STATIC INTN                  mLevel        = -1;   // -1 until first command
+STATIC INTN                  mOverride     = -1;   // -1 = no protocol override
+STATIC RPI_FAN_POLICY        mPolicy;              // sanitized, refreshed every tick
 
 /**
   Read the SoC temperature. Returns FALSE while the AVS monitor's validity
@@ -134,6 +159,84 @@ AvsReadMilliCelsius (
 
   *MilliC = 450000 - 550 * (INT32)(Status & AVS_TEMP_RAW_MASK);
   return TRUE;
+}
+
+/**
+  Refresh mPolicy from the FanPolicy variable, sanitized. Anything absent,
+  short, out of range or with non-ascending custom trips resolves to AUTO
+  defaults - the fan must keep regulating no matter what was written.
+**/
+STATIC
+VOID
+ReadPolicy (
+  VOID
+  )
+{
+  RPI_FAN_POLICY  Var;
+  UINTN           Size;
+  EFI_STATUS      Status;
+
+  mPolicy.Mode       = RPI_FAN_MODE_AUTO;
+  mPolicy.FixedLevel = FAN_LEVEL_SAFE;
+  mPolicy.Trip1C     = 50;
+  mPolicy.Trip2C     = 60;
+  mPolicy.Trip3C     = 68;
+  mPolicy.Trip4C     = 75;
+
+  Size   = sizeof (Var);
+  Status = gRT->GetVariable (
+                  RPI_FAN_POLICY_VARIABLE_NAME,
+                  &gRpiFanConfigFormSetGuid,
+                  NULL,
+                  &Size,
+                  &Var
+                  );
+  if (EFI_ERROR (Status) || (Size != sizeof (Var))) {
+    return;
+  }
+
+  if (Var.Mode > RPI_FAN_MODE_CUSTOM) {
+    return;
+  }
+
+  if (Var.Mode == RPI_FAN_MODE_CUSTOM) {
+    if ((Var.Trip1C < FAN_TRIP_MIN_C) || (Var.Trip4C > FAN_TRIP_MAX_C) ||
+        (Var.Trip1C >= Var.Trip2C) || (Var.Trip2C >= Var.Trip3C) ||
+        (Var.Trip3C >= Var.Trip4C))
+    {
+      return;                     // unusable trips: stay on AUTO defaults
+    }
+  }
+
+  mPolicy      = Var;
+  if (mPolicy.FixedLevel > FAN_LEVEL_MAX) {
+    mPolicy.FixedLevel = FAN_LEVEL_SAFE;
+  }
+}
+
+/**
+  Trip temperature for Level under the active policy, in milli-C.
+**/
+STATIC
+INT32
+TripMilliC (
+  IN UINTN  Level
+  )
+{
+  UINT8  TripC;
+
+  if (mPolicy.Mode != RPI_FAN_MODE_CUSTOM) {
+    return mFanLevels[Level].TripMilliC;
+  }
+
+  switch (Level) {
+    case 1:  TripC = mPolicy.Trip1C; break;
+    case 2:  TripC = mPolicy.Trip2C; break;
+    case 3:  TripC = mPolicy.Trip3C; break;
+    default: TripC = mPolicy.Trip4C; break;
+  }
+
+  return (INT32)TripC * 1000;
 }
 
 /**
@@ -226,9 +329,10 @@ FanHwInit (
 }
 
 /**
-  1 s poll: acquire RP1 on first sight, then run the trip/hysteresis state
-  machine. Ramp-ups are immediate; ramp-downs release one level per poll
-  after the temperature clears the current trip minus 5 C.
+  1 s poll: acquire RP1 on first sight, refresh the policy, then command
+  the fan per the precedence chain (override, fixed policy, closed loop).
+  In the loop, ramp-ups are immediate; ramp-downs release one level per
+  poll after the temperature clears the current trip minus 5 C.
 **/
 STATIC
 VOID
@@ -253,6 +357,28 @@ FanPollTick (
     FanHwInit ();
   }
 
+  ReadPolicy ();
+
+  //
+  // Pinned levels bypass the loop and the sensor entirely: the operator
+  // (or the BMC) asked for exactly this.
+  //
+  if (mOverride >= 0) {
+    if (mLevel != mOverride) {
+      FanSetLevel ((UINTN)mOverride);
+    }
+
+    return;
+  }
+
+  if (mPolicy.Mode == RPI_FAN_MODE_FIXED) {
+    if (mLevel != (INTN)mPolicy.FixedLevel) {
+      FanSetLevel (mPolicy.FixedLevel);
+    }
+
+    return;
+  }
+
   if (!AvsReadMilliCelsius (&MilliC)) {
     if (mLevel < FAN_LEVEL_SAFE) {
       DEBUG ((DEBUG_WARN,
@@ -266,14 +392,14 @@ FanPollTick (
 
   Target = 0;
   for (Index = FAN_LEVEL_COUNT; Index-- > 1; ) {
-    if (MilliC >= mFanLevels[Index].TripMilliC) {
+    if (MilliC >= TripMilliC (Index)) {
       Target = Index;
       break;
     }
   }
 
   if ((mLevel >= 0) && (Target < (UINTN)mLevel)) {
-    if (MilliC >= mFanLevels[mLevel].TripMilliC - FAN_HYST_MILLIC) {
+    if (MilliC >= TripMilliC ((UINTN)mLevel) - FAN_HYST_MILLIC) {
       Target = (UINTN)mLevel;         // inside the hysteresis band: hold
     } else {
       Target = (UINTN)mLevel - 1;     // step down gently
@@ -304,6 +430,92 @@ FanOnExitBootServices (
     FanSetLevel (1);
   }
 }
+
+//
+// RPI_FAN_PROTOCOL implementation.
+//
+
+STATIC
+EFI_STATUS
+EFIAPI
+FanGetInfo (
+  IN  RPI_FAN_PROTOCOL  *This,
+  OUT RPI_FAN_INFO      *Info
+  )
+{
+  UINTN  Level;
+
+  if (Info == NULL) {
+    return EFI_INVALID_PARAMETER;
+  }
+
+  Info->TemperatureValid = AvsReadMilliCelsius (&Info->TemperatureMilliCelsius);
+  if (!Info->TemperatureValid) {
+    Info->TemperatureMilliCelsius = 0;
+  }
+
+  Info->MaxLevel       = (UINT8)FAN_LEVEL_MAX;
+  Info->OverrideActive = (BOOLEAN)(mOverride >= 0);
+
+  if (mRp1Base == 0) {
+    Info->Level   = 0;
+    Info->Duty255 = 0;
+    return EFI_NOT_READY;
+  }
+
+  Level         = (mLevel < 0) ? 0 : (UINTN)mLevel;
+  Info->Level   = (UINT8)Level;
+  Info->Duty255 = mFanLevels[Level].Duty255;
+
+  return EFI_SUCCESS;
+}
+
+STATIC
+EFI_STATUS
+EFIAPI
+FanSetOverride (
+  IN RPI_FAN_PROTOCOL  *This,
+  IN UINT8             Level
+  )
+{
+  if (Level > FAN_LEVEL_MAX) {
+    return EFI_INVALID_PARAMETER;
+  }
+
+  mOverride = (INTN)Level;
+  DEBUG ((DEBUG_INFO, "ActiveCoolerDxe: override staged, level %d\n", Level));
+
+  //
+  // Apply now rather than waiting out the poll interval; the timer keeps
+  // it asserted afterwards.
+  //
+  if ((mRp1Base != 0) && (mLevel != mOverride)) {
+    FanSetLevel ((UINTN)mOverride);
+  }
+
+  return EFI_SUCCESS;
+}
+
+STATIC
+EFI_STATUS
+EFIAPI
+FanClearOverride (
+  IN RPI_FAN_PROTOCOL  *This
+  )
+{
+  if (mOverride >= 0) {
+    DEBUG ((DEBUG_INFO, "ActiveCoolerDxe: override cleared\n"));
+  }
+
+  mOverride = -1;
+  return EFI_SUCCESS;                 // loop resumes on the next tick
+}
+
+STATIC RPI_FAN_PROTOCOL  mFanProtocol = {
+  FanGetInfo,
+  FanSetOverride,
+  FanClearOverride
+};
 
 EFI_STATUS
 EFIAPI
@@ -344,6 +556,18 @@ ActiveCoolerEntryPoint (
     gBS->CloseEvent (mPollTimer);
     return Status;
   }
+
+  //
+  // The control surface is best-effort: fan regulation must run even if
+  // the protocol cannot be published.
+  //
+  Status = gBS->InstallProtocolInterface (
+                  &ImageHandle,
+                  &gRpiFanProtocolGuid,
+                  EFI_NATIVE_INTERFACE,
+                  &mFanProtocol
+                  );
+  DEBUG ((DEBUG_INFO, "ActiveCoolerDxe: install RpiFanProtocol - %r\n", Status));
 
   return EFI_SUCCESS;
 }

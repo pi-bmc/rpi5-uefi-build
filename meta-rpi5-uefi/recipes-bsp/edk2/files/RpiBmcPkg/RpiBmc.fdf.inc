@@ -4,3 +4,4 @@
   INF RpiBmcPkg/Drivers/BootloaderConfigDxe/BootloaderConfigDxe.inf
   INF RpiBmcPkg/Drivers/PowerButtonDxe/PowerButtonDxe.inf
   INF RpiBmcPkg/Drivers/ActiveCoolerDxe/ActiveCoolerDxe.inf
+  INF RpiBmcPkg/Drivers/FanConfigDxe/FanConfigDxe.inf

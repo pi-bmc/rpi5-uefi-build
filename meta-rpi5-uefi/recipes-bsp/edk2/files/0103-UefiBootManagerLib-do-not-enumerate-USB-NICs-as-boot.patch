@@ -1,0 +1,93 @@
+From: appkins <nbatkins@gmail.com>
+Date: Mon, 17 Aug 2026 12:10:00 -0500
+Subject: [PATCH] UefiBootManagerLib: do not enumerate USB NICs as boot options
+
+BmEnumerateBootOptions() creates a boot option for every LoadFile handle,
+which includes the PXE/HTTP-boot instances riding the BMC's USB CDC
+network gadget - the Redfish host interface. That is a management link
+with no boot server behind it: an attempt would sit through a full
+DHCP timeout, and every enumeration pokes the gadget's network stack.
+
+The existing PlatformBm prune (edk2-platforms 0005) deletes such options
+after PlatformBootManagerAfterConsole's refresh, but the Boot Manager UI
+calls EfiBootManagerRefreshAllBootOption() itself and recreates them
+inside Setup. Filter at the source instead: skip LoadFile handles whose
+device path carries both a USB node and a MAC node. USB mass storage has
+no MAC node and platform NICs (RP1 GEM) have no USB node, so both keep
+their options. The 0005 prune stays as cleanup for options persisted by
+older firmware.
+
+Upstream-Status: Inappropriate [platform policy]
+Signed-off-by: appkins <nbatkins@gmail.com>
+---
+diff --git a/MdeModulePkg/Library/UefiBootManagerLib/BmBoot.c b/MdeModulePkg/Library/UefiBootManagerLib/BmBoot.c
+index e3d34af..724cf5e 100644
+--- a/MdeModulePkg/Library/UefiBootManagerLib/BmBoot.c
++++ b/MdeModulePkg/Library/UefiBootManagerLib/BmBoot.c
+@@ -2225,6 +2225,48 @@ BmMatchPartitionDevicePathNode (
+   return FALSE;
+ }
+ 
++/**
++  Check whether the device path is a network interface carried over USB.
++
++  A USB NIC's device path contains both a USB node and a MAC node. USB mass
++  storage carries no MAC node; a PCI or platform NIC carries no USB node.
++
++  @param DevicePath  The device path to check. NULL returns FALSE.
++
++  @retval TRUE   The device path is a network interface behind a USB node.
++  @retval FALSE  It is not.
++**/
++STATIC
++BOOLEAN
++BmIsUsbNicDevicePath (
++  IN EFI_DEVICE_PATH_PROTOCOL  *DevicePath
++  )
++{
++  EFI_DEVICE_PATH_PROTOCOL  *Node;
++  BOOLEAN                   HasMac;
++  BOOLEAN                   OverUsb;
++
++  if (DevicePath == NULL) {
++    return FALSE;
++  }
++
++  HasMac  = FALSE;
++  OverUsb = FALSE;
++  for (Node = DevicePath; !IsDevicePathEnd (Node); Node = NextDevicePathNode (Node)) {
++    if (DevicePathType (Node) != MESSAGING_DEVICE_PATH) {
++      continue;
++    }
++
++    if (DevicePathSubType (Node) == MSG_USB_DP) {
++      OverUsb = TRUE;
++    } else if (DevicePathSubType (Node) == MSG_MAC_ADDR_DP) {
++      HasMac = TRUE;
++    }
++  }
++
++  return (BOOLEAN)(HasMac && OverUsb);
++}
++
+ /**
+   Emuerate all possible bootable medias in the following order:
+   1. Removable BlockIo            - The boot option only points to the removable media
+@@ -2401,6 +2443,17 @@ BmEnumerateBootOptions (
+       continue;
+     }
+ 
++    //
++    // Skip network interfaces carried over USB. On this platform the only
++    // USB NIC is the BMC's CDC network gadget - the Redfish host interface,
++    // a management link with no boot server behind it. Filtering at
++    // enumeration (rather than pruning afterwards) keeps such options out
++    // of every refresh, including the ones the Boot Manager UI triggers.
++    //
++    if (BmIsUsbNicDevicePath (DevicePathFromHandle (Handles[Index]))) {
++      continue;
++    }
++
+     Description = BmGetBootDescription (Handles[Index]);
+     BootOptions = ReallocatePool (
+                     sizeof (EFI_BOOT_MANAGER_LOAD_OPTION) * (*BootOptionCount),

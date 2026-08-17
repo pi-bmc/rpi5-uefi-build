@@ -27,6 +27,7 @@
   MdePkg/MdePkg.dec
   MdeModulePkg/MdeModulePkg.dec
   RedfishPkg/RedfishPkg.dec
+  RpiBmcPkg/RpiBmcPkg.dec
   RpiRedfishPkg/RpiRedfishPkg.dec
 
 [LibraryClasses]
@@ -51,6 +52,7 @@
   gEfiBlockIoProtocolGuid                   ## CONSUMES
   gEfiDevicePathProtocolGuid                ## CONSUMES
   gEfiNvmExpressPassThruProtocolGuid        ## CONSUMES
+  gRpiFanProtocolGuid                       ## SOMETIMES_CONSUMES
 
 [Guids]
   gEfiGlobalVariableGuid                    ## CONSUMES

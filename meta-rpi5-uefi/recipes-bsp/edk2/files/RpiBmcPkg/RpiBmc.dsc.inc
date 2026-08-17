@@ -14,3 +14,4 @@
     <LibraryClasses>
       Rp1GpioLib|RpiBmcPkg/Library/Rp1GpioLib/Rp1GpioLib.inf
   }
+  RpiBmcPkg/Drivers/FanConfigDxe/FanConfigDxe.inf

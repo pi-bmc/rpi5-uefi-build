@@ -27,7 +27,11 @@ PV = "202602+git${SRCPV}"
 
 # Patch order matters and follows SRC_URI order:
 #   edk2 tree:            0001-EDK2-Sd-Mmc-v4 (the former fork's only commit),
-#                         then 0100 (UsbNetwork point-to-point media).
+#                         then 0100 (UsbNetwork point-to-point media),
+#                         0101 (skip IPv6 discovery leg), 0102 (quiesce the
+#                         Redfish stack at ReadyToBoot -- the in-Setup
+#                         gadget-detach use-after-free), 0103 (keep USB NICs
+#                         out of BDS boot-option enumeration).
 #   edk2-platforms tree:  file://edk2-platforms (the RPi5 port's ADDED files)
 #                         merges INTO the git checkout at
 #                         ${UNPACKDIR}/edk2-platforms during do_unpack, then
@@ -56,6 +60,8 @@ SRC_URI = "gitsm://github.com/tianocore/edk2.git;protocol=https;branch=master;na
            file://0005-PlatformBm-prune-USB-NIC-network-boot-options.patch;patchdir=../edk2-platforms \
            file://0100-UsbNetwork-assume-media-on-a-point-to-point-gadget.patch \
            file://0101-RedfishDiscoverDxe-skip-the-IPv6-discovery-leg.patch \
+           file://0102-RedfishConfigHandler-quiesce-the-Redfish-stack-at-Re.patch \
+           file://0103-UefiBootManagerLib-do-not-enumerate-USB-NICs-as-boot.patch \
            file://RpiBmcPkg \
            file://Rp1GemPkg \
            file://RpiRedfishPkg \

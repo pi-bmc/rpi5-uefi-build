@@ -37,10 +37,66 @@ performs the exchange (all fail-open — a dead BMC never blocks booting):
 | 2 | `PATCH /redfish/v1/Systems/1` (identity + `BootProgress`) | SmbiosEepromMirrorDxe |
 | 2b | `POST /redfish/v1/Systems/1/Memory` per module | — (new) |
 | 2c | `POST /redfish/v1/Systems/1/Storage/1/Drives` per drive | BlkInfoMirrorDxe |
+| 2d | `PATCH`+`GET /redfish/v1/Chassis/1/Thermal` (thermal telemetry + fan steering, then every 10 s) | — (new) |
 | 3 | `GET /redfish/v1/Systems/1` → apply one-time boot override | EEPROM BootNext/BootOrder writes |
 
 The override is acknowledged (`BootSourceOverrideEnabled: "Disabled"`)
 **before** booting the target, so it stays genuinely one-shot.
+
+### Thermal / fan steering (step 2d)
+
+The firmware PATCHes a Thermal-schema body — SoC temperature (from the
+BCM2712 AVS monitor) plus the active cooler's commanded duty and level:
+
+```json
+{"Temperatures": [{"MemberId": "SoC", "ReadingCelsius": 47.3}],
+ "Fans": [{"MemberId": "ActiveCooler", "Reading": 49, "ReadingUnits": "Percent",
+           "Oem": {"PiBmc": {"Level": 2, "MaxLevel": 4, "OverrideActive": false}}}]}
+```
+
+and reads the resource back for steering: an integer
+`Oem.PiBmc.FanOverrideLevel` (0..4) in the BMC's representation pins the
+fan to that level through `RPI_FAN_PROTOCOL` (ActiveCoolerDxe); removing
+the property (or any non-integer value) releases it back to the FanPolicy
+variable / automatic loop. Both legs repeat every 10 s for as long as the
+firmware phase lasts (BDS wait, Setup, the shell) and stop themselves the
+first time both fail. Fail-open: a BMC without the Chassis handler just
+404s and the host keeps regulating its own fan.
+
+The *persistent* fan policy is additionally exposed as BIOS attributes:
+FanConfigDxe's Setup questions carry `x-UEFI-redfish-Bios.v1_0_9` labels
+(`FanConfigDxeMap.uni`), so the edk2-redfish-client Bios feature driver
+publishes `FanMode` (`Automatic`/`FixedSpeed`/`CustomTripPoints`),
+`FanFixedLevel` (`Level0`..`Level4`) and `FanTrip1C`..`FanTrip4C` under
+`/redfish/v1/Systems/1/Bios` with their allowable values in the
+BiosAttributeRegistry. A BMC write through that path lands in the same
+FanPolicy variable the Setup page edits and ActiveCoolerDxe re-reads
+every second — use it for durable policy, and the Thermal override for
+live steering.
+
+## Lifecycle: everything stops at ReadyToBoot
+
+The whole exchange is a BDS-time one-shot. Two crashes taught us the stack
+must be treated as *finished* once boot begins:
+
+* Same-boot `EfiBootManagerBoot()` from the config-handler callback
+  use-after-freed in-flight discovery state (fixed: override always stages
+  `BootNext` + cold reset; recipe patch 0101 also drops the pointless IPv6
+  discovery leg).
+* The BMC gadget re-enumerating while the user sat in Setup tore the USB
+  network stack down; the disconnect cascade swept every config handler's
+  `Stop()`, and the RedfishClientPkg feature drivers then ran
+  `RedfishCleanupService` over the already-freed HTTP instance
+  (`Http->Configure` through `0xAFAFAFAFAFAFAFAF`). Fixed by recipe patch
+  0102: `RedfishConfigHandlerDriver` stops all handlers at ReadyToBoot while
+  the transport is alive and latches so discovery/config never restarts
+  (Setup runs after ReadyToBoot, so the hot-unplug window is covered).
+  Patch 0103 additionally keeps USB NICs out of BDS boot-option enumeration
+  entirely, so Boot Manager refreshes in Setup stop poking the gadget link.
+
+Consequence: if the gadget enumerates so late that discovery would finish
+after ReadyToBoot, that boot simply skips the sync (fail-open) and the next
+reboot retries.
 
 ## Deployment contract (both sides MUST agree)
 
@@ -71,6 +127,10 @@ configured to match or discovery never happens.
 4. `POST` handlers for `/Systems/1/Memory` and `/Systems/1/Storage/1/Drives`
    (today they 404; the firmware logs and moves on). Storing the drive POSTs
    replaces the blkinfo EEPROM region as `storage.go`'s source.
+5. `PATCH`/`GET` handlers for `/Chassis/1/Thermal` (today they 404). Store
+   the firmware's Temperatures/Fans arrays for the UI, and serve
+   `Oem.PiBmc.FanOverrideLevel` (integer 0–4, or absent for "no opinion")
+   to steer the host fan during the firmware phase.
 
 u-boot (nanokvm-build's image) still uses the I2C EEPROM contract — the BMC
 keeps the emulated 24c256 for it; only this UEFI firmware moved off it.

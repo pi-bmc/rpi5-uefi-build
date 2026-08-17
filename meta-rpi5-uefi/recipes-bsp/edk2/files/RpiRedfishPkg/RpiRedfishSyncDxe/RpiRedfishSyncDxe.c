@@ -19,6 +19,9 @@
                                        0/1) and boot progress to the BMC
                                        (successor of SmbiosEepromMirrorDxe).
     2b/2c. POST Memory / Drives     -- inventory (successor of BlkInfoMirrorDxe).
+    2d. PATCH+GET Chassis/1/Thermal -- SoC temperature + fan state up, BMC fan
+                                       steering down (RPI_FAN_PROTOCOL); then
+                                       every 10 s for as long as BDS lasts.
     3. GET  /redfish/v1/Systems/1   -- reads back the BMC's requested one-time
                                        boot override, acknowledges it, and boots
                                        the matching option in this same boot
@@ -36,8 +39,12 @@
 #include <Library/JsonLib.h>
 #include <Library/UefiBootManagerLib.h>
 
-STATIC EFI_HANDLE  mImageHandle = NULL;
-STATIC BOOLEAN     mSyncDone    = FALSE;
+#include <Protocol/RpiFan.h>
+
+STATIC EFI_HANDLE       mImageHandle    = NULL;
+STATIC BOOLEAN          mSyncDone       = FALSE;
+STATIC REDFISH_SERVICE  mThermalService = NULL;
+STATIC EFI_EVENT        mThermalTimer   = NULL;
 
 /**
   Log an HTTP status code alongside the URI it came from.
@@ -607,6 +614,216 @@ ReportDrives (
 }
 
 /**
+  Publish the SoC temperature and fan state to the BMC's Thermal resource.
+
+  Redfish puts thermal under Chassis, so this PATCHes Chassis/1/Thermal in
+  the Thermal-schema shape (Temperatures + Fans arrays) with the fan's
+  commanded level in an Oem block. The BMC (nanokvm-app) has no Chassis
+  handler yet; until it lands these log an HTTP error and move on,
+  fail-open like the Memory/Drives POSTs.
+
+  @param[in] Service  The Redfish service to report to.
+
+  @retval EFI_SUCCESS    The PATCH was accepted.
+  @retval EFI_NOT_FOUND  No fan protocol (ActiveCoolerDxe absent).
+  @return                Transport or HTTP error from the PATCH.
+**/
+STATIC
+EFI_STATUS
+ReportThermal (
+  IN REDFISH_SERVICE  Service
+  )
+{
+  RPI_FAN_PROTOCOL  *Fan;
+  RPI_FAN_INFO      Info;
+  REDFISH_RESPONSE  Response;
+  EFI_STATUS        Status;
+  CHAR8             Body[RPI_REDFISH_JSON_MAX];
+  CHAR8             TempField[64];
+  UINT32            Percent;
+  INT32             Whole;
+  INT32             Milli;
+
+  Status = gBS->LocateProtocol (&gRpiFanProtocolGuid, NULL, (VOID **)&Fan);
+  if (EFI_ERROR (Status)) {
+    return EFI_NOT_FOUND;
+  }
+
+  Status = Fan->GetInfo (Fan, &Info);
+  if (EFI_ERROR (Status) && (Status != EFI_NOT_READY)) {
+    return Status;
+  }
+
+  //
+  // An invalid sensor omits the Temperatures array rather than reporting a
+  // made-up number the BMC would chart.
+  //
+  TempField[0] = '\0';
+  if (Info.TemperatureValid) {
+    Whole = Info.TemperatureMilliCelsius / 1000;
+    Milli = Info.TemperatureMilliCelsius % 1000;
+    if (Milli < 0) {
+      Milli = -Milli;
+    }
+
+    AsciiSPrint (
+      TempField,
+      sizeof (TempField),
+      "\"Temperatures\":[{\"MemberId\":\"SoC\",\"ReadingCelsius\":%a%d.%03d}],",
+      ((Info.TemperatureMilliCelsius < 0) && (Whole == 0)) ? "-" : "",
+      Whole,
+      Milli
+      );
+  }
+
+  Percent = (Info.Duty255 * 100) / 255;
+  AsciiSPrint (
+    Body,
+    sizeof (Body),
+    "{%a\"Fans\":[{\"MemberId\":\"ActiveCooler\",\"Reading\":%d,"
+    "\"ReadingUnits\":\"Percent\","
+    "\"Oem\":{\"PiBmc\":{\"Level\":%d,\"MaxLevel\":%d,\"OverrideActive\":%a}}}]}",
+    TempField,
+    Percent,
+    Info.Level,
+    Info.MaxLevel,
+    Info.OverrideActive ? "true" : "false"
+    );
+
+  ZeroMem (&Response, sizeof (Response));
+  Status = RedfishHttpPatchResource (Service, RPI_REDFISH_THERMAL_URI, Body, &Response);
+  LogResult ("PATCH", RPI_REDFISH_THERMAL_URI, Status, &Response);
+  RedfishHttpFreeResponse (&Response);
+
+  return Status;
+}
+
+/**
+  Read back the BMC's fan steering from the Thermal resource and apply it.
+
+  Wire contract: the BMC stages Oem.PiBmc.FanOverrideLevel (integer,
+  0..MaxLevel) in its Chassis/1/Thermal representation to pin the fan, and
+  removes the property (or sets it to a non-integer, e.g. null or "Auto")
+  to release it. The override is applied through RPI_FAN_PROTOCOL, so it
+  is volatile and loses to nothing except a newer override.
+
+  A failed GET changes nothing: a comms error is indistinguishable from a
+  BMC that has no opinion, and dropping an active override on a glitch
+  would let the fan loop fight the BMC.
+
+  @param[in] Service  The Redfish service to poll.
+
+  @retval EFI_SUCCESS  The GET succeeded (override applied or released).
+  @return              Transport or HTTP error from the GET.
+**/
+STATIC
+EFI_STATUS
+PollFanOverride (
+  IN REDFISH_SERVICE  Service
+  )
+{
+  RPI_FAN_PROTOCOL  *Fan;
+  REDFISH_RESPONSE  Response;
+  EFI_STATUS        Status;
+  EDKII_JSON_VALUE  Root;
+  EDKII_JSON_VALUE  Value;
+  INT64             Level;
+
+  Status = gBS->LocateProtocol (&gRpiFanProtocolGuid, NULL, (VOID **)&Fan);
+  if (EFI_ERROR (Status)) {
+    return EFI_NOT_FOUND;
+  }
+
+  ZeroMem (&Response, sizeof (Response));
+  Status = RedfishHttpGetResource (Service, RPI_REDFISH_THERMAL_URI, NULL, &Response, FALSE);
+  if (EFI_ERROR (Status)) {
+    RedfishHttpFreeResponse (&Response);
+    return Status;
+  }
+
+  Root = (Response.Payload == NULL) ? NULL : RedfishJsonInPayload (Response.Payload);
+
+  Value = NULL;
+  if ((Root != NULL) && JsonValueIsObject (Root)) {
+    Value = JsonObjectGetValue (JsonValueGetObject (Root), "Oem");
+    if ((Value != NULL) && JsonValueIsObject (Value)) {
+      Value = JsonObjectGetValue (JsonValueGetObject (Value), "PiBmc");
+      if ((Value != NULL) && JsonValueIsObject (Value)) {
+        Value = JsonObjectGetValue (JsonValueGetObject (Value), "FanOverrideLevel");
+      }
+    }
+  }
+
+  if ((Value != NULL) && JsonValueIsInteger (Value)) {
+    Level = JsonValueGetInteger (Value);
+    if ((Level >= 0) && (Level <= 0xFF)) {
+      Status = Fan->SetOverride (Fan, (UINT8)Level);
+      DEBUG ((
+        DEBUG_ERROR,
+        "RpiRedfishSync: BMC fan override level %d - %r\n",
+        (INT32)Level,
+        Status
+        ));
+    } else {
+      Fan->ClearOverride (Fan);
+    }
+  } else {
+    //
+    // No integer staged: the BMC is not steering, or released a previous
+    // override. Clearing when none is active is a no-op.
+    //
+    Fan->ClearOverride (Fan);
+  }
+
+  RedfishHttpFreeResponse (&Response);
+  return EFI_SUCCESS;
+}
+
+/**
+  Periodic thermal telemetry: keep the BMC's temperature/fan view fresh
+  and honour its steering while the firmware phase lasts (BDS wait, the
+  Setup browser, the shell). Stops itself the first time BOTH legs fail:
+  the service handle this rides was created for the one-shot exchange, and
+  a link that has gone away is not coming back within this boot phase --
+  better silent than banging a dead (or freed) service every 10 s.
+
+  The event dies with boot services, so a successful OS handoff needs no
+  cleanup here.
+
+  @param[in] Event    The timer event.
+  @param[in] Context  Unused.
+**/
+STATIC
+VOID
+EFIAPI
+ThermalTick (
+  IN EFI_EVENT  Event,
+  IN VOID       *Context
+  )
+{
+  EFI_STATUS  PatchStatus;
+  EFI_STATUS  PollStatus;
+
+  if (mThermalService == NULL) {
+    return;
+  }
+
+  PatchStatus = ReportThermal (mThermalService);
+  PollStatus  = PollFanOverride (mThermalService);
+
+  if (EFI_ERROR (PatchStatus) && EFI_ERROR (PollStatus)) {
+    DEBUG ((
+      DEBUG_ERROR,
+      "RpiRedfishSync: thermal telemetry stopped (%r / %r)\n",
+      PatchStatus,
+      PollStatus
+      ));
+    gBS->SetTimer (mThermalTimer, TimerCancel, 0);
+    mThermalService = NULL;
+  }
+}
+
+/**
   Perform the host-interface exchange against the discovered Redfish service.
 
   @param[in] ServiceInfo  Discovered Redfish service information.
@@ -694,6 +911,15 @@ RpiRedfishSync (
   ReportDrives (Service);
 
   //
+  // 2d. First thermal sample + any fan steering the BMC already staged.
+  //    Before the boot-override step on purpose: an override reboots the
+  //    host, and the BMC should still get one thermal reading out of this
+  //    boot.
+  //
+  ReportThermal (Service);
+  PollFanOverride (Service);
+
+  //
   // 3. Read back the system, including any boot override the BMC wants applied.
   //
   ZeroMem (&Response, sizeof (Response));
@@ -704,6 +930,25 @@ RpiRedfishSync (
   }
 
   RedfishHttpFreeResponse (&Response);
+
+  //
+  // Keep the thermal view fresh from here on. Only reached when no boot
+  // override fired (ApplyMatchedOption resets and never returns), i.e. the
+  // host is proceeding into BDS wait / Setup / a normal boot.
+  //
+  mThermalService = Service;
+  Status          = gBS->CreateEvent (
+                           EVT_TIMER | EVT_NOTIFY_SIGNAL,
+                           TPL_CALLBACK,
+                           ThermalTick,
+                           NULL,
+                           &mThermalTimer
+                           );
+  if (!EFI_ERROR (Status)) {
+    Status = gBS->SetTimer (mThermalTimer, TimerPeriodic, RPI_REDFISH_THERMAL_PERIOD);
+  }
+
+  DEBUG ((DEBUG_ERROR, "RpiRedfishSync: thermal telemetry timer - %r\n", Status));
 
   //
   // Deliberately no RedfishCleanupService (Service) here.

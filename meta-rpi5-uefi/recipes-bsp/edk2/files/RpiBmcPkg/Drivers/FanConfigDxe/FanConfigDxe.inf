@@ -1,0 +1,45 @@
+## @file
+#
+#  FanConfigDxe - "Active Cooler" Setup page (Device Manager) editing the
+#  FanPolicy variable that ActiveCoolerDxe consumes live.
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+#
+##
+
+[Defines]
+  INF_VERSION                    = 0x0001001A
+  BASE_NAME                      = FanConfigDxe
+  FILE_GUID                      = b1e64c0a-7d92-4a3f-8b11-3c5de07f96e8
+  MODULE_TYPE                    = DXE_DRIVER
+  VERSION_STRING                 = 1.0
+  ENTRY_POINT                    = FanConfigEntryPoint
+
+[Sources]
+  FanConfigDxe.c
+  FanConfigHii.vfr
+  FanConfigDxe.uni
+  FanConfigDxeMap.uni
+
+[Packages]
+  MdeModulePkg/MdeModulePkg.dec
+  MdePkg/MdePkg.dec
+  RpiBmcPkg/RpiBmcPkg.dec
+
+[LibraryClasses]
+  DebugLib
+  DevicePathLib
+  HiiLib
+  UefiBootServicesTableLib
+  UefiDriverEntryPoint
+  UefiRuntimeServicesTableLib
+
+[Protocols]
+  gEfiDevicePathProtocolGuid                    ## PRODUCES
+
+[Guids]
+  gRpiFanConfigFormSetGuid                      ## PRODUCES ## Variable:L"FanPolicy"
+  gEfiHiiPlatformSetupFormsetGuid               ## CONSUMES ## GUID
+
+[Depex]
+  gEfiVariableArchProtocolGuid AND gEfiVariableWriteArchProtocolGuid

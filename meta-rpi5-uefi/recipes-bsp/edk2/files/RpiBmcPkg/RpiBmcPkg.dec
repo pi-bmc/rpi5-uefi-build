@@ -37,3 +37,12 @@
   ## variables. Frozen contract - mirrored by u-boot rpi.c
   ## (rpi_bootloader_guid) and the BMC's efivars package. Do not change.
   gRpiBmcBootloaderVendorGuid = { 0xd1a0f2c4, 0x9b3e, 0x4f7a, { 0x8c, 0x21, 0x6e, 0x5b, 0x0a, 0x7d, 0x4f, 0x10 } }
+
+  ## Vendor GUID of the FanPolicy variable and FanConfigDxe's Setup formset
+  ## (Include/Guid/RpiFanPolicy.h).
+  gRpiFanConfigFormSetGuid = { 0x6c2b9f4a, 0xe0d3, 0x4f8b, { 0x84, 0x59, 0xa2, 0x0f, 0x6d, 0x4e, 0x91, 0xc7 } }
+
+[Protocols]
+  ## Active-cooler control surface produced by ActiveCoolerDxe
+  ## (Include/Protocol/RpiFan.h).
+  gRpiFanProtocolGuid = { 0x9d8a2c6e, 0x41b7, 0x4c15, { 0x9e, 0x02, 0x7a, 0x33, 0xd1, 0x5f, 0x28, 0x64 } }

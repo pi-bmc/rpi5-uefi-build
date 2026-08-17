@@ -30,12 +30,15 @@
   Rp1GpioLib
   UefiBootServicesTableLib
   UefiDriverEntryPoint
+  UefiRuntimeServicesTableLib
 
 [Protocols]
   gRp1BusProtocolGuid                           ## SOMETIMES_CONSUMES
+  gRpiFanProtocolGuid                           ## PRODUCES
 
 [Guids]
   gEfiEventExitBootServicesGuid                 ## CONSUMES ## Event
+  gRpiFanConfigFormSetGuid                      ## CONSUMES ## Variable:L"FanPolicy"
 
 [Depex]
   TRUE

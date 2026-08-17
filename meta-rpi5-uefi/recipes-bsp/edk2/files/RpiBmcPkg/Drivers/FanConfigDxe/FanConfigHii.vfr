@@ -1,0 +1,99 @@
+/** @file
+ *
+ *  Active Cooler configuration formset, bound to the FanPolicy variable
+ *  (efivarstore - the browser edits the variable directly, no callbacks).
+ *  ActiveCoolerDxe re-reads the variable every second, so saved changes
+ *  take effect immediately.
+ *
+ *  SPDX-License-Identifier: BSD-2-Clause-Patent
+ *
+ **/
+
+#include <Guid/HiiPlatformSetupFormset.h>
+#include <Guid/RpiFanPolicy.h>
+
+#define EFI_VARIABLE_NON_VOLATILE       0x00000001
+#define EFI_VARIABLE_BOOTSERVICE_ACCESS 0x00000002
+#define EFI_VARIABLE_RUNTIME_ACCESS     0x00000004
+
+formset
+    guid      = RPI_FAN_CONFIG_FORMSET_GUID,
+    title     = STRING_TOKEN(STR_FORM_SET_TITLE),
+    help      = STRING_TOKEN(STR_FORM_SET_TITLE_HELP),
+    classguid = EFI_HII_PLATFORM_SETUP_FORMSET_GUID,
+
+    efivarstore RPI_FAN_POLICY,
+      attribute = EFI_VARIABLE_BOOTSERVICE_ACCESS | EFI_VARIABLE_RUNTIME_ACCESS | EFI_VARIABLE_NON_VOLATILE,
+      name  = FanPolicy,
+      guid  = RPI_FAN_CONFIG_FORMSET_GUID;
+
+    form formid = 1,
+        title = STRING_TOKEN(STR_FORM_TITLE);
+
+        oneof varid = FanPolicy.Mode,
+            prompt      = STRING_TOKEN(STR_MODE_PROMPT),
+            help        = STRING_TOKEN(STR_MODE_HELP),
+            flags       = NUMERIC_SIZE_1,
+            option text = STRING_TOKEN(STR_MODE_AUTO),   value = 0, flags = DEFAULT;
+            option text = STRING_TOKEN(STR_MODE_FIXED),  value = 1, flags = 0;
+            option text = STRING_TOKEN(STR_MODE_CUSTOM), value = 2, flags = 0;
+        endoneof;
+
+        suppressif ideqval FanPolicy.Mode == 0 OR ideqval FanPolicy.Mode == 2;
+            oneof varid = FanPolicy.FixedLevel,
+                prompt      = STRING_TOKEN(STR_LEVEL_PROMPT),
+                help        = STRING_TOKEN(STR_LEVEL_HELP),
+                flags       = NUMERIC_SIZE_1,
+                option text = STRING_TOKEN(STR_LEVEL_0), value = 0, flags = 0;
+                option text = STRING_TOKEN(STR_LEVEL_1), value = 1, flags = 0;
+                option text = STRING_TOKEN(STR_LEVEL_2), value = 2, flags = DEFAULT;
+                option text = STRING_TOKEN(STR_LEVEL_3), value = 3, flags = 0;
+                option text = STRING_TOKEN(STR_LEVEL_4), value = 4, flags = 0;
+            endoneof;
+        endif;
+
+        suppressif ideqval FanPolicy.Mode == 0 OR ideqval FanPolicy.Mode == 1;
+            numeric varid = FanPolicy.Trip1C,
+                prompt  = STRING_TOKEN(STR_TRIP1_PROMPT),
+                help    = STRING_TOKEN(STR_TRIP_HELP),
+                flags   = NUMERIC_SIZE_1 | DISPLAY_UINT_DEC,
+                minimum = 30,
+                maximum = 90,
+                step    = 1,
+                default = 50,
+            endnumeric;
+
+            numeric varid = FanPolicy.Trip2C,
+                prompt  = STRING_TOKEN(STR_TRIP2_PROMPT),
+                help    = STRING_TOKEN(STR_TRIP_HELP),
+                flags   = NUMERIC_SIZE_1 | DISPLAY_UINT_DEC,
+                minimum = 30,
+                maximum = 90,
+                step    = 1,
+                default = 60,
+            endnumeric;
+
+            numeric varid = FanPolicy.Trip3C,
+                prompt  = STRING_TOKEN(STR_TRIP3_PROMPT),
+                help    = STRING_TOKEN(STR_TRIP_HELP),
+                flags   = NUMERIC_SIZE_1 | DISPLAY_UINT_DEC,
+                minimum = 30,
+                maximum = 90,
+                step    = 1,
+                default = 68,
+            endnumeric;
+
+            numeric varid = FanPolicy.Trip4C,
+                prompt  = STRING_TOKEN(STR_TRIP4_PROMPT),
+                help    = STRING_TOKEN(STR_TRIP_HELP),
+                flags   = NUMERIC_SIZE_1 | DISPLAY_UINT_DEC,
+                minimum = 30,
+                maximum = 90,
+                step    = 1,
+                default = 75,
+            endnumeric;
+        endif;
+
+    endform;
+
+endformset;

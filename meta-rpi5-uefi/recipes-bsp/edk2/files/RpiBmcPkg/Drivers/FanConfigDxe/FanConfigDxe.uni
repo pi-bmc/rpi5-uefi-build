@@ -1,0 +1,33 @@
+/** @file
+ *
+ *  Strings for the Active Cooler configuration formset.
+ *
+ *  SPDX-License-Identifier: BSD-2-Clause-Patent
+ *
+ **/
+
+#langdef en-US "English"
+
+#string STR_FORM_SET_TITLE       #language en-US "Active Cooler"
+#string STR_FORM_SET_TITLE_HELP  #language en-US "Fan control policy for the Raspberry Pi 5 active cooler. Changes apply immediately on save; no reset is needed."
+#string STR_FORM_TITLE           #language en-US "Active Cooler Configuration"
+
+#string STR_MODE_PROMPT          #language en-US "Fan Control Mode"
+#string STR_MODE_HELP            #language en-US "Automatic follows the SoC temperature with the platform cooling curve (levels 0/29/49/69/98% at 50/60/67.5/75 C, 5 C hysteresis). Fixed Speed pins the fan to one level. Custom Trip Points keeps the automatic loop but uses the temperatures configured below. A BMC fan override, when staged over Redfish, takes precedence over all of these until released."
+#string STR_MODE_AUTO            #language en-US "Automatic"
+#string STR_MODE_FIXED           #language en-US "Fixed Speed"
+#string STR_MODE_CUSTOM          #language en-US "Custom Trip Points"
+
+#string STR_LEVEL_PROMPT         #language en-US "Fixed Fan Level"
+#string STR_LEVEL_HELP           #language en-US "The fan runs at this level regardless of temperature. Note the SoC still throttles itself if it overheats, but no extra cooling will engage."
+#string STR_LEVEL_0              #language en-US "Level 0 (fan off)"
+#string STR_LEVEL_1              #language en-US "Level 1 (29% duty)"
+#string STR_LEVEL_2              #language en-US "Level 2 (49% duty)"
+#string STR_LEVEL_3              #language en-US "Level 3 (69% duty)"
+#string STR_LEVEL_4              #language en-US "Level 4 (98% duty)"
+
+#string STR_TRIP1_PROMPT         #language en-US "Level 1 Trip Temperature (C)"
+#string STR_TRIP2_PROMPT         #language en-US "Level 2 Trip Temperature (C)"
+#string STR_TRIP3_PROMPT         #language en-US "Level 3 Trip Temperature (C)"
+#string STR_TRIP4_PROMPT         #language en-US "Level 4 Trip Temperature (C)"
+#string STR_TRIP_HELP            #language en-US "Temperature in degrees Celsius at which this cooling level engages. The four trips must be strictly ascending or the built-in curve is used instead. The fan steps back down one level at a time, 5 C below the active trip."
