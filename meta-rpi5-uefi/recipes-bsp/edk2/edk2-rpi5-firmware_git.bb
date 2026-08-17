@@ -29,6 +29,9 @@ SRC_URI = "gitsm://github.com/NumberOneGit/edk2.git;protocol=https;branch=master
            file://config.txt \
            file://ipxe-fdf-snippet.fdf.inc \
            file://0001-Rp1BusDxe-register-GEM-and-I2C1-vendor-devices.patch;patchdir=../edk2-platforms \
+           file://0002-PlatformSmbiosDxe-deterministic-UUID-and-Type45.patch;patchdir=../edk2-platforms \
+           file://0003-RPi5-AcpiTables-add-SsdtThermal.patch;patchdir=../edk2-platforms \
+           file://0004-PlatformBm-return-boot-option-number-not-list-index.patch;patchdir=../edk2-platforms \
            file://RpiBmcPkg \
            file://Rp1GemPkg \
            file://usbnet-dsc-snippet.inc \

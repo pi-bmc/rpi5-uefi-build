@@ -6,3 +6,4 @@
   INF RpiBmcPkg/Drivers/SmbiosEepromMirrorDxe/SmbiosEepromMirrorDxe.inf
   INF RpiBmcPkg/Drivers/BlkInfoMirrorDxe/BlkInfoMirrorDxe.inf
   INF RpiBmcPkg/Drivers/BootloaderConfigDxe/BootloaderConfigDxe.inf
+  INF RpiBmcPkg/Drivers/PowerButtonDxe/PowerButtonDxe.inf

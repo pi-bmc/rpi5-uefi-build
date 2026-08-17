@@ -393,7 +393,34 @@ Rp1GemPhyConfigRgmiiDelays (
     return Status;
   }
 
-  DEBUG ((DEBUG_INFO, "Rp1GemDxe: RGMII rgmii-id clock delays enabled\n"));
+  //
+  // Read both registers back and log the raw values: MDIO reads are proven
+  // (ID scan works) but nothing else in this driver verifies that MDIO
+  // WRITES reach the PHY. The skew bit (0x0100) must show in the auxctl
+  // readback and BIT9 in the shadow readback, or the writes are being
+  // dropped on the wire.
+  //
+  {
+    UINT16  AuxRb;
+    UINT16  ShdRb;
+
+    GemMdioWrite (
+      Gem,
+      Gem->PhyAddr,
+      PHY_BCM_AUXCTL,
+      (PHY_BCM_AUXCTL_SHD_MISC << 12) | PHY_BCM_AUXCTL_SHD_MISC
+      );
+    GemMdioRead (Gem, Gem->PhyAddr, PHY_BCM_AUXCTL, &AuxRb);
+    GemMdioWrite (Gem, Gem->PhyAddr, PHY_BCM_SHD, PHY_BCM_SHD_CLK_CTL << 10);
+    GemMdioRead (Gem, Gem->PhyAddr, PHY_BCM_SHD, &ShdRb);
+    DEBUG ((
+      DEBUG_ERROR,
+      "Rp1GemDxe: RGMII delays readback auxctl 0x%04x (want bit 0x0100) shd3 0x%04x (want bit 0x0200)\n",
+      AuxRb,
+      ShdRb
+      ));
+  }
+
   return EFI_SUCCESS;
 }
 

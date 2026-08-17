@@ -20,3 +20,4 @@
       BmcEepromLib|RpiBmcPkg/Library/BmcEepromLib/BmcEepromLib.inf
   }
   RpiBmcPkg/Drivers/BootloaderConfigDxe/BootloaderConfigDxe.inf
+  RpiBmcPkg/Drivers/PowerButtonDxe/PowerButtonDxe.inf

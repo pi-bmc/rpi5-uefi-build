@@ -106,6 +106,20 @@
 #define  GEM_TX_STAT_ALL                 0x1FF
 
 //
+// Statistics registers (cumulative; cleared by GEM_NET_CTRL_CLR_STAT_REGS
+// during MAC reset). Offsets per the Cadence GEM module register map.
+//
+#define GEM_STAT_FRAMES_TX               0x108
+#define GEM_STAT_FRAMES_RX               0x158
+#define GEM_STAT_BCAST_FRAMES_RX         0x15C
+#define GEM_STAT_MULTI_FRAMES_RX         0x160
+#define GEM_STAT_FCS_ERRS                0x190
+#define GEM_STAT_RX_SYMBOL_ERRS          0x198
+#define GEM_STAT_ALIGNMENT_ERRS          0x19C
+#define GEM_STAT_RX_RESOURCE_ERRS        0x1A0
+#define GEM_STAT_RX_OVERRUN_ERRS         0x1A4
+
+//
 // Receive/Transmit Buffer Queue Base Address (queue 0)
 //
 #define GEM_RX_QBAR                      0x018

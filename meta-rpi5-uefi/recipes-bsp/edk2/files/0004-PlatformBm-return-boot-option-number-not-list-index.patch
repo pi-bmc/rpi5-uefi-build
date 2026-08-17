@@ -1,0 +1,61 @@
+From: pi-bmc rpi5-uefi build <pi-bmc@localhost>
+Subject: [PATCH] PlatformBm: return the boot option number, not the list index
+
+PlatformRegisterBootOption () returns the INDEX of the option in the
+BootOrder-sorted load option array (EfiBootManagerFindLoadOption's
+return, or BootOptionCount after an append).  Its caller
+PlatformRegisterOptionsAndKeys () then passes that value to
+EfiBootManagerAddKeyOptionVariable () as the Boot#### option NUMBER for
+the F1-to-Shell hotkey.
+
+On a factory-fresh variable store the two happen to coincide (the shell
+is Boot0000 sitting at index 0), so the bug is invisible.  As soon as
+BootOrder/Boot#### variables survive from earlier boots (here: restored
+from the BMC-emulated EEPROM by EepromVarStoreDxe before BDS runs) the
+index and the number diverge, Boot%04x(index) does not exist, and
+EfiBootManagerAddKeyOptionVariable returns EFI_NOT_FOUND, tripping
+
+  ASSERT [BdsDxe] PlatformBm.c(500): Status == RETURN_SUCCESS ||
+                                     Status == RETURN_ALREADY_STARTED
+
+which dead-loops DEBUG builds during BDS.
+
+Return the real option number instead: for an existing match, the
+OptionNumber of the matched entry; for a fresh registration, the number
+EfiBootManagerAddLoadOptionVariable assigned into NewOption.
+---
+ .../Library/PlatformBootManagerLib/PlatformBm.c   | 12 +++++++++---
+--- a/Platform/RaspberryPi/Library/PlatformBootManagerLib/PlatformBm.c	2026-08-10 13:45:16.918121287 -0500
++++ b/Platform/RaspberryPi/Library/PlatformBootManagerLib/PlatformBm.c	2026-08-10 13:45:33.318801174 -0500
+@@ -353,6 +353,7 @@
+ {
+   EFI_STATUS                        Status;
+   INTN                              OptionIndex;
++  INTN                              OptionNumber;
+   EFI_BOOT_MANAGER_LOAD_OPTION      NewOption;
+   EFI_BOOT_MANAGER_LOAD_OPTION      *BootOptions;
+   UINTN                             BootOptionCount;
+@@ -376,13 +377,21 @@
+   if (OptionIndex == -1) {
+     Status = EfiBootManagerAddLoadOptionVariable (&NewOption, MAX_UINTN);
+     ASSERT_EFI_ERROR (Status);
+-    OptionIndex = BootOptionCount;
++    //
++    // Callers hand the return value to EfiBootManagerAddKeyOptionVariable
++    // as a Boot#### NUMBER, so return the number assigned by
++    // EfiBootManagerAddLoadOptionVariable - not the list index, which only
++    // matches the number on a factory-fresh variable store.
++    //
++    OptionNumber = EFI_ERROR (Status) ? -1 : (INTN)NewOption.OptionNumber;
++  } else {
++    OptionNumber = (INTN)BootOptions[OptionIndex].OptionNumber;
+   }
+ 
+   EfiBootManagerFreeLoadOption (&NewOption);
+   EfiBootManagerFreeLoadOptions (BootOptions, BootOptionCount);
+ 
+-  return OptionIndex;
++  return OptionNumber;
+ }
+ 
+ STATIC

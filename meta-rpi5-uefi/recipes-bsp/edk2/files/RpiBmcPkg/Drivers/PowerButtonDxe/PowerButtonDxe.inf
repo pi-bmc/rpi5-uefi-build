@@ -1,0 +1,46 @@
+## @file
+#
+#  PowerButtonDxe - poll the Pi 5 power button (SoC GIO, latched edge
+#  detect) and power off or reset per POWER_OFF_ON_HALT from the
+#  bootloader EEPROM config (blconfig region in the VPU DTB).
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+#
+##
+
+[Defines]
+  INF_VERSION                    = 0x0001001A
+  BASE_NAME                      = PowerButtonDxe
+  FILE_GUID                      = 3d6c6e6a-9c25-4dc9-9a3c-f305a4e28c6b
+  MODULE_TYPE                    = DXE_DRIVER
+  VERSION_STRING                 = 1.0
+  ENTRY_POINT                    = PowerButtonEntryPoint
+
+[Sources]
+  PowerButtonDxe.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  RpiBmcPkg/RpiBmcPkg.dec
+  Platform/RaspberryPi/RaspberryPi.dec
+
+[LibraryClasses]
+  BaseLib
+  BaseMemoryLib
+  DebugLib
+  FdtLib
+  IoLib
+  MemoryAllocationLib
+  PcdLib
+  UefiBootServicesTableLib
+  UefiDriverEntryPoint
+  UefiRuntimeServicesTableLib
+
+[Protocols]
+  gEfiResetArchProtocolGuid                     ## CONSUMES
+
+[FixedPcd]
+  gRaspberryPiTokenSpaceGuid.PcdFdtBaseAddress  ## CONSUMES
+
+[Depex]
+  gEfiResetArchProtocolGuid

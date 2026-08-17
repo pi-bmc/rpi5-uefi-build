@@ -573,6 +573,32 @@ Rp1GemSnpGetStatus (
     }
   }
 
+  //
+  // Bring-up diagnostic: dump the cumulative MAC statistics roughly every
+  // ten seconds of MNP polling. One compact line so a lossy serial capture
+  // still tells RX-dead (all zero) from bad-clocking (fcs/sym climbing)
+  // from DMA trouble (rx counts but resource/overrun errors).
+  //
+  {
+    STATIC UINTN  PollCount = 0;
+
+    if ((++PollCount & 0x3FF) == 0) {
+      DEBUG ((
+        DEBUG_ERROR,
+        "Rp1GemDxe: stat tx %u rx %u bc %u mc %u fcs %u sym %u aln %u res %u ovr %u\n",
+        MmioRead32 ((UINTN)Gem->GemBase + GEM_STAT_FRAMES_TX),
+        MmioRead32 ((UINTN)Gem->GemBase + GEM_STAT_FRAMES_RX),
+        MmioRead32 ((UINTN)Gem->GemBase + GEM_STAT_BCAST_FRAMES_RX),
+        MmioRead32 ((UINTN)Gem->GemBase + GEM_STAT_MULTI_FRAMES_RX),
+        MmioRead32 ((UINTN)Gem->GemBase + GEM_STAT_FCS_ERRS),
+        MmioRead32 ((UINTN)Gem->GemBase + GEM_STAT_RX_SYMBOL_ERRS),
+        MmioRead32 ((UINTN)Gem->GemBase + GEM_STAT_ALIGNMENT_ERRS),
+        MmioRead32 ((UINTN)Gem->GemBase + GEM_STAT_RX_RESOURCE_ERRS),
+        MmioRead32 ((UINTN)Gem->GemBase + GEM_STAT_RX_OVERRUN_ERRS)
+        ));
+    }
+  }
+
   EfiReleaseLock (&Gem->Lock);
 
   return EFI_SUCCESS;
