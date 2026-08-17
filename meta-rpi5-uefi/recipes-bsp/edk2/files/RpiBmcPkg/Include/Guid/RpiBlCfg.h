@@ -52,8 +52,10 @@ typedef struct {
   //
   // BOOT_ORDER hex string, e.g. "0xf461". Nibbles are tried right to
   // left; see the Raspberry Pi bootloader documentation for the codes.
+  // Dimension is RPI_BLCFG_BOOT_ORDER_MAXLEN + 1 spelled as a literal:
+  // VfrCompile's C-header parser cannot fold expressions.
   //
-  CHAR16    BootOrder[RPI_BLCFG_BOOT_ORDER_MAXLEN + 1];
+  CHAR16    BootOrder[12];
   UINT8     BootUart;         // BOOT_UART: 0/1, absent default 0
   UINT8     PowerOffOnHalt;   // POWER_OFF_ON_HALT: 0/1, absent default 0
   UINT8     WakeOnGpio;       // WAKE_ON_GPIO: 0/1, absent default 1

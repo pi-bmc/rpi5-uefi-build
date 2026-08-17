@@ -11,7 +11,7 @@
      so steady-state boots write nothing. Mirrors U-Boot's
      rpi_publish_bootloader_vars().
 
-  2. Setup page (BootloaderConfigHii.c): the managed config values
+  2. Setup page (BootloaderConfigSetup.c): the managed config values
      (BOOT_ORDER, BOOT_UART, POWER_OFF_ON_HALT, WAKE_ON_GPIO,
      PSU_MAX_CURRENT) are parsed from the same text into the BlCfg
      efivarstore every boot - the form always shows what the running

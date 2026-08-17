@@ -26,7 +26,7 @@
   BootloaderConfig.h
   BootloaderConfigDxe.c
   BootloaderConfigDxe.uni
-  BootloaderConfigHii.c
+  BootloaderConfigSetup.c
   BootloaderConfigHii.vfr
   EepromImage.c
   EepromImage.h
@@ -43,6 +43,7 @@
   BaseLib
   BaseMemoryLib
   DebugLib
+  DevicePathLib
   FdtLib
   HiiLib
   IoLib

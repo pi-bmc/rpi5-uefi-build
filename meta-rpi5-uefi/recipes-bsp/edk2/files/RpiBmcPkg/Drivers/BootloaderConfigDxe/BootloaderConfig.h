@@ -30,6 +30,7 @@ typedef struct {
 //
 // Live state cached at entry from the VPU DTB (BootloaderConfigDxe.c).
 //
+extern CONST VOID    *mFdt;                 // validated VPU DTB, NULL if absent
 extern UINT8         *mBlconfigRaw;         // staged blconfig region bytes
 extern UINTN         mBlconfigRawLen;       // staged length (may be truncated)
 extern UINTN         mBlconfigTextLen;      // effective text length within Raw
@@ -120,7 +121,7 @@ BlBuildNewConfigText (
   );
 
 /**
-  Install the Setup page (BootloaderConfigHii.c).
+  Install the Setup page (BootloaderConfigSetup.c).
 **/
 EFI_STATUS
 BlInstallHiiPage (
@@ -131,7 +132,7 @@ BlInstallHiiPage (
   ReadyToBoot follow-up for a previously staged update: if the running
   config now matches the staged values the update files are deleted from
   the boot volume; the marker variable is cleared either way
-  (BootloaderConfigHii.c).
+  (BootloaderConfigSetup.c).
 **/
 VOID
 BlStagedMarkerCleanup (
