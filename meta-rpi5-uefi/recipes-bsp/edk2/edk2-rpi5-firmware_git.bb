@@ -1,14 +1,16 @@
 SUMMARY = "EDK2 UEFI firmware (RPI_EFI.fd) for the Raspberry Pi 5"
-DESCRIPTION = "Builds Platform/RaspberryPi/RPi5/RPi5.dsc from edk2-platforms \
-               against NumberOneGit's edk2 (upstream tianocore/edk2 fork carrying whatever \
-               core changes the RPi5 D0 port currently needs) and edk2-non-osi (silicon- \
-               vendor binary blobs edk2-platforms links against), then embeds TF-A's bl31.bin \
-               (see the arm-trusted-firmware recipe) as the FD.RPI_EFI region-0 payload, and, \
-               if RPI5_IPXE is enabled, an iPXE UNDI/SNP driver (see the ipxe-efi recipe) as \
-               a prebuilt DXE driver -- giving RPi5's PXE/HTTP boot stack (edk2's own \
-               NetworkPkg, wired in by RPi5.fdf, has zero NIC drivers of its own) something \
-               to actually bind a network interface to."
-HOMEPAGE = "https://github.com/NumberOneGit/rpi5-uefi"
+DESCRIPTION = "Builds Platform/RaspberryPi/RPi5/RPi5.dsc against UPSTREAM \
+               tianocore trees. The former NumberOneGit forks are fully decomposed into \
+               this layer: their edk2 delta is one commit (0001-EDK2-Sd-Mmc-v4.patch on \
+               the fork's exact master merge-base), and their edk2-platforms RPi5 port is \
+               files/edk2-platforms/ (the port's ADDED files, copied in after unpack) \
+               plus 0000-edk2-platforms-RPi5-port.patch (its changes to files that exist \
+               upstream) -- reconstructed byte-identical to the fork within every package \
+               tree this build compiles. TF-A's bl31.bin (see the arm-trusted-firmware \
+               recipe) is embedded as the FD.RPI_EFI region-0 payload, and, if RPI5_IPXE \
+               is enabled, an iPXE UNDI/SNP driver (see the ipxe-efi recipe) rides along \
+               as a prebuilt DXE driver."
+HOMEPAGE = "https://github.com/tianocore/edk2"
 
 # edk2 + edk2-platforms are both BSD-2-Clause-Patent (identical License.txt).
 # edk2-non-osi carries no single root license file -- it's a grab-bag of
@@ -21,29 +23,77 @@ LIC_FILES_CHKSUM = "file://License.txt;md5=2b415520383f7964e96700ae12b4570a"
 DEPENDS = "acpica-native arm-trusted-firmware util-linux-native"
 DEPENDS += "${@bb.utils.contains('RPI5_IPXE', '1', 'ipxe-efi', '', d)}"
 
-PV = "202405+git${SRCPV}"
+PV = "202602+git${SRCPV}"
 
-SRC_URI = "gitsm://github.com/NumberOneGit/edk2.git;protocol=https;branch=master;name=edk2;destsuffix=git \
-           git://github.com/NumberOneGit/edk2-platforms.git;protocol=https;branch=master;name=platforms;destsuffix=edk2-platforms \
-           git://github.com/NumberOneGit/edk2-non-osi.git;protocol=https;branch=master;name=nonosi;destsuffix=edk2-non-osi \
+# Patch order matters and follows SRC_URI order:
+#   edk2 tree:            0001-EDK2-Sd-Mmc-v4 (the former fork's only commit),
+#                         then 0100 (UsbNetwork point-to-point media).
+#   edk2-platforms tree:  file://edk2-platforms (the RPi5 port's ADDED files)
+#                         merges INTO the git checkout at
+#                         ${UNPACKDIR}/edk2-platforms during do_unpack, then
+#                         0000 (the former fork's changed files), then this
+#                         layer's own 0001..0005 -- which edit files the
+#                         merged tree adds.
+#
+# ORDERING IS LOAD-BEARING: do_unpack processes SRC_URI entries in listing
+# order, and the git fetcher PRUNES its destsuffix dir before checkout --
+# the file://edk2-platforms entry must therefore stay AFTER the git entry
+# of the same name, or the checkout wipes the port's added files (the
+# patch series then fails loudly at 0000/0001).
+SRC_URI = "gitsm://github.com/tianocore/edk2.git;protocol=https;branch=master;name=edk2;destsuffix=git \
+           git://github.com/tianocore/edk2-platforms.git;protocol=https;branch=master;name=platforms;destsuffix=edk2-platforms \
+           git://github.com/tianocore/edk2-non-osi.git;protocol=https;branch=master;name=nonosi;destsuffix=edk2-non-osi \
+           git://github.com/tianocore/edk2-redfish-client.git;protocol=https;branch=main;name=redfishclient;destsuffix=edk2-redfish-client \
            file://config.txt \
            file://ipxe-fdf-snippet.fdf.inc \
+           file://edk2-platforms \
+           file://0001-EDK2-Sd-Mmc-v4.patch \
+           file://0000-edk2-platforms-RPi5-port.patch;patchdir=../edk2-platforms \
            file://0001-Rp1BusDxe-register-GEM-and-I2C1-vendor-devices.patch;patchdir=../edk2-platforms \
            file://0002-PlatformSmbiosDxe-deterministic-UUID-and-Type45.patch;patchdir=../edk2-platforms \
            file://0003-RPi5-AcpiTables-add-SsdtThermal.patch;patchdir=../edk2-platforms \
            file://0004-PlatformBm-return-boot-option-number-not-list-index.patch;patchdir=../edk2-platforms \
+           file://0005-PlatformBm-prune-USB-NIC-network-boot-options.patch;patchdir=../edk2-platforms \
+           file://0100-UsbNetwork-assume-media-on-a-point-to-point-gadget.patch \
+           file://0101-RedfishDiscoverDxe-skip-the-IPv6-discovery-leg.patch \
            file://RpiBmcPkg \
            file://Rp1GemPkg \
+           file://RpiRedfishPkg \
            file://usbnet-dsc-snippet.inc \
            file://usbnet-fdf-snippet.fdf.inc \
            "
-# All three pinned to the exact commits NumberOneGit/rpi5-uefi's own
-# submodules point at (see that repo's git tree), i.e. what its published
-# images are actually built from.
-SRCREV_edk2 = "15590903fe016afc6c1a26300caddcdfd0c99090"
-SRCREV_platforms = "4e426104a1f6371484f417650e339a43480cf701"
-SRCREV_nonosi = "07fe302e6eaff27b4afaef5eb868c6759923ba45"
-SRCREV_FORMAT = "edk2_platforms_nonosi"
+# Upstream pins chosen for byte-parity with the retired NumberOneGit forks
+# (audited 2026-08-17 with git merge-base + reconstruction diffs):
+#   edk2:      the fork was upstream master @ this exact commit plus ONE
+#              commit -- the SD fixup now carried as 0001-EDK2-Sd-Mmc-v4.patch.
+#   platforms: the fork's merge-base with upstream master (2024-03-12); the
+#              fork's 32-commit RPi5 port on top of it is decomposed into
+#              files/edk2-platforms/ (75 added files) + the 0000 patch
+#              (43 changed/deleted files). The fork's bulk-sync churn in
+#              other vendors' trees (187 files never referenced by
+#              RPi5.dsc/.fdf) is deliberately dropped.
+#   non-osi:   the fork was upstream @ this commit plus only an RPi5
+#              TrustedFirmware bl31.bin -- dead weight here, because this
+#              recipe always passes -D TFA_BUILD_ARTIFACTS pointing at our
+#              own arm-trusted-firmware deploy.
+SRCREV_edk2 = "c4d29cb62187060493a1f595083ddfb6dd346f39"
+SRCREV_platforms = "80ee8b861edb6a8b02a100f63bbb435499f8741a"
+SRCREV_nonosi = "94d048981116e2e3eda52dad1a89958ee404098d"
+# edk2-redfish-client tracks edk2 MASTER, and the pinned NumberOneGit edk2
+# is master-based too -- its RedfishPkg carries commits through 2026-02-03,
+# despite the fork's "202405" branding. That dates the compatibility
+# window precisely (audited 2026-08-17):
+#   >= 73a1eaa41 (2026-01-17): RedfishPlatformConfigSetValue grew a
+#     by-pointer value argument in edk2 and the client the same day; an
+#     older client passes by value and fails to compile against this fork.
+#   <  b8ffa6e45 (2026-05-05): the client's RedfishEventLib starts needing
+#     gEdkIIRedfisEventRedfishInterfaceDisconnectionGuid, which this fork's
+#     RedfishPkg.dec predates (the GUID nuc-bios-build moved to edk2 master
+#     for -- see edk2-uefipayload_2605.bb).
+# This pin is the last commit before that boundary; every external GUID it
+# references is declared by the pinned edk2's .dec files.
+SRCREV_redfishclient = "a75f45cd69c74121fbf58900b9d92735d9a3373c"
+SRCREV_FORMAT = "edk2_platforms_nonosi_redfishclient"
 
 # UNPACKDIR only exists from styhead (Yocto 5.1) on; scarthgap unpacks
 # straight into WORKDIR. Without this shim, S = "${UNPACKDIR}/git" never
@@ -52,6 +102,7 @@ UNPACKDIR ?= "${WORKDIR}"
 
 EDK2_PLATFORMS_PATH = "${UNPACKDIR}/edk2-platforms"
 EDK2_NON_OSI_PATH = "${UNPACKDIR}/edk2-non-osi"
+EDK2_REDFISH_CLIENT_PATH = "${UNPACKDIR}/edk2-redfish-client"
 
 COMPATIBLE_MACHINE = "raspberrypi5-uefi"
 
@@ -73,16 +124,41 @@ RPI5_IPXE ??= "0"
 # same NetworkPkg stack.
 RPI5_RP1_ETH ??= "1"
 
-# BMC-integration driver set (local RpiBmcPkg): RP1 I2C1 master, EEPROM-backed
-# UEFI variable sync (UbEfiVa blob at 0x0000), SMBIOS mirror (0x6000), block
-# inventory (0x6800), BootloaderConfig publishing -- the host side of the
-# shared-24c256 contract with the BMC (see RpiBmcPkg.dec's region map).
+# Board-integration driver set (local RpiBmcPkg): power button, active
+# cooler, BootloaderConfig provenance variables. (The I2C EEPROM sync
+# drivers that used to live behind this knob were replaced by the Redfish
+# host interface -- see RPI5_REDFISH.)
 RPI5_BMC ??= "1"
 
-# Wire edk2's own USB CDC-ECM/NCM/RNDIS class drivers (present in the pinned
-# tree, not in RPi5.dsc) into the build, so a BMC g_ether/f_ecm gadget on an
-# RP1 USB port becomes a bootable SNP interface.
+# Wire edk2's own USB CDC-ECM/NCM/RNDIS class drivers (present in the
+# pinned tree, not in RPi5.dsc) into the build, so a USB Ethernet gadget on
+# an RP1 port becomes an SNP interface. The BMC's host-interface link rides
+# the ncm.usb0 function of this -- required by RPI5_REDFISH.
 RPI5_USBNET ??= "1"
+
+# Redfish Host Interface (DSP0270) over the BMC's USB CDC-NCM gadget: the
+# JetKVM method from ../nuc-bios-build, NCM instead of ECM. Replaces the
+# old I2C shared-EEPROM sync as the BMC data path (local RpiRedfishPkg;
+# wire contract in its README.md). Needs RPI5_USBNET=1 for the NIC driver.
+RPI5_REDFISH ??= "1"
+
+# edk2-redfish-client (RedfishClientPkg) on top of the host interface: the
+# standard feature layer -- ComputerSystemDxe, BiosDxe, BootOptionDxe and
+# their JSON converters (RpiRedfishPkg/RpiRedfishClient.dsc.inc; the Memory
+# feature, sample Bios form and SecureBoot are deliberately absent -- see
+# that file's header). Requires RPI5_REDFISH.
+RPI5_REDFISH_CLIENT ??= "1"
+
+# The wire contract with the BMC, rendered into RpiRedfish.dsc.inc's PCDs.
+# RPI5_REDFISH_MAC is the gadget's host_addr (the MAC the Pi's NCM NIC
+# comes up with) -- the BMC must present exactly this fixed value, or
+# RedfishDiscoverDxe rejects the interface. Colon-separated, lowercase ok.
+RPI5_REDFISH_MAC ??= "da:c0:ff:ee:10:02"
+# HTTP Basic credentials for the BMC's Redfish service (nanokvm-app's
+# CheckAuth). Set RPI5_REDFISH_USER to "" for a BMC with authentication
+# disabled (the credential library then reports AuthMethodNone).
+RPI5_REDFISH_USER ??= "admin"
+RPI5_REDFISH_PASSWORD ??= "admin"
 
 # RELEASE, DEBUG or NOOPT, per RPi5.dsc's [Defines] BUILD_TARGETS.
 RPI5_BUILD_TARGET ??= "RELEASE"
@@ -126,10 +202,10 @@ do_compile() {
     local_pkgs="${B}/edk2-local-pkgs"
     rm -rf "${local_pkgs}"
     mkdir -p "${local_pkgs}"
-    cp -r "${WORKDIR}/RpiBmcPkg" "${WORKDIR}/Rp1GemPkg" "${local_pkgs}/"
+    cp -r "${WORKDIR}/RpiBmcPkg" "${WORKDIR}/Rp1GemPkg" "${WORKDIR}/RpiRedfishPkg" "${local_pkgs}/"
 
     export WORKSPACE="${WORKDIR}"
-    export PACKAGES_PATH="${S}:${EDK2_PLATFORMS_PATH}:${EDK2_NON_OSI_PATH}:${local_pkgs}"
+    export PACKAGES_PATH="${S}:${EDK2_PLATFORMS_PATH}:${EDK2_NON_OSI_PATH}:${EDK2_REDFISH_CLIENT_PATH}:${local_pkgs}"
     export EDK_TOOLS_PATH="${S}/BaseTools"
     export CONF_PATH="${WORKDIR}/Conf"
     export PYTHON_COMMAND="python3"
@@ -189,6 +265,50 @@ do_compile() {
             sed -i "\|${dsc_marker}|r ${WORKDIR}/usbnet-dsc-snippet.inc" "${dsc}"
         grep -qF 'INF MdeModulePkg/Bus/Usb/UsbNetwork/NetworkCommon/NetworkCommon.inf' "${fdf}" || \
             sed -i "\|${fdf_marker}|r ${WORKDIR}/usbnet-fdf-snippet.fdf.inc" "${fdf}"
+    fi
+
+    # Redfish Host Interface stack over the BMC's CDC-NCM gadget (RedfishPkg
+    # core drivers + local RpiRedfishPkg; the usbnet snippet above supplies
+    # the NIC driver). The wire-contract knobs are rendered into the
+    # local_pkgs COPY of RpiRedfish.dsc.inc (the pristine WORKDIR original
+    # keeps its placeholders; local_pkgs is rebuilt from it on every
+    # do_compile, so the render is idempotent). The dsc include opens its
+    # own [LibraryClasses]/[PcdsFixedAtBuild] sections and reopens
+    # [Components.common] at its end -- and this insertion runs LAST so that
+    # block sits closest to the marker, leaving every earlier-inserted
+    # component line after it, back inside [Components.common].
+    if [ "${RPI5_REDFISH}" = "1" ]; then
+        [ "${RPI5_USBNET}" = "1" ] || \
+            bbwarn "RPI5_REDFISH=1 without RPI5_USBNET=1: no NIC driver for the BMC link"
+        mac_plain=$(printf '%s' "${RPI5_REDFISH_MAC}" | tr -d ':' | tr 'abcdef' 'ABCDEF')
+        [ "$(printf '%s' "${mac_plain}" | wc -c)" = "12" ] || \
+            bbfatal "RPI5_REDFISH_MAC '${RPI5_REDFISH_MAC}' is not a 6-octet MAC"
+        mac_bytes=$(printf '%s' "${mac_plain}" | sed 's/../0x&, /g; s/, $//')
+        sed -i \
+            -e "s|@RPI5_REDFISH_MAC_PLAIN@|${mac_plain}|g" \
+            -e "s|@RPI5_REDFISH_MAC_BYTES@|${mac_bytes}|g" \
+            -e "s|@RPI5_REDFISH_USER@|${RPI5_REDFISH_USER}|g" \
+            -e "s|@RPI5_REDFISH_PASSWORD@|${RPI5_REDFISH_PASSWORD}|g" \
+            "${local_pkgs}/RpiRedfishPkg/RpiRedfish.dsc.inc"
+        printf '%s\n' '!include RpiRedfishPkg/RpiRedfish.dsc.inc' > "${B}/rpiredfish-dsc-line.inc"
+        printf '%s\n' '!include RpiRedfishPkg/RpiRedfish.fdf.inc' > "${B}/rpiredfish-fdf-line.inc"
+        grep -qF 'RpiRedfishPkg/RpiRedfish.dsc.inc' "${dsc}" || \
+            sed -i "\|${dsc_marker}|r ${B}/rpiredfish-dsc-line.inc" "${dsc}"
+        grep -qF 'RpiRedfishPkg/RpiRedfish.fdf.inc' "${fdf}" || \
+            sed -i "\|${fdf_marker}|r ${B}/rpiredfish-fdf-line.inc" "${fdf}"
+
+        # edk2-redfish-client feature layer on top of the host interface.
+        # Same include mechanics; the component/library lists live in
+        # RpiRedfishClient.dsc.inc (explicit, not the client's own gated
+        # .inc files -- see its header).
+        if [ "${RPI5_REDFISH_CLIENT}" = "1" ]; then
+            printf '%s\n' '!include RpiRedfishPkg/RpiRedfishClient.dsc.inc' > "${B}/rpiredfishclient-dsc-line.inc"
+            printf '%s\n' '!include RpiRedfishPkg/RpiRedfishClient.fdf.inc' > "${B}/rpiredfishclient-fdf-line.inc"
+            grep -qF 'RpiRedfishPkg/RpiRedfishClient.dsc.inc' "${dsc}" || \
+                sed -i "\|${dsc_marker}|r ${B}/rpiredfishclient-dsc-line.inc" "${dsc}"
+            grep -qF 'RpiRedfishPkg/RpiRedfishClient.fdf.inc' "${fdf}" || \
+                sed -i "\|${fdf_marker}|r ${B}/rpiredfishclient-fdf-line.inc" "${fdf}"
+        fi
     fi
 
     # --- embed the iPXE UNDI/SNP driver, if built -----------------------

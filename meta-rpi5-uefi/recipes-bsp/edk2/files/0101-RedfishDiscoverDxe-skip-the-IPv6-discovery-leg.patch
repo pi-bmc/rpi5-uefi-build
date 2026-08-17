@@ -1,0 +1,43 @@
+From: appkins <nbatkins@gmail.com>
+Date: Sun, 17 Aug 2026 15:00:00 -0500
+Subject: [PATCH] RedfishDiscoverDxe: skip the IPv6 discovery leg
+
+The Redfish host interface is a point-to-point IPv4-static link (the
+SMBIOS type 42 record carries static v4 addresses); RedfishDiscoverDxe
+nevertheless builds a discover instance per entry of its protocol table,
+running a second, IPv6 pass over the same NIC. That pass was in flight
+(Ip6Dxe inside RedfishDiscoverDxe on the stack) during the 2026-08-17
+use-after-free crash on a "BiosSetup" boot override, and at best it only
+duplicates instances and REST EX children nothing consumes.
+
+Note PcdIPv6HttpSupport does NOT gate this: in this tree that PCD is
+consumed only by HttpBootDxe (HTTP boot option creation), despite
+nuc-bios-build's 0020 setting it with Redfish intent.
+
+Skip ProtocolTypeTcp6 when building network interfaces. The Tcp6 service
+binding is still accepted by TestForRequiredProtocols(), so the platform
+IPv6 stack, v6 PXE and v6 HTTP boot are untouched.
+
+Upstream-Status: Inappropriate [platform policy]
+Signed-off-by: appkins <nbatkins@gmail.com>
+---
+--- a/RedfishPkg/RedfishDiscoverDxe/RedfishDiscoverDxe.c
++++ b/RedfishPkg/RedfishDiscoverDxe/RedfishDiscoverDxe.c
+@@ -1858,6 +1858,17 @@
+   RestExInstance               = NULL;
+ 
+   for (Index = 0; Index < ListCount; Index++) {
++    //
++    // RpiRedfish: skip the IPv6 leg. The Redfish host interface is a
++    // point-to-point IPv4-static link (SMBIOS type 42); a second discovery
++    // pass over Tcp6 only duplicates instances and REST EX children on the
++    // same NIC. Tcp6's presence is still accepted by
++    // TestForRequiredProtocols(), so platform IPv6 stays untouched.
++    //
++    if (mRequiredProtocol[Index].ProtocolType == ProtocolTypeTcp6) {
++      continue;
++    }
++
+     Status = gBS->OpenProtocol (
+                     // Already in list?
+                     ControllerHandle,

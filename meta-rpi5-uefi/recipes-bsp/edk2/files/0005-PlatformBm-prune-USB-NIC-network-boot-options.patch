@@ -1,0 +1,105 @@
+From: appkins <nbatkins@gmail.com>
+Date: Sun, 17 Aug 2026 12:30:00 -0500
+Subject: [PATCH] PlatformBm: prune USB-NIC network boot options
+
+EfiBootManagerRefreshAllBootOption() creates a PXE option for every network
+interface it can boot from - including the BMC's USB CDC network gadget, the
+Redfish host interface (DSP0270, see RpiRedfishPkg). That is a management
+link, not a boot path: it has no boot server behind it, and with the 0100
+sticky-media patch an attempt would sit through a full DHCP/PXE timeout
+instead of failing fast. Netboot on this board belongs to the RP1 GEM
+onboard RJ45.
+
+Prune the auto-created options whose device path carries both a MAC node
+and a USB node, after the refresh in PlatformBootManagerAfterConsole. USB
+mass storage has no MAC node and is untouched, as is anything an OS
+installer or operator wrote. Same approach as nuc-bios-build's 0021 patch,
+reduced to the USB-NIC half (this platform has no NII/SNP duplicate
+problem).
+
+Applies on top of 0004 (same file).
+
+Upstream-Status: Inappropriate [platform specific]
+Signed-off-by: appkins <nbatkins@gmail.com>
+---
+--- a/Platform/RaspberryPi/Library/PlatformBootManagerLib/PlatformBm.c
++++ b/Platform/RaspberryPi/Library/PlatformBootManagerLib/PlatformBm.c
+@@ -793,6 +793,69 @@
+ }
+ 
+ /**
++  Drop the auto-created network boot options for USB NICs.
++
++  EfiBootManagerRefreshAllBootOption() creates a PXE option for every
++  network interface it can boot from. The only USB NIC on this board is the
++  BMC's CDC network gadget - the Redfish host interface (DSP0270, see
++  RpiRedfishPkg), a management link that must never be selected as a boot
++  target: netboot belongs to the RP1 GEM onboard RJ45. Recognised by a USB
++  node alongside the MAC node in the device path, which keeps this free of
++  any dependency on the Redfish package. USB mass storage has no MAC node
++  and is untouched, as is anything an OS installer or operator wrote.
++**/
++STATIC
++VOID
++PruneUsbNicBootOptions (
++  VOID
++  )
++{
++  EFI_BOOT_MANAGER_LOAD_OPTION  *Options;
++  EFI_DEVICE_PATH_PROTOCOL      *Node;
++  UINTN                         OptionCount;
++  UINTN                         Index;
++  BOOLEAN                       HasMac;
++  BOOLEAN                       OverUsb;
++
++  Options = EfiBootManagerGetLoadOptions (&OptionCount, LoadOptionTypeBoot);
++  if (Options == NULL) {
++    return;
++  }
++
++  for (Index = 0; Index < OptionCount; Index++) {
++    if (Options[Index].FilePath == NULL) {
++      continue;
++    }
++
++    HasMac  = FALSE;
++    OverUsb = FALSE;
++    for (Node = Options[Index].FilePath; !IsDevicePathEnd (Node); Node = NextDevicePathNode (Node)) {
++      if (DevicePathType (Node) != MESSAGING_DEVICE_PATH) {
++        continue;
++      }
++
++      if (DevicePathSubType (Node) == MSG_USB_DP) {
++        OverUsb = TRUE;
++      } else if (DevicePathSubType (Node) == MSG_MAC_ADDR_DP) {
++        HasMac = TRUE;
++      }
++    }
++
++    if (HasMac && OverUsb) {
++      DEBUG ((
++        DEBUG_INFO,
++        "%a: dropping Boot%04x (USB host interface)\n",
++        __func__,
++        Options[Index].OptionNumber
++        ));
++      EfiBootManagerDeleteLoadOptionVariable (Options[Index].OptionNumber, LoadOptionTypeBoot);
++    }
++  }
++
++  EfiBootManagerFreeLoadOptions (Options, OptionCount);
++}
++
++/**
+   Do the platform specific action after the console is ready
+   Possible things that can be done in PlatformBootManagerAfterConsole:
+   > Console post action:
+@@ -922,6 +985,8 @@
+   EfiBootManagerConnectAll ();
+   EfiBootManagerRefreshAllBootOption ();
+ 
++  PruneUsbNicBootOptions ();
++
+   //
+   // Record the updated number of boot configured boot options
+   //

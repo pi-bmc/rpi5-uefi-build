@@ -1,21 +1,16 @@
 #/** @file
 #
-#  RpiBmcPkg - Raspberry Pi 5 BMC-integration drivers for the pi-bmc project.
+#  RpiBmcPkg - Raspberry Pi 5 board drivers for the pi-bmc project.
 #
 #  Out-of-tree package: added to PACKAGES_PATH by meta-rpi5-uefi's
-#  edk2-rpi5-firmware recipe, never merged into edk2-platforms. Everything
-#  here implements the host side of the BMC's shared-EEPROM contract: a
-#  24c256 (real part or the BMC's Linux i2c-slave-eeprom emulation) at
-#  address 0x50 on RP1 I2C1, mapped as:
+#  edk2-rpi5-firmware recipe, never merged into edk2-platforms. Carries the
+#  board-integration drivers with no upstream home: the power button, the
+#  active-cooler fan, and the bootloader-provenance UEFI variables.
 #
-#    0x0000..0x3fff  UEFI variable store (UbEfiVa blob) - EepromVarStoreDxe
-#    0x4000..0x5fff  U-Boot environment                 - never touched here
-#    0x6000..0x67ff  SMBIOS tables (SM3 blob)           - SmbiosEepromMirrorDxe
-#    0x6800..0x77ff  block-device inventory (BLK1+JSON) - BlkInfoMirrorDxe
-#    0x7800..0x7fff  spare
-#
-#  The offsets mirror the u-boot CONFIG_* values and the BMC's
-#  nanokvm-app/pkg/config defaults; all three sides must agree.
+#  The I2C shared-EEPROM sync stack that used to live here (Rp1DwI2cDxe,
+#  BmcEepromLib, EepromVarStoreDxe, SmbiosEepromMirrorDxe, BlkInfoMirrorDxe)
+#  was replaced by the Redfish Host Interface over the BMC's USB CDC-NCM
+#  gadget - see RpiRedfishPkg for the successor and its wire contract.
 #
 #  SPDX-License-Identifier: BSD-2-Clause-Patent
 #
@@ -31,10 +26,6 @@
   Include
 
 [LibraryClasses]
-  ##  @libraryclass  EEPROM region accessors (2-byte addressing, page-chunked
-  ##                 compare-skip writes) over EFI_I2C_MASTER_PROTOCOL.
-  BmcEepromLib|Include/Library/BmcEepromLib.h
-
   ##  @libraryclass  Stateless MMIO helpers for the RP1 GPIO banks
   ##                 (io_bank / sys_rio / pads windows).
   Rp1GpioLib|Include/Library/Rp1GpioLib.h
@@ -43,24 +34,6 @@
   gRpiBmcTokenSpaceGuid = { 0xd40c55e2, 0x13df, 0x4d9e, { 0x81, 0x52, 0xb0, 0x90, 0x89, 0x1a, 0x19, 0xd2 } }
 
   ## Vendor GUID of the BootloaderConfig / BootloaderUpdateTimestamp UEFI
-  ## variables. Frozen BMC contract - mirrored by u-boot rpi.c
+  ## variables. Frozen contract - mirrored by u-boot rpi.c
   ## (rpi_bootloader_guid) and the BMC's efivars package. Do not change.
   gRpiBmcBootloaderVendorGuid = { 0xd1a0f2c4, 0x9b3e, 0x4f7a, { 0x8c, 0x21, 0x6e, 0x5b, 0x0a, 0x7d, 0x4f, 0x10 } }
-
-[PcdsFixedAtBuild]
-  ## 7-bit I2C slave address of the shared EEPROM on RP1 I2C1.
-  gRpiBmcTokenSpaceGuid.PcdBmcEepromSlaveAddress|0x50|UINT8|0x00000001
-  ## Total EEPROM capacity in bytes (24c256 = 32 KiB).
-  gRpiBmcTokenSpaceGuid.PcdBmcEepromCapacity|0x8000|UINT32|0x00000002
-  ## EEPROM write-page size in bytes.
-  gRpiBmcTokenSpaceGuid.PcdBmcEepromPageSize|64|UINT32|0x00000003
-
-  ## Region map - must match u-boot CONFIG_EFI_VARIABLE_I2C_STORE /
-  ## CONFIG_ENV_OFFSET / CONFIG_SMBIOS_I2C_STORE_* / CONFIG_BLKINFO_I2C_STORE_*
-  ## and the BMC's nanokvm-app config defaults.
-  gRpiBmcTokenSpaceGuid.PcdBmcEepromVarStoreOffset|0x0000|UINT32|0x00000004
-  gRpiBmcTokenSpaceGuid.PcdBmcEepromVarStoreSize|0x4000|UINT32|0x00000005
-  gRpiBmcTokenSpaceGuid.PcdBmcEepromSmbiosOffset|0x6000|UINT32|0x00000006
-  gRpiBmcTokenSpaceGuid.PcdBmcEepromSmbiosSize|0x800|UINT32|0x00000007
-  gRpiBmcTokenSpaceGuid.PcdBmcEepromBlkInfoOffset|0x6800|UINT32|0x00000008
-  gRpiBmcTokenSpaceGuid.PcdBmcEepromBlkInfoSize|0x1000|UINT32|0x00000009

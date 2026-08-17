@@ -11,7 +11,7 @@ Subject: [PATCH] SD fixup
  4 files changed, 128 insertions(+), 19 deletions(-)
 
 diff --git a/MdeModulePkg/Bus/Pci/SdMmcPciHcDxe/SdDevice.c b/MdeModulePkg/Bus/Pci/SdMmcPciHcDxe/SdDevice.c
-index 8bf452e9d01e..acb98c4a6a38 100644
+index 8bf452e9d0..acb98c4a6a 100644
 --- a/MdeModulePkg/Bus/Pci/SdMmcPciHcDxe/SdDevice.c
 +++ b/MdeModulePkg/Bus/Pci/SdMmcPciHcDxe/SdDevice.c
 @@ -1215,6 +1215,7 @@ SdCardIdentification (
@@ -33,13 +33,13 @@ index 8bf452e9d01e..acb98c4a6a38 100644
 @@ -1231,10 +1231,22 @@ SdCardIdentification (
    ForceVoltage33 = FALSE;
    SdVersion1     = FALSE;
-
+ 
 -  PciIo    = Private->PciIo;
 -  PassThru = &Private->PassThru;
 +  PciIo            = Private->PciIo;
 +  PassThru         = &Private->PassThru;
 +  ControllerHandle = Private->ControllerHandle;
-
+ 
  Voltage33Retry:
 +  //
 +  // Start at 3.3V.
@@ -55,10 +55,10 @@ index 8bf452e9d01e..acb98c4a6a38 100644
    //
    // 1. Send Cmd0 to the device
    //
-@@ -1371,16 +1383,10 @@ SdCardIdentification (
+@@ -1371,16 +1383,10 @@ Voltage33Retry:
          goto Error;
        }
-
+ 
 -      HostCtrl2 = BIT3;
 -      SdMmcHcOrMmio (PciIo, Slot, SD_MMC_HC_HOST_CTRL2, sizeof (HostCtrl2), &HostCtrl2);
 -
@@ -74,16 +74,16 @@ index 8bf452e9d01e..acb98c4a6a38 100644
 +        DEBUG ((DEBUG_ERROR, "SdCardIdentification: Couldn't set 1.8V signaling: %r\n", Status));
 +        return Status;
        }
-
+ 
        Status = SdMmcHcStartSdClock (PciIo, Slot);
 diff --git a/MdeModulePkg/Bus/Pci/SdMmcPciHcDxe/SdMmcPciHci.c b/MdeModulePkg/Bus/Pci/SdMmcPciHcDxe/SdMmcPciHci.c
-index 9e8a7f4e436d..2e334c67e25b 100644
+index 9e8a7f4e43..2e334c67e2 100644
 --- a/MdeModulePkg/Bus/Pci/SdMmcPciHcDxe/SdMmcPciHci.c
 +++ b/MdeModulePkg/Bus/Pci/SdMmcPciHcDxe/SdMmcPciHci.c
 @@ -1175,6 +1175,83 @@ SdMmcHcInitPowerVoltage (
    return Status;
  }
-
+ 
 +/**
 +  Set the voltage regulator for I/O signaling.
 +
@@ -163,15 +163,15 @@ index 9e8a7f4e436d..2e334c67e25b 100644
 +
  /**
    Initialize the Timeout Control register with most conservative value at initialization.
-
+ 
 diff --git a/MdeModulePkg/Bus/Pci/SdMmcPciHcDxe/SdMmcPciHci.h b/MdeModulePkg/Bus/Pci/SdMmcPciHcDxe/SdMmcPciHci.h
-index f830b0336784..a7af46883eab 100644
+index f830b03367..a7af46883e 100644
 --- a/MdeModulePkg/Bus/Pci/SdMmcPciHcDxe/SdMmcPciHci.h
 +++ b/MdeModulePkg/Bus/Pci/SdMmcPciHcDxe/SdMmcPciHci.h
 @@ -2,10 +2,10 @@
-
+ 
    Provides some data structure definitions used by the SD/MMC host controller driver.
-
+ 
 -  Copyright (c) 2018-2019, NVIDIA CORPORATION. All rights reserved.
 -  Copyright (c) 2015, Intel Corporation. All rights reserved.<BR>
 -  Copyright (C) 2023, Apple Inc. All rights reserved.<BR>
@@ -180,7 +180,7 @@ index f830b0336784..a7af46883eab 100644
 +Copyright (c) 2015, Intel Corporation. All rights reserved.<BR>
 +Copyright (C) 2023, Apple Inc. All rights reserved.<BR>
 +SPDX-License-Identifier: BSD-2-Clause-Patent
-
+ 
    @par Specification Reference:
      - SD Host Controller Simplified Specification, Version 4.20, July 25, 2018
 @@ -62,6 +62,7 @@
@@ -194,7 +194,7 @@ index f830b0336784..a7af46883eab 100644
 @@ -558,6 +559,25 @@ SdMmcHcInitPowerVoltage (
    IN SD_MMC_HC_SLOT_CAP   Capability
    );
-
+ 
 +/**
 +  Set the voltage regulator for I/O signaling.
 +
@@ -216,24 +216,24 @@ index f830b0336784..a7af46883eab 100644
 +
  /**
    Initialize the Timeout Control register with most conservative value at initialization.
-
+ 
 diff --git a/MdeModulePkg/Include/Protocol/SdMmcOverride.h b/MdeModulePkg/Include/Protocol/SdMmcOverride.h
-index 73fe07e83ecb..d5cbe6eda27d 100644
+index 73fe07e83e..d5cbe6eda2 100644
 --- a/MdeModulePkg/Include/Protocol/SdMmcOverride.h
 +++ b/MdeModulePkg/Include/Protocol/SdMmcOverride.h
 @@ -15,7 +15,7 @@
  #define EDKII_SD_MMC_OVERRIDE_PROTOCOL_GUID \
    { 0xeaf9e3c1, 0xc9cd, 0x46db, { 0xa5, 0xe5, 0x5a, 0x12, 0x4c, 0x83, 0x23, 0x23 } }
-
+ 
 -#define EDKII_SD_MMC_OVERRIDE_PROTOCOL_VERSION  0x3
 +#define EDKII_SD_MMC_OVERRIDE_PROTOCOL_VERSION  0x4
-
+ 
  typedef struct _EDKII_SD_MMC_OVERRIDE EDKII_SD_MMC_OVERRIDE;
-
+ 
 @@ -82,6 +82,11 @@ typedef enum {
    SdMmcMmcHs400,
  } SD_MMC_BUS_MODE;
-
+ 
 +typedef enum {
 +  SdMmcSignalingVoltage33,
 +  SdMmcSignalingVoltage18
@@ -250,5 +250,8 @@ index 73fe07e83ecb..d5cbe6eda27d 100644
 +  EdkiiSdMmcGetOperatingParam,
 +  EdkiiSdMmcSetSignalingVoltage
  } EDKII_SD_MMC_PHASE_TYPE;
-
+ 
  /**
+-- 
+2.55.0
+

@@ -2,23 +2,12 @@
 # the edk2-rpi5-firmware recipe (anchored on the NetworkPkg dsc include).
 # Library instances are scoped per-module so nothing global in RPi5.dsc
 # changes.
+#
+# The former I2C EEPROM sync drivers (Rp1DwI2cDxe, EepromVarStoreDxe,
+# SmbiosEepromMirrorDxe, BlkInfoMirrorDxe) are gone: BMC data exchange now
+# rides the Redfish Host Interface over the BMC's USB CDC-NCM gadget - see
+# RpiRedfishPkg.
 
-  RpiBmcPkg/Drivers/Rp1DwI2cDxe/Rp1DwI2cDxe.inf {
-    <LibraryClasses>
-      Rp1GpioLib|RpiBmcPkg/Library/Rp1GpioLib/Rp1GpioLib.inf
-  }
-  RpiBmcPkg/Drivers/EepromVarStoreDxe/EepromVarStoreDxe.inf {
-    <LibraryClasses>
-      BmcEepromLib|RpiBmcPkg/Library/BmcEepromLib/BmcEepromLib.inf
-  }
-  RpiBmcPkg/Drivers/SmbiosEepromMirrorDxe/SmbiosEepromMirrorDxe.inf {
-    <LibraryClasses>
-      BmcEepromLib|RpiBmcPkg/Library/BmcEepromLib/BmcEepromLib.inf
-  }
-  RpiBmcPkg/Drivers/BlkInfoMirrorDxe/BlkInfoMirrorDxe.inf {
-    <LibraryClasses>
-      BmcEepromLib|RpiBmcPkg/Library/BmcEepromLib/BmcEepromLib.inf
-  }
   RpiBmcPkg/Drivers/BootloaderConfigDxe/BootloaderConfigDxe.inf
   RpiBmcPkg/Drivers/PowerButtonDxe/PowerButtonDxe.inf
   RpiBmcPkg/Drivers/ActiveCoolerDxe/ActiveCoolerDxe.inf {

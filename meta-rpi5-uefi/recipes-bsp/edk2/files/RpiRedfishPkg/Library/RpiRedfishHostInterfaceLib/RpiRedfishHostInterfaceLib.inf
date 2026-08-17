@@ -1,0 +1,41 @@
+## @file
+#  RpiRedfishHostInterfaceLib - RedfishPlatformHostInterfaceLib instance for
+#  the Pi 5 <-> BMC USB CDC-NCM link. Static SMBIOS type 42 data from
+#  RpiRedfishPkg PCDs.
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+
+[Defines]
+  INF_VERSION    = 0x0001001B
+  BASE_NAME      = RpiRedfishHostInterfaceLib
+  FILE_GUID      = 9e5fa3b7-40c2-4d16-8b9d-53a61f27c804
+  MODULE_TYPE    = DXE_DRIVER
+  VERSION_STRING = 1.0
+  LIBRARY_CLASS  = RedfishPlatformHostInterfaceLib|DXE_DRIVER
+
+[Sources]
+  RpiRedfishHostInterfaceLib.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  RedfishPkg/RedfishPkg.dec
+  RpiRedfishPkg/RpiRedfishPkg.dec
+
+[LibraryClasses]
+  BaseLib
+  BaseMemoryLib
+  DebugLib
+  MemoryAllocationLib
+  PcdLib
+  PrintLib
+  UefiLib
+
+[FixedPcd]
+  gRpiRedfishTokenSpaceGuid.PcdRpiRedfishGadgetMac        ## CONSUMES
+  gRpiRedfishTokenSpaceGuid.PcdRpiRedfishHostIp           ## CONSUMES
+  gRpiRedfishTokenSpaceGuid.PcdRpiRedfishServiceIp        ## CONSUMES
+  gRpiRedfishTokenSpaceGuid.PcdRpiRedfishIpMask           ## CONSUMES
+  gRpiRedfishTokenSpaceGuid.PcdRpiRedfishGadgetVendorId   ## CONSUMES
+  gRpiRedfishTokenSpaceGuid.PcdRpiRedfishGadgetProductId  ## CONSUMES
+  gEfiRedfishPkgTokenSpaceGuid.PcdRedfishServicePort      ## CONSUMES

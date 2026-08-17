@@ -14,10 +14,9 @@
   The press action mirrors U-Boot's rpi_power_btn_poll(): power off when
   the EEPROM bootloader config (blconfig nvmem-rmem region in the VPU DTB)
   contains POWER_OFF_ON_HALT=1, reset otherwise. Both actions go through
-  gRT->ResetSystem - NOT the bare ResetSystemLib - so reset notifications
-  run first: EepromVarStoreDxe syncs pending variable writes to the BMC
-  EEPROM from EFI_RESET_NOTIFICATION_PROTOCOL, and a direct PSCI call
-  would lose them. EfiResetShutdown reaches PSCI SYSTEM_OFF in TF-A,
+  gRT->ResetSystem - NOT the bare ResetSystemLib - so drivers registered
+  with EFI_RESET_NOTIFICATION_PROTOCOL get to flush state first, which a
+  direct PSCI call would skip. EfiResetShutdown reaches PSCI SYSTEM_OFF in TF-A,
   which parks the SoC via the PM watchdog RSTS halt partition; the VPU
   then honors POWER_OFF_ON_HALT just as it does for an OS shutdown.
 

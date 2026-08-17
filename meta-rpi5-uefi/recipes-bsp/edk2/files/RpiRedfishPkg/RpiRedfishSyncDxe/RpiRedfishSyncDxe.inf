@@ -1,0 +1,62 @@
+## @file
+#  RpiRedfishSyncDxe - host-side Redfish Host Interface client.
+#
+#  Produces EDKII_REDFISH_CONFIG_HANDLER_PROTOCOL, which RedfishConfigHandlerDriver
+#  invokes with the discovered BMC service. Reports this host's SMBIOS identity,
+#  boot progress, memory and drive inventory to the BMC and applies any one-time
+#  boot override the BMC has set - the Redfish successor of the I2C EEPROM sync
+#  (EepromVarStoreDxe / SmbiosEepromMirrorDxe / BlkInfoMirrorDxe).
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+
+[Defines]
+  INF_VERSION    = 0x0001001B
+  BASE_NAME      = RpiRedfishSyncDxe
+  FILE_GUID      = a7f24c85-1e93-4b06-9d78-c2504f6b8e31
+  MODULE_TYPE    = DXE_DRIVER
+  VERSION_STRING = 1.0
+  ENTRY_POINT    = RpiRedfishSyncDxeEntryPoint
+
+[Sources]
+  RpiRedfishSyncDxe.c
+  RpiRedfishInventory.c
+  RpiRedfishSyncDxe.h
+
+[Packages]
+  MdePkg/MdePkg.dec
+  MdeModulePkg/MdeModulePkg.dec
+  RedfishPkg/RedfishPkg.dec
+  RpiRedfishPkg/RpiRedfishPkg.dec
+
+[LibraryClasses]
+  BaseLib
+  BaseMemoryLib
+  DebugLib
+  DevicePathLib
+  JsonLib
+  MemoryAllocationLib
+  PrintLib
+  RedfishHttpLib
+  UefiBootManagerLib
+  UefiBootServicesTableLib
+  UefiDriverEntryPoint
+  UefiLib
+  UefiRuntimeServicesTableLib
+
+[Protocols]
+  gEdkIIRedfishConfigHandlerProtocolGuid    ## PRODUCES
+  gEfiSmbiosProtocolGuid                    ## CONSUMES
+  gEfiDiskInfoProtocolGuid                  ## CONSUMES
+  gEfiBlockIoProtocolGuid                   ## CONSUMES
+  gEfiDevicePathProtocolGuid                ## CONSUMES
+  gEfiNvmExpressPassThruProtocolGuid        ## CONSUMES
+
+[Guids]
+  gEfiGlobalVariableGuid                    ## CONSUMES
+  gEfiDiskInfoNvmeInterfaceGuid             ## CONSUMES
+  gEfiDiskInfoAhciInterfaceGuid             ## CONSUMES
+  gEfiDiskInfoIdeInterfaceGuid              ## CONSUMES
+
+[Depex]
+  gEfiSmbiosProtocolGuid
