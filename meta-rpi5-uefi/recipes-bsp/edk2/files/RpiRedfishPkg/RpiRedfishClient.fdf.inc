@@ -10,6 +10,7 @@
   INF RedfishClientPkg/RedfishETagDxe/RedfishETagDxe.inf
   INF RedfishClientPkg/RedfishConfigLangMapDxe/RedfishConfigLangMapDxe.inf
   INF RedfishClientPkg/HiiToRedfishBootDxe/HiiToRedfishBootDxe.inf
+  INF RedfishClientPkg/HiiToRedfishBiosDxe/HiiToRedfishBiosDxe.inf
   INF RedfishClientPkg/Features/ComputerSystem/v1_5_0/Dxe/ComputerSystemDxe.inf
   INF RedfishClientPkg/Features/ComputerSystemCollectionDxe/ComputerSystemCollectionDxe.inf
   INF RedfishClientPkg/Features/Bios/v1_0_9/Dxe/BiosDxe.inf
