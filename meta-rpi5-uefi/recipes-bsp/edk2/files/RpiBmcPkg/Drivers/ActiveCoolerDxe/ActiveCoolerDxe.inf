@@ -1,0 +1,41 @@
+## @file
+#
+#  ActiveCoolerDxe - temperature-driven fan control for the Raspberry Pi 5
+#  active cooler (RP1 PWM1 channel 3 on GPIO45) during the firmware phase,
+#  mirroring the VPU DTB's pwm-fan cooling policy.
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+#
+##
+
+[Defines]
+  INF_VERSION                    = 0x0001001A
+  BASE_NAME                      = ActiveCoolerDxe
+  FILE_GUID                      = 7f83c9a4-2d61-4e08-b5c3-19a7d0e44f52
+  MODULE_TYPE                    = DXE_DRIVER
+  VERSION_STRING                 = 1.0
+  ENTRY_POINT                    = ActiveCoolerEntryPoint
+
+[Sources]
+  ActiveCoolerDxe.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  RpiBmcPkg/RpiBmcPkg.dec
+  Silicon/RaspberryPi/RpiSiliconPkg/RpiSiliconPkg.dec
+
+[LibraryClasses]
+  DebugLib
+  IoLib
+  Rp1GpioLib
+  UefiBootServicesTableLib
+  UefiDriverEntryPoint
+
+[Protocols]
+  gRp1BusProtocolGuid                           ## SOMETIMES_CONSUMES
+
+[Guids]
+  gEfiEventExitBootServicesGuid                 ## CONSUMES ## Event
+
+[Depex]
+  TRUE

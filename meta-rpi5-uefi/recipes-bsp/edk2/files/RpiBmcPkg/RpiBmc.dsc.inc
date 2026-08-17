@@ -21,3 +21,7 @@
   }
   RpiBmcPkg/Drivers/BootloaderConfigDxe/BootloaderConfigDxe.inf
   RpiBmcPkg/Drivers/PowerButtonDxe/PowerButtonDxe.inf
+  RpiBmcPkg/Drivers/ActiveCoolerDxe/ActiveCoolerDxe.inf {
+    <LibraryClasses>
+      Rp1GpioLib|RpiBmcPkg/Library/Rp1GpioLib/Rp1GpioLib.inf
+  }
