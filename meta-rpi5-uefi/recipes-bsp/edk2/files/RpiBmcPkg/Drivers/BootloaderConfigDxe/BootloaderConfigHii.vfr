@@ -1,0 +1,85 @@
+/** @file
+ *
+ *  Bootloader EEPROM configuration formset, bound to the BlCfg variable
+ *  (efivarstore). The variable is re-seeded from the live blconfig every
+ *  boot, so the form always opens on the running bootloader's values;
+ *  saved edits only reach the EEPROM through the interactive "stage
+ *  update" action below, which reads the SPI flash, stages
+ *  pieeprom.upd/pieeprom.sig on the boot partition and reboots.
+ *
+ *  SPDX-License-Identifier: BSD-2-Clause-Patent
+ *
+ **/
+
+#include <Guid/HiiPlatformSetupFormset.h>
+#include <Guid/RpiBlCfg.h>
+
+#define EFI_VARIABLE_NON_VOLATILE       0x00000001
+#define EFI_VARIABLE_BOOTSERVICE_ACCESS 0x00000002
+#define EFI_VARIABLE_RUNTIME_ACCESS     0x00000004
+
+formset
+    guid      = RPI_BLCFG_FORMSET_GUID,
+    title     = STRING_TOKEN(STR_FORM_SET_TITLE),
+    help      = STRING_TOKEN(STR_FORM_SET_TITLE_HELP),
+    classguid = EFI_HII_PLATFORM_SETUP_FORMSET_GUID,
+
+    efivarstore RPI_BLCFG_DATA,
+      attribute = EFI_VARIABLE_BOOTSERVICE_ACCESS | EFI_VARIABLE_RUNTIME_ACCESS | EFI_VARIABLE_NON_VOLATILE,
+      name  = BlCfg,
+      guid  = RPI_BLCFG_FORMSET_GUID;
+
+    form formid = 1,
+        title = STRING_TOKEN(STR_FORM_TITLE);
+
+        string varid = BlCfg.BootOrder,
+            prompt  = STRING_TOKEN(STR_BOOT_ORDER_PROMPT),
+            help    = STRING_TOKEN(STR_BOOT_ORDER_HELP),
+            minsize = 1,
+            maxsize = 11,
+        endstring;
+
+        oneof varid = BlCfg.BootUart,
+            prompt      = STRING_TOKEN(STR_BOOT_UART_PROMPT),
+            help        = STRING_TOKEN(STR_BOOT_UART_HELP),
+            flags       = NUMERIC_SIZE_1,
+            option text = STRING_TOKEN(STR_DISABLED), value = 0, flags = DEFAULT;
+            option text = STRING_TOKEN(STR_ENABLED),  value = 1, flags = 0;
+        endoneof;
+
+        oneof varid = BlCfg.PowerOffOnHalt,
+            prompt      = STRING_TOKEN(STR_POWER_OFF_PROMPT),
+            help        = STRING_TOKEN(STR_POWER_OFF_HELP),
+            flags       = NUMERIC_SIZE_1,
+            option text = STRING_TOKEN(STR_DISABLED), value = 0, flags = DEFAULT;
+            option text = STRING_TOKEN(STR_ENABLED),  value = 1, flags = 0;
+        endoneof;
+
+        oneof varid = BlCfg.WakeOnGpio,
+            prompt      = STRING_TOKEN(STR_WAKE_GPIO_PROMPT),
+            help        = STRING_TOKEN(STR_WAKE_GPIO_HELP),
+            flags       = NUMERIC_SIZE_1,
+            option text = STRING_TOKEN(STR_DISABLED), value = 0, flags = 0;
+            option text = STRING_TOKEN(STR_ENABLED),  value = 1, flags = DEFAULT;
+        endoneof;
+
+        oneof varid = BlCfg.PsuMaxCurrent,
+            prompt      = STRING_TOKEN(STR_PSU_PROMPT),
+            help        = STRING_TOKEN(STR_PSU_HELP),
+            flags       = NUMERIC_SIZE_2,
+            option text = STRING_TOKEN(STR_PSU_AUTO),  value = 0,    flags = DEFAULT;
+            option text = STRING_TOKEN(STR_PSU_3000),  value = 3000, flags = 0;
+            option text = STRING_TOKEN(STR_PSU_5000),  value = 5000, flags = 0;
+        endoneof;
+
+        subtitle text = STRING_TOKEN(STR_EMPTY);
+
+        text
+            help  = STRING_TOKEN(STR_STAGE_HELP),
+            text  = STRING_TOKEN(STR_STAGE_PROMPT),
+            flags = INTERACTIVE,
+            key   = RPI_BLCFG_KEY_STAGE;
+
+    endform;
+
+endformset;

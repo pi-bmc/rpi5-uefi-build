@@ -149,10 +149,10 @@ RPI5_USBNET ??= "1"
 RPI5_REDFISH ??= "1"
 
 # edk2-redfish-client (RedfishClientPkg) on top of the host interface: the
-# standard feature layer -- ComputerSystemDxe, BiosDxe, BootOptionDxe and
-# their JSON converters (RpiRedfishPkg/RpiRedfishClient.dsc.inc; the Memory
-# feature, sample Bios form and SecureBoot are deliberately absent -- see
-# that file's header). Requires RPI5_REDFISH.
+# standard feature layer, with the FV set taken verbatim from the client's
+# own RedfishClient.fdf.inc (REDFISH_CLIENT=TRUE is passed to the build
+# when this knob is on; RpiRedfishPkg/RpiRedfishClient.dsc.inc builds the
+# matching components -- see that file's header). Requires RPI5_REDFISH.
 RPI5_REDFISH_CLIENT ??= "1"
 
 # The wire contract with the BMC, rendered into RpiRedfish.dsc.inc's PCDs.
@@ -283,6 +283,7 @@ do_compile() {
     # [Components.common] at its end -- and this insertion runs LAST so that
     # block sits closest to the marker, leaving every earlier-inserted
     # component line after it, back inside [Components.common].
+    redfish_client_define=""
     if [ "${RPI5_REDFISH}" = "1" ]; then
         [ "${RPI5_USBNET}" = "1" ] || \
             bbwarn "RPI5_REDFISH=1 without RPI5_USBNET=1: no NIC driver for the BMC link"
@@ -304,10 +305,16 @@ do_compile() {
             sed -i "\|${fdf_marker}|r ${B}/rpiredfish-fdf-line.inc" "${fdf}"
 
         # edk2-redfish-client feature layer on top of the host interface.
-        # Same include mechanics; the component/library lists live in
-        # RpiRedfishClient.dsc.inc (explicit, not the client's own gated
-        # .inc files -- see its header).
+        # Same include mechanics. The FV list comes from the client's own
+        # RedfishClient.fdf.inc (via RpiRedfishClient.fdf.inc), which is
+        # gated on REDFISH_CLIENT -- defined on the build command line
+        # below. Its nested RedfishJsonStructureDxe.fdf.inc gates every
+        # entry on per-schema macros left undefined here; those evaluate
+        # false (with "Suspicious expression" parser warnings, which are
+        # expected and harmless). The dsc-side component/library lists stay
+        # explicit in RpiRedfishClient.dsc.inc -- see its header.
         if [ "${RPI5_REDFISH_CLIENT}" = "1" ]; then
+            redfish_client_define="-D REDFISH_CLIENT=TRUE"
             printf '%s\n' '!include RpiRedfishPkg/RpiRedfishClient.dsc.inc' > "${B}/rpiredfishclient-dsc-line.inc"
             printf '%s\n' '!include RpiRedfishPkg/RpiRedfishClient.fdf.inc' > "${B}/rpiredfishclient-fdf-line.inc"
             grep -qF 'RpiRedfishPkg/RpiRedfishClient.dsc.inc' "${dsc}" || \
@@ -338,6 +345,7 @@ do_compile() {
         -p edk2-platforms/Platform/RaspberryPi/RPi5/RPi5.dsc \
         -n ${@oe.utils.cpu_count()} \
         -D TFA_BUILD_ARTIFACTS=${DEPLOY_DIR_IMAGE} \
+        ${redfish_client_define} \
         --pcd gEfiMdeModulePkgTokenSpaceGuid.PcdFirmwareVersionString=L"${RPI5_FW_VERSION}" \
         ${RPI5_EDK2_EXTRA_FLAGS} \
         -y ${B}/RPI_EFI.report.txt

@@ -2,7 +2,10 @@
 #
 #  BootloaderConfigDxe - publish the VPU bootloader EEPROM config
 #  (blconfig nvmem-rmem region) as the BootloaderConfig UEFI variable,
-#  gated on /chosen/bootloader/update-timestamp.
+#  gated on /chosen/bootloader/update-timestamp, and provide the
+#  "Bootloader EEPROM" Setup page that can stage a pieeprom.upd
+#  self-update on the boot partition (reading the live image back over
+#  the boot SPI) and reboot to apply it.
 #
 #  SPDX-License-Identifier: BSD-2-Clause-Patent
 #
@@ -17,7 +20,18 @@
   ENTRY_POINT                    = BootloaderConfigEntryPoint
 
 [Sources]
+  Bcm2712SpiFlash.c
+  Bcm2712SpiFlash.h
+  BlcfgValues.c
+  BootloaderConfig.h
   BootloaderConfigDxe.c
+  BootloaderConfigDxe.uni
+  BootloaderConfigHii.c
+  BootloaderConfigHii.vfr
+  EepromImage.c
+  EepromImage.h
+  Sha256.c
+  Sha256.h
 
 [Packages]
   MdePkg/MdePkg.dec
@@ -27,24 +41,34 @@
 
 [LibraryClasses]
   BaseLib
+  BaseMemoryLib
   DebugLib
   FdtLib
+  HiiLib
+  IoLib
   MemoryAllocationLib
   PcdLib
+  PrintLib
   UefiBootServicesTableLib
   UefiDriverEntryPoint
+  UefiHiiServicesLib
   UefiLib
   UefiRuntimeServicesTableLib
 
 [Protocols]
   gEfiVariableWriteArchProtocolGuid             ## CONSUMES
+  gEfiDevicePathProtocolGuid                    ## PRODUCES
+  gEfiHiiConfigAccessProtocolGuid               ## PRODUCES
+  gEfiSimpleFileSystemProtocolGuid              ## SOMETIMES_CONSUMES
 
 [Guids]
   gRpiBmcBootloaderVendorGuid                   ## PRODUCES ## Variable:L"BootloaderConfig"
+  gRpiBlCfgFormSetGuid                          ## PRODUCES ## Variable:L"BlCfg"
+  gEfiHiiPlatformSetupFormsetGuid               ## CONSUMES ## GUID
   gEfiEventReadyToBootGuid                      ## CONSUMES ## Event
 
 [FixedPcd]
   gRaspberryPiTokenSpaceGuid.PcdFdtBaseAddress  ## CONSUMES
 
 [Depex]
-  gEfiVariableWriteArchProtocolGuid
+  gEfiVariableArchProtocolGuid AND gEfiVariableWriteArchProtocolGuid

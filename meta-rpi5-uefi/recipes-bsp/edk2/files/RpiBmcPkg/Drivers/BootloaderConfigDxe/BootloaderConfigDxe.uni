@@ -1,0 +1,34 @@
+/** @file
+ *
+ *  Strings for the Bootloader EEPROM configuration formset.
+ *
+ *  SPDX-License-Identifier: BSD-2-Clause-Patent
+ *
+ **/
+
+#langdef en-US "English"
+
+#string STR_FORM_SET_TITLE       #language en-US "Bootloader EEPROM"
+#string STR_FORM_SET_TITLE_HELP  #language en-US "Raspberry Pi 5 bootloader EEPROM configuration. Values reflect the config the running bootloader used. Changes take effect only after staging an EEPROM update, which reboots the system so the bootloader can flash itself."
+#string STR_FORM_TITLE           #language en-US "Bootloader EEPROM Configuration"
+
+#string STR_BOOT_ORDER_PROMPT    #language en-US "Boot Order (BOOT_ORDER)"
+#string STR_BOOT_ORDER_HELP      #language en-US "Hex string tried nibble by nibble from the right: 1=SD card, 2=network, 3=RP1 UART, 4=USB mass storage, 5=BCM USB-C, 6=NVMe, 7=HTTP, e=stop, f=restart the list. Example 0xf461: SD, then NVMe, then USB, then restart."
+#string STR_BOOT_UART_PROMPT     #language en-US "Bootloader UART Log (BOOT_UART)"
+#string STR_BOOT_UART_HELP       #language en-US "Emit the bootloader diagnostic log on the 3-pin debug UART connector."
+#string STR_POWER_OFF_PROMPT     #language en-US "Power Off On Halt (POWER_OFF_ON_HALT)"
+#string STR_POWER_OFF_HELP       #language en-US "On shutdown, have the PMIC cut power completely instead of waiting in low-power state. The power button then powers the board back on."
+#string STR_WAKE_GPIO_PROMPT     #language en-US "Wake On GPIO (WAKE_ON_GPIO)"
+#string STR_WAKE_GPIO_HELP       #language en-US "Allow GPIO3 / the power button to wake the board from halt."
+#string STR_PSU_PROMPT           #language en-US "PSU Max Current (PSU_MAX_CURRENT)"
+#string STR_PSU_HELP             #language en-US "Skip USB-PD negotiation and assume a supply of this capability. 5000 mA enables full USB port power and removes current limits on a supply that does not advertise 5 A. Auto removes the key and lets the bootloader negotiate."
+#string STR_PSU_AUTO             #language en-US "Auto (negotiate)"
+#string STR_PSU_3000             #language en-US "3000 mA"
+#string STR_PSU_5000             #language en-US "5000 mA"
+
+#string STR_DISABLED             #language en-US "Disabled"
+#string STR_ENABLED              #language en-US "Enabled"
+#string STR_EMPTY                #language en-US ""
+
+#string STR_STAGE_PROMPT         #language en-US "Stage EEPROM Update And Reboot"
+#string STR_STAGE_HELP           #language en-US "Compare the settings above (including unsaved edits) with the running bootloader config. If they differ, read the 2 MiB boot EEPROM, apply the changes to its config section, write pieeprom.upd and pieeprom.sig to the boot partition and reboot; the bootloader then flashes itself on the way up. The SPI flash is never written by the firmware directly."
