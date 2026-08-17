@@ -1,0 +1,64 @@
+## @file
+#  PlatformThemeLib - dark-theme CustomizedDisplayLib instance for the
+#  Setup browser.
+#
+#  A fork of MdeModulePkg/Library/CustomizedDisplayLib (the library class
+#  DisplayEngineDxe paints every form through) with Colors.h reworked to
+#  a black-background palette. Wired in by RpiBmc.dsc.inc remapping the
+#  CustomizedDisplayLib class to this instance (a later [LibraryClasses]
+#  definition overrides RPi5.dsc's stock mapping), together with the four
+#  PcdBrowser* field-color PCDs the engine reads directly.
+#
+#  Sources besides Colors.h are byte-identical to the stock instance
+#  except for the header/strings-array renames the BASE_NAME change
+#  forces; keep it that way so upstream display-engine changes stay easy
+#  to carry.
+#
+#  Copyright (c) 2013 - 2018, Intel Corporation. All rights reserved.<BR>
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+#
+##
+
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = PlatformThemeLib
+  FILE_GUID                      = e4c8a137-9d52-4f26-8b7a-51c30e6d94a8
+  MODULE_TYPE                    = DXE_DRIVER
+  VERSION_STRING                 = 1.0
+  LIBRARY_CLASS                  = CustomizedDisplayLib|DXE_DRIVER UEFI_APPLICATION
+  CONSTRUCTOR                    = CustomizedDisplayLibConstructor
+  DESTRUCTOR                     = CustomizedDisplayLibDestructor
+
+[Sources]
+  PlatformThemeLib.c
+  Colors.h
+  PlatformThemeLibInternal.h
+  PlatformThemeLibInternal.c
+  PlatformThemeLib.uni
+
+[Packages]
+  MdePkg/MdePkg.dec
+  MdeModulePkg/MdeModulePkg.dec
+
+[LibraryClasses]
+  MemoryAllocationLib
+  BaseLib
+  UefiBootServicesTableLib
+  UefiDriverEntryPoint
+  UefiRuntimeServicesTableLib
+  BaseMemoryLib
+  DebugLib
+  PrintLib
+  HiiLib
+  DevicePathLib
+  PcdLib
+
+[Guids]
+  gEfiIfrTianoGuid  ## SOMETIMES_CONSUMES   ## UNDEFINED
+
+[Pcd]
+  gEfiMdeModulePkgTokenSpaceGuid.PcdBrowserSubtitleTextColor               ## CONSUMES
+  gEfiMdeModulePkgTokenSpaceGuid.PcdBrowserFieldTextColor                  ## CONSUMES
+  gEfiMdeModulePkgTokenSpaceGuid.PcdBrowserFieldTextHighlightColor         ## CONSUMES
+  gEfiMdeModulePkgTokenSpaceGuid.PcdBrowserFieldBackgroundHighlightColor   ## CONSUMES
+  gEfiMdeModulePkgTokenSpaceGuid.PcdFrontPageFormSetGuid                   ## CONSUMES
