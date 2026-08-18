@@ -113,6 +113,23 @@ SECUREBOOT_MS_CERT_URIS = "\
 # inside the inline Python: that keeps expansion order out of the picture.
 SECUREBOOT_MS_CERTS = "${@bb.utils.contains('RPI5_SECURE_BOOT_DEFAULT_KEYS', '1', d.getVar('SECUREBOOT_MS_CERT_URIS'), '', d)}"
 
+# www.microsoft.com refuses the wget fetcher with a bare 403, which surfaces
+# as "wget ... failed with exit code 8" on do_fetch. It is the User-Agent
+# alone, not TLS fingerprinting or a dead URL: the same request succeeds from
+# curl, `curl -A wget/1.21` is refused, and a browser UA on wget succeeds --
+# all six certificate URLs verified 200 that way (2026-08-18).
+#
+# So give the fetcher a browser User-Agent. Overriding FETCHCMD_wget is
+# recipe-scoped and only affects HTTP(S) fetches, which here is exactly the
+# Secure Boot certificate set -- every source tree comes down the git
+# fetcher. The rest of the command line stays bitbake's own default
+# (bitbake/lib/bb/fetch2/wget.py: "/usr/bin/env wget -t 2 -T 100"), since
+# bitbake appends -O/-P/--progress itself.
+#
+# The pinned sha256sums above are what actually guarantee we got the right
+# bytes, so relaxing how they are requested costs nothing in integrity.
+FETCHCMD_wget = "/usr/bin/env wget -t 2 -T 100 --user-agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'"
+
 SRC_URI[mskek2011.sha256sum]   = "a1117f516a32cefcba3f2d1ace10a87972fd6bbe8fe0d0b996e09e65d802a503"
 SRC_URI[mskek2023.sha256sum]   = "3cd3f0309edae228767a976dd40d9f4affc4fbd5218f2e8cc3c9dd97e8ac6f9d"
 SRC_URI[msdbwin2011.sha256sum] = "e8e95f0733a55e8bad7be0a1413ee23c51fcea64b3c8fa6a786935fddcc71961"
