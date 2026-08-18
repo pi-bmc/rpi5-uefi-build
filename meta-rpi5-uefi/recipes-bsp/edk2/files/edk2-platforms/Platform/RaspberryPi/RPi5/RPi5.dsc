@@ -431,6 +431,12 @@
   gRaspberryPiTokenSpaceGuid.PcdFwMailboxBaseAddress|0x107c013880
 
   #
+  # DWC2 OTG (the USB-C data port): /axi/usb@480000 in the firmware DTB,
+  # identity-mapped, so the CPU address is the reg value itself.
+  #
+  gRaspberryPiTokenSpaceGuid.PcdDwUsbBaseAddress|0x1000480000
+
+  #
   # RNG
   #
   gBcm283xTokenSpaceGuid.PcdBcm2838RngBaseAddress|0x107d208000
@@ -635,6 +641,19 @@
   # USB Support
   #
   MdeModulePkg/Bus/Pci/XhciDxe/XhciDxe.inf
+  #
+  # DWC2 OTG host on the USB-C data port (forced to host mode - see the
+  # 0006 layer patch). Scoped DMA parameters: this core masters the AXI
+  # bus identity-mapped (no 0xC000_0000 legacy alias like the platform's
+  # global DmaLib default assumes), and its DMA address registers are 32
+  # bits wide, so buffers must sit below 4 GB - the 3 GB cap matches the
+  # BAR-reclaim caution used for PCIe devices in this DSC.
+  #
+  Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.inf {
+    <PcdsFixedAtBuild>
+      gEmbeddedTokenSpaceGuid.PcdDmaDeviceOffset|0x00000000
+      gEmbeddedTokenSpaceGuid.PcdDmaDeviceLimit|0xbfffffff
+  }
   MdeModulePkg/Bus/Usb/UsbBusDxe/UsbBusDxe.inf
   MdeModulePkg/Bus/Usb/UsbKbDxe/UsbKbDxe.inf
   MdeModulePkg/Bus/Usb/UsbMassStorageDxe/UsbMassStorageDxe.inf

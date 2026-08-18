@@ -1,0 +1,50 @@
+From: appkins <nbatkins@gmail.com>
+Date: Mon, 17 Aug 2026 14:00:00 -0500
+Subject: [PATCH] JsonLib: fix RELEASE build of lex_unget_unsave
+
+RedfishCrtLib maps assert() to EDK2's ASSERT(), and current MdePkg
+defines the MDEPKG_NDEBUG flavor of ASSERT as (VOID)(Expression) - the
+expression is still compiled, just not acted on. jansson's
+lex_unget_unsave() guards the declaration and assignment of "d" with
+"#ifndef NDEBUG" while the assert referencing it stays, so a RELEASE
+build (-DMDEPKG_NDEBUG -DNDEBUG per RPi5.dsc) fails with:
+
+  load.c:340:18: error: 'd' undeclared (first use in this function)
+
+Declare and assign unconditionally. strbuffer_pop() must run for its
+side effect in all flavors anyway, and the INF already passes
+-Wno-unused-but-set-variable for GCC.
+
+Upstream-Status: Submittable [RedfishPkg vs MdePkg ASSERT change]
+Signed-off-by: appkins <nbatkins@gmail.com>
+---
+diff --git a/RedfishPkg/Library/JsonLib/load.c b/RedfishPkg/Library/JsonLib/load.c
+index 1a3b4a6..a911f62 100644
+--- a/RedfishPkg/Library/JsonLib/load.c
++++ b/RedfishPkg/Library/JsonLib/load.c
+@@ -325,18 +325,16 @@ lex_unget_unsave (
+   )
+ {
+   if ((c != STREAM_STATE_EOF) && (c != STREAM_STATE_ERROR)) {
+-    /* Since we treat warnings as errors, when assertions are turned
+-     * off the "d" variable would be set but never used. Which is
+-     * treated as an error by GCC.
++    /* "d" must exist in all build flavors: RedfishCrtLib maps assert()
++     * to EDK2's ASSERT(), whose MDEPKG_NDEBUG form is (VOID)(Expression)
++     * - the expression is still compiled, so an NDEBUG-guarded
++     * declaration breaks RELEASE builds. The unconditional assignment is
++     * fine: strbuffer_pop() must run for its side effect either way, and
++     * this INF already passes -Wno-unused-but-set-variable.
+      */
+- #ifndef NDEBUG
+     char  d;
+- #endif
+     stream_unget (&lex->stream, c);
+- #ifndef NDEBUG
+-    d =
+- #endif
+-    strbuffer_pop (&lex->saved_text);
++    d = strbuffer_pop (&lex->saved_text);
+     assert (c == d);
+   }
+ }

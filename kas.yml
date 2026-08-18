@@ -46,8 +46,10 @@ local_conf_header:
     # recognises -- NOT the onboard RJ45 jack. Set to "0" for a plain,
     # unmodified RPi5.fdf build.
     # RPI5_IPXE = "1"
-    # RELEASE (default), DEBUG or NOOPT.
-    RPI5_BUILD_TARGET = "DEBUG"
+    # RELEASE (default), DEBUG or NOOPT. Bring-up used DEBUG for the serial
+    # DEBUG() stream and the 0xAF freed-pool fill; flip back when chasing
+    # crashes.
+    RPI5_BUILD_TARGET = "RELEASE"
     # Shared download and sstate directories (can be overridden per user)
     DL_DIR = "/opt/yocto/downloads"
     SSTATE_DIR = "/opt/yocto/sstate-cache"

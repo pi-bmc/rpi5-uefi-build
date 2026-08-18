@@ -36,8 +36,9 @@ PV = "202602+git${SRCPV}"
 #                         merges INTO the git checkout at
 #                         ${UNPACKDIR}/edk2-platforms during do_unpack, then
 #                         0000 (the former fork's changed files), then this
-#                         layer's own 0001..0005 -- which edit files the
-#                         merged tree adds.
+#                         layer's own 0001..0006 -- which edit files the
+#                         merged tree adds (0006: DWC2 OTG host on the
+#                         USB-C data port).
 #
 # ORDERING IS LOAD-BEARING: do_unpack processes SRC_URI entries in listing
 # order, and the git fetcher PRUNES its destsuffix dir before checkout --
@@ -58,10 +59,12 @@ SRC_URI = "gitsm://github.com/tianocore/edk2.git;protocol=https;branch=master;na
            file://0003-RPi5-AcpiTables-add-SsdtThermal.patch;patchdir=../edk2-platforms \
            file://0004-PlatformBm-return-boot-option-number-not-list-index.patch;patchdir=../edk2-platforms \
            file://0005-PlatformBm-prune-USB-NIC-network-boot-options.patch;patchdir=../edk2-platforms \
+           file://0006-DwUsbHostDxe-support-the-BCM2712-DWC2-OTG-Pi-5-USB-C.patch;patchdir=../edk2-platforms \
            file://0100-UsbNetwork-assume-media-on-a-point-to-point-gadget.patch \
            file://0101-RedfishDiscoverDxe-skip-the-IPv6-discovery-leg.patch \
            file://0102-RedfishConfigHandler-quiesce-the-Redfish-stack-at-Re.patch \
            file://0103-UefiBootManagerLib-do-not-enumerate-USB-NICs-as-boot.patch \
+           file://0104-JsonLib-fix-RELEASE-build-of-lex_unget_unsave.patch \
            file://RpiBmcPkg \
            file://Rp1GemPkg \
            file://RpiRedfishPkg \

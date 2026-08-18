@@ -1,0 +1,119 @@
+From: appkins <nbatkins@gmail.com>
+Date: Mon, 17 Aug 2026 13:00:00 -0500
+Subject: [PATCH] DwUsbHostDxe: support the BCM2712 DWC2 OTG (Pi 5 USB-C)
+
+The Pi 5's USB-C data lines are wired to the same Synopsys DWC2 OTG core
+the Pi 0-3 used ("brcm,bcm2835-usb" in the firmware DTB), relocated from
+the BCM283x legacy peripheral window to the main AXI bus at
+0x10'0048'0000 (/axi/usb@480000, identity-mapped, per the firmware DTB
+and its dwc2.dtbo overlay symbols). Three changes make the existing
+driver work there:
+
+1. Base address from a new 64-bit PcdDwUsbBaseAddress (same pattern as
+   the RPi5 port's PcdFwMailboxBaseAddress / PcdBcm2838RngBaseAddress).
+   Zero - the default - selects the legacy BCM2836_USB_BASE_ADDRESS, so
+   Pi 3/4 builds are unchanged.
+
+2. Force host mode at the end of core init. The Pi 3 straps the OTG ID
+   pin to host; on the Pi 5 the core samples as a device out of reset
+   (the boot ROM's rpiboot gadget runs on it), and Linux only gets a
+   host on this port by forcing dr_mode = "host". Forcing is a no-op
+   where the ID strap already selects host.
+
+3. The VideoCore SetPowerState (USB HCD) mailbox call is best-effort
+   instead of fatal: on BCM2712 the block is powered and clocked from
+   reset and the firmware may not implement that device id.
+
+The platform must also give the controller correct DMA parameters: on
+BCM2712 the DWC2 masters the AXI bus identity-mapped (no 0xC000_0000
+legacy alias), with 32-bit DMA address registers - RPi5.dsc scopes
+PcdDmaDeviceOffset|0 and a below-4GB limit onto this driver.
+
+Upstream-Status: Submittable [with an RPi5 platform port]
+Signed-off-by: appkins <nbatkins@gmail.com>
+---
+diff --git a/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DriverBinding.c b/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DriverBinding.c
+index bb228e6..fc901d7 100644
+--- a/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DriverBinding.c
++++ b/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DriverBinding.c
+@@ -125,10 +125,16 @@ DriverStart (
+     return Status;
+   }
+ 
++  //
++  // Best-effort: the VideoCore mailbox implements this power domain on
++  // BCM283x/BCM2711, but on BCM2712 the DWC2 block is powered and
++  // clocked from reset (the boot ROM's rpiboot gadget runs on it) and
++  // the firmware may not implement the USB HCD device id, so a mailbox
++  // refusal must not veto the host controller.
++  //
+   Status = mFwProtocol->SetPowerState (RPI_MBOX_POWER_STATE_USB_HCD, TRUE, TRUE);
+   if (EFI_ERROR (Status)) {
+-    DEBUG ((DEBUG_ERROR, "Couldn't power on USB: %r\n", Status));
+-    return Status;
++    DEBUG ((DEBUG_ERROR, "Couldn't power on USB: %r (continuing)\n", Status));
+   }
+ 
+   Status = CreateDwUsbHc (&DwHc);
+diff --git a/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.c b/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.c
+index 0cd833c..e97c1c3 100644
+--- a/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.c
++++ b/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.c
+@@ -1448,6 +1448,16 @@ DwCoreInit (
+   MmioWrite32 (DwHc->DwUsbBase + GAHBCFG, AhbCfg);
+   MmioAnd32 (DwHc->DwUsbBase + GUSBCFG, ~(DWC2_GUSBCFG_HNPCAP | DWC2_GUSBCFG_SRPCAP));
+ 
++  //
++  // Force host mode. The Pi 3 straps the OTG ID pin to host, but on the
++  // Pi 5 this core sits behind the USB-C connector and samples as a
++  // device out of reset (the boot ROM's rpiboot gadget runs on it), so
++  // without the force a connected peripheral is never seen. The Synopsys
++  // core is allowed up to 25 ms to effect a mode change.
++  //
++  MmioOr32 (DwHc->DwUsbBase + GUSBCFG, DWC2_GUSBCFG_FORCEHOSTMODE);
++  MicroSecondDelay (25000);
++
+   return EFI_SUCCESS;
+ }
+ 
+@@ -1587,7 +1597,15 @@ CreateDwUsbHc (
+   DwHc->DwUsbOtgHc.ClearRootHubPortFeature        = DwHcClearRootHubPortFeature;
+   DwHc->DwUsbOtgHc.MajorRevision                  = 0x02;
+   DwHc->DwUsbOtgHc.MinorRevision                  = 0x00;
+-  DwHc->DwUsbBase                                 = BCM2836_USB_BASE_ADDRESS;
++  //
++  // PcdDwUsbBaseAddress carries the controller base on SoCs whose DWC2
++  // is not at the BCM283x legacy offset (BCM2712: 0x10'0048'0000). Zero
++  // selects the legacy BCM283x address, keeping Pi 3/4 unchanged.
++  //
++  DwHc->DwUsbBase                                 = FixedPcdGet64 (PcdDwUsbBaseAddress);
++  if (DwHc->DwUsbBase == 0) {
++    DwHc->DwUsbBase                               = BCM2836_USB_BASE_ADDRESS;
++  }
+ 
+   Pages = EFI_SIZE_TO_PAGES (DWC2_STATUS_BUF_SIZE);
+   DwHc->StatusBuffer = AllocatePages (Pages);
+diff --git a/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.inf b/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.inf
+index 8817f20..0f255ba 100644
+--- a/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.inf
++++ b/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.inf
+@@ -54,6 +54,7 @@
+ 
+ [FixedPcd]
+   gBcm283xTokenSpaceGuid.PcdBcm283xRegistersAddress
++  gRaspberryPiTokenSpaceGuid.PcdDwUsbBaseAddress
+ 
+ [Depex]
+   gRaspberryPiFirmwareProtocolGuid
+diff --git a/Platform/RaspberryPi/RaspberryPi.dec b/Platform/RaspberryPi/RaspberryPi.dec
+index 5c050f8..dd560f3 100644
+--- a/Platform/RaspberryPi/RaspberryPi.dec
++++ b/Platform/RaspberryPi/RaspberryPi.dec
+@@ -51,6 +51,7 @@
+   gRaspberryPiTokenSpaceGuid.PcdGicPmuIrq2|0x0|UINT32|0x00000035
+   gRaspberryPiTokenSpaceGuid.PcdGicPmuIrq3|0x0|UINT32|0x00000036
+   gRaspberryPiTokenSpaceGuid.PcdFwMailboxBaseAddress|0x0|UINT64|0x00000037
++  gRaspberryPiTokenSpaceGuid.PcdDwUsbBaseAddress|0x0|UINT64|0x00000038
+ 
+ [PcdsFixedAtBuild, PcdsPatchableInModule, PcdsDynamic, PcdsDynamicEx]
+   gRaspberryPiTokenSpaceGuid.PcdCpuClock|0|UINT32|0x0000000d
