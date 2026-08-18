@@ -42,6 +42,7 @@
 #define RPI_REDFISH_SERVICE_ROOT_URI  L"/redfish/v1/"
 #define RPI_REDFISH_SYSTEM_URI        L"/redfish/v1/Systems/1"
 #define RPI_REDFISH_MEMORY_URI        L"/redfish/v1/Systems/1/Memory"
+#define RPI_REDFISH_PROCESSORS_URI    L"/redfish/v1/Systems/1/Processors"
 #define RPI_REDFISH_DRIVES_URI        L"/redfish/v1/Systems/1/Storage/1/Drives"
 #define RPI_REDFISH_THERMAL_URI       L"/redfish/v1/Chassis/1/Thermal"
 
@@ -187,6 +188,70 @@ EFI_STATUS
 RpiRedfishBuildMemoryPost (
   IN  RPI_REDFISH_MEMORY_MODULE  *Module,
   OUT CHAR8                      **Json
+  );
+
+//
+// Processor sockets reported. The Pi 5 is single-socket; the bound leaves
+// headroom and keeps a malformed table from overrunning.
+//
+#define RPI_REDFISH_PROCESSOR_MAX  4
+
+//
+// One populated processor socket, as SMBIOS type 4 describes it, reduced to
+// the Redfish Processor v1_16_0 properties the BMC stores.
+//
+typedef struct {
+  CHAR8          Socket[RPI_REDFISH_STR_MAX];
+  CHAR8          Manufacturer[RPI_REDFISH_STR_MAX];
+  CHAR8          Model[RPI_REDFISH_STR_MAX];
+  CHAR8          SerialNumber[RPI_REDFISH_STR_MAX];
+  CHAR8          PartNumber[RPI_REDFISH_STR_MAX];
+  CHAR8          IdRegisters[19];                  // "0x" + 16 hex digits + NUL
+  CONST CHAR8    *ProcessorType;                   // "CPU", "GPU", ... or NULL
+  UINT32         MaxSpeedMhz;
+  UINT32         OperatingSpeedMhz;                // current, not rated
+  UINT32         TotalCores;
+  UINT32         TotalEnabledCores;
+  UINT32         TotalThreads;
+  BOOLEAN        Enabled;                          // type 4 CPU Status says enabled
+} RPI_REDFISH_PROCESSOR;
+
+/**
+  Collect populated processor sockets from the SMBIOS type 4 records this
+  firmware published.
+
+  Unpopulated sockets are skipped on the same reasoning as memory: SMBIOS
+  emits a record per socket whether or not it is filled, and reporting an
+  empty one would claim hardware that is not there.
+
+  @param[out] Processors  Receives the populated sockets.
+  @param[in]  Max         Capacity of Processors.
+  @param[out] Count       Receives the number written.
+
+  @retval EFI_SUCCESS    Zero or more processors were collected.
+  @retval EFI_NOT_FOUND  The SMBIOS protocol is not available.
+**/
+EFI_STATUS
+RpiRedfishCollectProcessors (
+  OUT RPI_REDFISH_PROCESSOR  *Processors,
+  IN  UINTN                  Max,
+  OUT UINTN                  *Count
+  );
+
+/**
+  Build the Processor POST body for one socket.
+
+  @param[in]  Processor  Processor to describe.
+  @param[out] Json       Receives an allocated ASCII JSON body. Caller frees
+                         with FreePool().
+
+  @retval EFI_SUCCESS           Body was built.
+  @retval EFI_OUT_OF_RESOURCES  Allocation failed.
+**/
+EFI_STATUS
+RpiRedfishBuildProcessorPost (
+  IN  RPI_REDFISH_PROCESSOR  *Processor,
+  OUT CHAR8                  **Json
   );
 
 //

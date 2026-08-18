@@ -421,6 +421,209 @@ RpiRedfishCollectMemory (
 }
 
 /**
+  Map an SMBIOS type 4 ProcessorType to the Redfish ProcessorType enumeration.
+
+  Returns NULL for values with no Redfish equivalent, which the caller omits
+  rather than guessing -- same discipline as the type 17 mappers above.
+**/
+STATIC
+CONST CHAR8 *
+RedfishProcessorType (
+  IN UINT8  SmbiosProcessorType
+  )
+{
+  switch (SmbiosProcessorType) {
+    case CentralProcessor: return "CPU";
+    case DspProcessor:     return "DSP";
+    case VideoProcessor:   return "GPU";
+    default:               return NULL;
+  }
+}
+
+/**
+  Resolve a type 4 core/thread count across the SMBIOS 3.0 field widening.
+
+  SMBIOS 3.0 added 16-bit companions for the core and thread counts: the
+  original 8-bit field reads 0xFF when the real value does not fit, and the
+  wide field carries it. 0 means "unknown" in both, which the JSON layer
+  omits rather than reporting a CPU with no cores.
+
+  @param[in] Narrow     The 8-bit count.
+  @param[in] Wide       The 16-bit companion.
+  @param[in] WideValid  Whether the record is long enough to hold Wide.
+
+  @return The resolved count, or 0 when unknown.
+**/
+STATIC
+UINT32
+ProcessorCount (
+  IN UINT8    Narrow,
+  IN UINT16   Wide,
+  IN BOOLEAN  WideValid
+  )
+{
+  if ((Narrow == 0xFF) && WideValid) {
+    return Wide;
+  }
+
+  return Narrow;
+}
+
+EFI_STATUS
+RpiRedfishCollectProcessors (
+  OUT RPI_REDFISH_PROCESSOR  *Processors,
+  IN  UINTN                  Max,
+  OUT UINTN                  *Count
+  )
+{
+  EFI_STATUS               Status;
+  EFI_SMBIOS_PROTOCOL      *Smbios;
+  EFI_SMBIOS_HANDLE        Handle;
+  EFI_SMBIOS_TABLE_HEADER  *Record;
+  SMBIOS_TABLE_TYPE4       *Type4;
+  RPI_REDFISH_PROCESSOR    *Processor;
+  BOOLEAN                  HasCounts;
+  BOOLEAN                  HasWideCounts;
+  UINT64                   IdRegisters;
+
+  if ((Processors == NULL) || (Count == NULL) || (Max == 0)) {
+    return EFI_INVALID_PARAMETER;
+  }
+
+  *Count = 0;
+  ZeroMem (Processors, Max * sizeof (*Processors));
+
+  Status = gBS->LocateProtocol (&gEfiSmbiosProtocolGuid, NULL, (VOID **)&Smbios);
+  if (EFI_ERROR (Status)) {
+    return EFI_NOT_FOUND;
+  }
+
+  Handle = SMBIOS_HANDLE_PI_RESERVED;
+  while (!EFI_ERROR (Smbios->GetNext (Smbios, &Handle, NULL, &Record, NULL))) {
+    if (Record->Type != EFI_SMBIOS_TYPE_PROCESSOR_INFORMATION) {
+      continue;
+    }
+
+    if (*Count >= Max) {
+      DEBUG ((DEBUG_ERROR, "RpiRedfishSync: more than %d processors, truncating\n", Max));
+      break;
+    }
+
+    Type4 = (SMBIOS_TABLE_TYPE4 *)Record;
+
+    //
+    // Status bit 6 is "CPU Socket Populated"; bits 2:0 are the CPU status,
+    // where 1 is enabled. An empty socket is not a processor.
+    //
+    if ((Type4->Status & 0x40) == 0) {
+      continue;
+    }
+
+    Processor          = &Processors[*Count];
+    Processor->Enabled = (BOOLEAN)((Type4->Status & 0x07) == 1);
+
+    CopyInventoryString (
+      Processor->Socket,
+      sizeof (Processor->Socket),
+      SmbiosGetString (Record, Type4->Socket)
+      );
+    CopyInventoryString (
+      Processor->Manufacturer,
+      sizeof (Processor->Manufacturer),
+      SmbiosGetString (Record, Type4->ProcessorManufacturer)
+      );
+    CopyInventoryString (
+      Processor->Model,
+      sizeof (Processor->Model),
+      SmbiosGetString (Record, Type4->ProcessorVersion)
+      );
+
+    Processor->ProcessorType     = RedfishProcessorType (Type4->ProcessorType);
+    Processor->MaxSpeedMhz       = Type4->MaxSpeed;
+    Processor->OperatingSpeedMhz = Type4->CurrentSpeed;
+
+    //
+    // The raw identification registers. PlatformSmbiosDxe writes MIDR_EL1
+    // over this field on AArch64, which is exactly what Redfish's
+    // ProcessorId/IdentificationRegisters is for. Copied out rather than
+    // cast: the field is a struct and need not be 8-byte aligned.
+    //
+    CopyMem (&IdRegisters, &Type4->ProcessorId, sizeof (IdRegisters));
+    if (IdRegisters != 0) {
+      AsciiSPrint (
+        Processor->IdRegisters,
+        sizeof (Processor->IdRegisters),
+        "0x%016Lx",
+        IdRegisters
+        );
+    }
+
+    //
+    // Serial and part number arrived in SMBIOS 2.3, the core/thread counts in
+    // 2.5, and their 16-bit companions in 3.0. Guard each block on the record
+    // length so a shorter table is read as "absent" rather than as garbage.
+    //
+    if (Type4->Hdr.Length >= OFFSET_OF (SMBIOS_TABLE_TYPE4, PartNumber) +
+        sizeof (Type4->PartNumber))
+    {
+      CopyInventoryString (
+        Processor->SerialNumber,
+        sizeof (Processor->SerialNumber),
+        SmbiosGetString (Record, Type4->SerialNumber)
+        );
+      CopyInventoryString (
+        Processor->PartNumber,
+        sizeof (Processor->PartNumber),
+        SmbiosGetString (Record, Type4->PartNumber)
+        );
+    }
+
+    HasCounts = (BOOLEAN)(Type4->Hdr.Length >=
+                          OFFSET_OF (SMBIOS_TABLE_TYPE4, ThreadCount) +
+                          sizeof (Type4->ThreadCount));
+    HasWideCounts = (BOOLEAN)(Type4->Hdr.Length >=
+                              OFFSET_OF (SMBIOS_TABLE_TYPE4, ThreadCount2) +
+                              sizeof (Type4->ThreadCount2));
+
+    if (HasCounts) {
+      Processor->TotalCores = ProcessorCount (
+                                Type4->CoreCount,
+                                Type4->CoreCount2,
+                                HasWideCounts
+                                );
+      Processor->TotalEnabledCores = ProcessorCount (
+                                       Type4->EnabledCoreCount,
+                                       Type4->EnabledCoreCount2,
+                                       HasWideCounts
+                                       );
+      Processor->TotalThreads = ProcessorCount (
+                                  Type4->ThreadCount,
+                                  Type4->ThreadCount2,
+                                  HasWideCounts
+                                  );
+    }
+
+    DEBUG ((
+      DEBUG_ERROR,
+      "RpiRedfishSync: processor[%d] '%a' mfr='%a' model='%a' %d/%d cores %d threads %d MHz id=%a\n",
+      *Count,
+      Processor->Socket,
+      Processor->Manufacturer,
+      Processor->Model,
+      Processor->TotalEnabledCores,
+      Processor->TotalCores,
+      Processor->TotalThreads,
+      Processor->OperatingSpeedMhz,
+      (Processor->IdRegisters[0] != '\0') ? Processor->IdRegisters : "(none)"
+      ));
+
+    (*Count)++;
+  }
+
+  return EFI_SUCCESS;
+}
+
+/**
   Append a "Name": "Value" member when Value is non-empty.
 
   Values come from SMBIOS strings, which may legitimately contain a double quote
@@ -600,6 +803,81 @@ RpiRedfishBuildMemoryPost (
 
     AsciiSPrint (Speeds, sizeof (Speeds), ",\"AllowedSpeedsMHz\":[%d]", Module->RatedSpeedMhz);
     AsciiStrCatS (Body, RPI_REDFISH_JSON_MAX, Speeds);
+  }
+
+  AsciiStrCatS (Body, RPI_REDFISH_JSON_MAX, "}");
+
+  *Json = Body;
+  return EFI_SUCCESS;
+}
+
+EFI_STATUS
+RpiRedfishBuildProcessorPost (
+  IN  RPI_REDFISH_PROCESSOR  *Processor,
+  OUT CHAR8                  **Json
+  )
+{
+  CHAR8  *Body;
+
+  if ((Processor == NULL) || (Json == NULL)) {
+    return EFI_INVALID_PARAMETER;
+  }
+
+  Body = AllocateZeroPool (RPI_REDFISH_JSON_MAX);
+  if (Body == NULL) {
+    return EFI_OUT_OF_RESOURCES;
+  }
+
+  //
+  // @odata.type and Status lead so the object is never empty; everything after
+  // is conditional and emitted with a leading comma.
+  //
+  // The architecture pair is stated rather than derived from ProcessorFamily2:
+  // this driver only builds for AARCH64, so any processor it can describe is
+  // an A64 part. Deriving it from the SMBIOS family would add a mapping table
+  // whose every entry is the same answer.
+  //
+  // Socket doubles as the member's identity, the way DeviceLocator does for
+  // memory: re-reporting the same socket on a later boot should update that
+  // member rather than create a second one.
+  //
+  AsciiSPrint (
+    Body,
+    RPI_REDFISH_JSON_MAX,
+    "{\"@odata.type\":\"#Processor.v1_16_0.Processor\""
+    ",\"Status\":{\"State\":\"%a\",\"Health\":\"OK\"}"
+    ",\"ProcessorArchitecture\":\"ARM\""
+    ",\"InstructionSet\":\"ARM-A64\"",
+    Processor->Enabled ? "Enabled" : "Disabled"
+    );
+
+  if (Processor->ProcessorType != NULL) {
+    AppendJsonString (Body, RPI_REDFISH_JSON_MAX, "ProcessorType", Processor->ProcessorType);
+  }
+
+  AppendJsonString (Body, RPI_REDFISH_JSON_MAX, "Socket", Processor->Socket);
+  AppendJsonString (Body, RPI_REDFISH_JSON_MAX, "Name", Processor->Socket);
+  AppendJsonString (Body, RPI_REDFISH_JSON_MAX, "Manufacturer", Processor->Manufacturer);
+  AppendJsonString (Body, RPI_REDFISH_JSON_MAX, "Model", Processor->Model);
+  AppendJsonString (Body, RPI_REDFISH_JSON_MAX, "SerialNumber", Processor->SerialNumber);
+  AppendJsonString (Body, RPI_REDFISH_JSON_MAX, "PartNumber", Processor->PartNumber);
+
+  AppendJsonNumber (Body, RPI_REDFISH_JSON_MAX, "MaxSpeedMHz", Processor->MaxSpeedMhz);
+  AppendJsonNumber (Body, RPI_REDFISH_JSON_MAX, "OperatingSpeedMHz", Processor->OperatingSpeedMhz);
+  AppendJsonNumber (Body, RPI_REDFISH_JSON_MAX, "TotalCores", Processor->TotalCores);
+  AppendJsonNumber (Body, RPI_REDFISH_JSON_MAX, "TotalEnabledCores", Processor->TotalEnabledCores);
+  AppendJsonNumber (Body, RPI_REDFISH_JSON_MAX, "TotalThreads", Processor->TotalThreads);
+
+  if (Processor->IdRegisters[0] != '\0') {
+    CHAR8  IdObject[80];
+
+    AsciiSPrint (
+      IdObject,
+      sizeof (IdObject),
+      ",\"ProcessorId\":{\"IdentificationRegisters\":\"%a\"}",
+      Processor->IdRegisters
+      );
+    AsciiStrCatS (Body, RPI_REDFISH_JSON_MAX, IdObject);
   }
 
   AsciiStrCatS (Body, RPI_REDFISH_JSON_MAX, "}");

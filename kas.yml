@@ -50,6 +50,10 @@ local_conf_header:
     # DEBUG() stream and the 0xAF freed-pool fill; flip back when chasing
     # crashes.
     RPI5_BUILD_TARGET = "RELEASE"
+    # Build ShellPkg's Dp command into the firmware: `dp` at the UEFI shell
+    # then prints per-driver init times (the platform already records the
+    # measurements). Set to "0" to drop it and reclaim the FV space.
+    PROFILING_ENABLED = "1"
     # Shared download and sstate directories (can be overridden per user)
     DL_DIR = "/opt/yocto/downloads"
     SSTATE_DIR = "/opt/yocto/sstate-cache"

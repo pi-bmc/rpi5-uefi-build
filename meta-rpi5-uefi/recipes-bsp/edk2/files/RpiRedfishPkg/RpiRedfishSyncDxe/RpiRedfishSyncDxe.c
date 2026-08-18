@@ -18,8 +18,9 @@
     2. PATCH /redfish/v1/Systems/1  -- reports this host's identity (SMBIOS type
                                        0/1) and boot progress to the BMC
                                        (successor of SmbiosEepromMirrorDxe).
-    2b/2c. POST Memory / Drives     -- inventory (successor of BlkInfoMirrorDxe).
-    2d. PATCH+GET Chassis/1/Thermal -- SoC temperature + fan state up, BMC fan
+    2b-2d. POST Processors /        -- inventory the BMC cannot see in band
+           Memory / Drives             (successor of BlkInfoMirrorDxe).
+    2e. PATCH+GET Chassis/1/Thermal -- SoC temperature + fan state up, BMC fan
                                        steering down (RPI_FAN_PROTOCOL); then
                                        every 10 s for as long as BDS lasts.
     3. GET  /redfish/v1/Systems/1   -- reads back the BMC's requested one-time
@@ -517,6 +518,59 @@ HandleBootOverride (
 }
 
 /**
+  Report the host's processors to the BMC's Processor collection.
+
+  One POST per populated socket, keyed on the SMBIOS socket designation so a
+  later boot updates the existing member rather than accumulating duplicates.
+  Everything reported comes from SMBIOS type 4, including the clock rates
+  PlatformSmbiosDxe reads from the VPU mailbox -- the BMC has no in-band way
+  to learn any of it.
+
+  The BMC (nanokvm-app) serves Processors read-only today and has no POST
+  handler, so until one lands these log an HTTP error and move on, exactly as
+  the memory and drive POSTs did before their handlers arrived. Fail-open by
+  design.
+
+  @param[in] Service  The Redfish service to report to.
+**/
+STATIC
+VOID
+ReportProcessors (
+  IN REDFISH_SERVICE  Service
+  )
+{
+  RPI_REDFISH_PROCESSOR  Processors[RPI_REDFISH_PROCESSOR_MAX];
+  REDFISH_RESPONSE       Response;
+  EFI_STATUS             Status;
+  UINTN                  Count;
+  UINTN                  Index;
+  CHAR8                  *Body;
+
+  Status = RpiRedfishCollectProcessors (Processors, RPI_REDFISH_PROCESSOR_MAX, &Count);
+  if (EFI_ERROR (Status) || (Count == 0)) {
+    DEBUG ((DEBUG_ERROR, "RpiRedfishSync: no processors to report - %r\n", Status));
+    return;
+  }
+
+  for (Index = 0; Index < Count; Index++) {
+    Body   = NULL;
+    Status = RpiRedfishBuildProcessorPost (&Processors[Index], &Body);
+    if (EFI_ERROR (Status) || (Body == NULL)) {
+      continue;
+    }
+
+    ZeroMem (&Response, sizeof (Response));
+    Status = RedfishHttpPostResource (Service, RPI_REDFISH_PROCESSORS_URI, Body, &Response);
+    LogResult ("POST", RPI_REDFISH_PROCESSORS_URI, Status, &Response);
+    RedfishHttpFreeResponse (&Response);
+
+    FreePool (Body);
+  }
+
+  DEBUG ((DEBUG_ERROR, "RpiRedfishSync: reported %d processor(s)\n", Count));
+}
+
+/**
   Report the host's memory devices to the BMC's Memory collection.
 
   One POST per module, keyed on DeviceLocator so a later boot updates the
@@ -901,17 +955,22 @@ RpiRedfishSync (
   }
 
   //
-  // 2b. Report the memory devices.
+  // 2b. Report the processors.
+  //
+  ReportProcessors (Service);
+
+  //
+  // 2c. Report the memory devices.
   //
   ReportMemory (Service);
 
   //
-  // 2c. Report the drives.
+  // 2d. Report the drives.
   //
   ReportDrives (Service);
 
   //
-  // 2d. First thermal sample + any fan steering the BMC already staged.
+  // 2e. First thermal sample + any fan steering the BMC already staged.
   //    Before the boot-override step on purpose: an override reboots the
   //    host, and the BMC should still get one thermal reading out of this
   //    boot.

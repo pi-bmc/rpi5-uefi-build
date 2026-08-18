@@ -76,6 +76,8 @@ SRC_URI = "gitsm://github.com/tianocore/edk2.git;protocol=https;branch=master;na
            file://secureboot-keys \
            file://usbnet-dsc-snippet.inc \
            file://usbnet-fdf-snippet.fdf.inc \
+           file://profiling-dsc-snippet.inc \
+           file://profiling-fdf-snippet.fdf.inc \
            ${SECUREBOOT_MS_CERTS} \
            "
 
@@ -190,6 +192,19 @@ RPI5_BMC ??= "1"
 # an RP1 port becomes an SNP interface. The BMC's host-interface link rides
 # the ncm.usb0 function of this -- required by RPI5_REDFISH.
 RPI5_USBNET ??= "1"
+
+# Boot-time profiling: adds ShellPkg's Dp ("dump performance") dynamic
+# command, so `dp` at the UEFI shell prints per-driver load/init times in
+# milliseconds. The platform already records the measurements
+# (PcdPerformanceLibraryPropertyMask|1 + DxeCorePerformanceLib on DxeCore
+# in RPi5.dsc), so this only adds the reader -- and only the FV space it
+# occupies, which is why it is off by default.
+#
+# Set it in local.conf/kas.yml (PROFILING_ENABLED = "1"), or per-invocation
+# with `bitbake -R` / an env var exported through BB_ENV_PASSTHROUGH_ADDITIONS.
+# Whatever the value, it reaches EDK2 as -D PROFILING_ENABLED=TRUE|FALSE,
+# which is the macro the profiling-*-snippet files gate on.
+PROFILING_ENABLED ??= "0"
 
 # Redfish Host Interface (DSP0270) over the BMC's USB CDC-NCM gadget: the
 # JetKVM method from ../nuc-bios-build, NCM instead of ECM. Replaces the
@@ -363,6 +378,24 @@ do_compile() {
             sed -i "\|${fdf_marker}|r ${WORKDIR}/usbnet-fdf-snippet.fdf.inc" "${fdf}"
     fi
 
+    # ShellPkg's Dp profiling command. Unlike every other snippet here these
+    # lines go in UNCONDITIONALLY -- they carry their own
+    # "!if $(PROFILING_ENABLED) == TRUE" gate, and the macro below is what
+    # actually turns Dp on or off. Inserting conditionally would be a one-way
+    # door against the persisted WORKDIR checkout: nothing removes the lines
+    # again when the knob goes back to 0.
+    grep -qF 'DpDynamicCommand/DpDynamicCommand.inf' "${dsc}" || \
+        sed -i "\|${dsc_marker}|r ${WORKDIR}/profiling-dsc-snippet.inc" "${dsc}"
+    grep -qF 'INF ShellPkg/DynamicCommand/DpDynamicCommand/DpDynamicCommand.inf' "${fdf}" || \
+        sed -i "\|${fdf_marker}|r ${WORKDIR}/profiling-fdf-snippet.fdf.inc" "${fdf}"
+
+    if [ "${PROFILING_ENABLED}" = "1" ]; then
+        profiling_define="-D PROFILING_ENABLED=TRUE"
+        bbnote "profiling enabled: ShellPkg Dp command built into FVMAIN"
+    else
+        profiling_define="-D PROFILING_ENABLED=FALSE"
+    fi
+
     # Redfish Host Interface stack over the BMC's CDC-NCM gadget (RedfishPkg
     # core drivers + local RpiRedfishPkg; the usbnet snippet above supplies
     # the NIC driver). The wire-contract knobs are rendered into the
@@ -495,6 +528,7 @@ do_compile() {
         -n ${@oe.utils.cpu_count()} \
         -D TFA_BUILD_ARTIFACTS=${DEPLOY_DIR_IMAGE} \
         ${redfish_client_define} \
+        ${profiling_define} \
         ${secure_boot_define} \
         --pcd gEfiMdeModulePkgTokenSpaceGuid.PcdFirmwareVersionString=L"${RPI5_FW_VERSION}" \
         ${RPI5_EDK2_EXTRA_FLAGS} \
