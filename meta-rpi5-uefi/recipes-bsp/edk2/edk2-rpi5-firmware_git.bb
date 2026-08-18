@@ -99,14 +99,17 @@ SRC_URI = "gitsm://github.com/tianocore/edk2.git;protocol=https;branch=master;na
 # Only pulled in when the default key set is wanted, so a build with
 # RPI5_SECURE_BOOT_DEFAULT_KEYS=0 needs no network access for this.
 SECUREBOOT_MS_CERT_BASE = "https://www.microsoft.com/pkiops/certs"
-SECUREBOOT_MS_CERTS = "${@bb.utils.contains('RPI5_SECURE_BOOT_DEFAULT_KEYS', '1', ' \
+SECUREBOOT_MS_CERT_URIS = "\
     ${SECUREBOOT_MS_CERT_BASE}/MicCorKEKCA2011_2011-06-24.crt;name=mskek2011;downloadfilename=MicCorKEKCA2011.crt;subdir=secureboot-certs \
     ${SECUREBOOT_MS_CERT_BASE}/microsoft%20corporation%20kek%202k%20ca%202023.crt;name=mskek2023;downloadfilename=MicCorKEK2KCA2023.crt;subdir=secureboot-certs \
     ${SECUREBOOT_MS_CERT_BASE}/MicWinProPCA2011_2011-10-19.crt;name=msdbwin2011;downloadfilename=MicWinProPCA2011.crt;subdir=secureboot-certs \
     ${SECUREBOOT_MS_CERT_BASE}/MicCorUEFCA2011_2011-06-27.crt;name=msdbuefi2011;downloadfilename=MicCorUEFCA2011.crt;subdir=secureboot-certs \
     ${SECUREBOOT_MS_CERT_BASE}/windows%20uefi%20ca%202023.crt;name=msdbwin2023;downloadfilename=WindowsUEFICA2023.crt;subdir=secureboot-certs \
     ${SECUREBOOT_MS_CERT_BASE}/microsoft%20uefi%20ca%202023.crt;name=msdbuefi2023;downloadfilename=MicrosoftUEFICA2023.crt;subdir=secureboot-certs \
-', '', d)}"
+"
+# Kept as a plain variable and selected here, rather than building the list
+# inside the inline Python: that keeps expansion order out of the picture.
+SECUREBOOT_MS_CERTS = "${@bb.utils.contains('RPI5_SECURE_BOOT_DEFAULT_KEYS', '1', d.getVar('SECUREBOOT_MS_CERT_URIS'), '', d)}"
 
 SRC_URI[mskek2011.sha256sum]   = "a1117f516a32cefcba3f2d1ace10a87972fd6bbe8fe0d0b996e09e65d802a503"
 SRC_URI[mskek2023.sha256sum]   = "3cd3f0309edae228767a976dd40d9f4affc4fbd5218f2e8cc3c9dd97e8ac6f9d"

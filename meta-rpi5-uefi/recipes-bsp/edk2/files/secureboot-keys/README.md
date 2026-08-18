@@ -16,30 +16,62 @@ must be a **DER-encoded X.509 certificate with an RSA key**. PEM will not
 work, and neither will an `EFI_SIGNATURE_LIST` (`.esl`) — the library builds
 the signature lists itself, wrapping each cert with `gEfiCertX509Guid`.
 
+`do_compile` runs `openssl x509 -inform DER` over every one of them before
+passing them to the build, because the failure mode otherwise is silent:
+a bad file produces firmware whose key defaults simply never load.
+
 That also rules out a conventional `dbx`: the UEFI revocation list is a set
 of SHA-256 image hashes, not certificates, so it cannot be provisioned
 through this path. `DBX_DEFAULT_FILE*` is deliberately left unset. Apply
 revocations at runtime with a signed `dbx` update instead.
 
-## Contents
+## What ships here, and what is fetched
 
-| File | Role | Subject | SHA-256 fingerprint |
+This directory holds **only the Platform Key certificate**. Microsoft's CAs
+are not vendored — the recipe fetches them through the bitbake fetcher, so
+they are visible in `SRC_URI`, cached in `DL_DIR`, mirrorable, and pinned by
+checksum like every other upstream artifact.
+
+| File | Role | Subject | SHA-256 |
 | --- | --- | --- | --- |
-| `PkDefault.der` | PK | `CN=pi-bmc RPi5 Platform Key, O=pi-bmc, C=US` | `5D:5A:64:DB:59:DF:07:3A:37:84:8A:DA:A1:43:3E:8A:CB:DB:BD:80:C3:DE:EF:5A:00:12:21:3D:42:07:97:0C` |
-| `MicCorKEKCA2011.crt` | KEK | `Microsoft Corporation KEK CA 2011` | `A1:11:7F:51:6A:32:CE:FC:BA:3F:2D:1A:CE:10:A8:79:72:FD:6B:BE:8F:E0:D0:B9:96:E0:9E:65:D8:02:A5:03` |
-| `MicCorKEK2KCA2023.crt` | KEK | `Microsoft Corporation KEK 2K CA 2023` | `3C:D3:F0:30:9E:DA:E2:28:76:7A:97:6D:D4:0D:9F:4A:FF:C4:FB:D5:21:8F:2E:8C:C3:C9:DD:97:E8:AC:6F:9D` |
-| `MicWinProPCA2011.crt` | db | `Microsoft Windows Production PCA 2011` | `E8:E9:5F:07:33:A5:5E:8B:AD:7B:E0:A1:41:3E:E2:3C:51:FC:EA:64:B3:C8:FA:6A:78:69:35:FD:DC:C7:19:61` |
-| `MicCorUEFCA2011.crt` | db | `Microsoft Corporation UEFI CA 2011` | `48:E9:9B:99:1F:57:FC:52:F7:61:49:59:9B:FF:0A:58:C4:71:54:22:9B:9F:8D:60:3A:C4:0D:35:00:24:85:07` |
-| `WindowsUEFICA2023.crt` | db | `Windows UEFI CA 2023` | `07:6F:1F:EA:90:AC:29:15:5E:BF:77:C1:76:82:F7:5F:1F:DD:1B:E1:96:DA:30:2D:C8:46:1E:35:0A:9A:E3:30` |
-| `MicrosoftUEFICA2023.crt` | db | `Microsoft UEFI CA 2023` | `F6:12:4E:34:12:5B:EE:3F:E6:D7:9A:57:4E:AA:7B:91:C0:E7:BD:9D:92:9C:1A:32:11:78:EF:D6:11:DA:D9:01` |
+| `PkDefault.der` | PK | `CN=pi-bmc RPi5 Platform Key, O=pi-bmc, C=US` | `5d5a64db59df073a37848adaa1433e8acbdbbd80c3deef5a0012213d4207970c` |
 
-The Microsoft certificates were fetched from Microsoft's official
-`go.microsoft.com/fwlink` redirects to `www.microsoft.com/pkiops/certs/`.
-Verify any replacement against the fingerprints above before trusting it.
+Fetched into `${WORKDIR}/secureboot-certs/` at build time:
+
+| Downloaded as | Role | Subject | SHA-256 (= fingerprint) |
+| --- | --- | --- | --- |
+| `MicCorKEKCA2011.crt` | KEK | `Microsoft Corporation KEK CA 2011` | `a1117f516a32cefcba3f2d1ace10a87972fd6bbe8fe0d0b996e09e65d802a503` |
+| `MicCorKEK2KCA2023.crt` | KEK | `Microsoft Corporation KEK 2K CA 2023` | `3cd3f0309edae228767a976dd40d9f4affc4fbd5218f2e8cc3c9dd97e8ac6f9d` |
+| `MicWinProPCA2011.crt` | db | `Microsoft Windows Production PCA 2011` | `e8e95f0733a55e8bad7be0a1413ee23c51fcea64b3c8fa6a786935fddcc71961` |
+| `MicCorUEFCA2011.crt` | db | `Microsoft Corporation UEFI CA 2011` | `48e99b991f57fc52f76149599bff0a58c47154229b9f8d603ac40d3500248507` |
+| `WindowsUEFICA2023.crt` | db | `Windows UEFI CA 2023` | `076f1fea90ac29155ebf77c17682f75f1fdd1be196da302dc8461e350a9ae330` |
+| `MicrosoftUEFICA2023.crt` | db | `Microsoft UEFI CA 2023` | `f6124e34125bee3fe6d79a574eaa7b91c0e7bd9d929c1a321178efd611dad901` |
+
+Because a DER file is exactly the bytes a certificate fingerprint is taken
+over, **each `SRC_URI[…sha256sum]` is that certificate's SHA-256
+fingerprint**. Pinning the download therefore pins the certificate identity:
+if Microsoft ever serves different bytes at those URLs the build stops. Do
+not "fix" such a failure by pasting in a new checksum — check the new file's
+subject and fingerprint first.
+
+Two notes on the URLs, both learned the hard way:
+
+* The recipe uses the direct `www.microsoft.com/pkiops/certs/` paths rather
+  than the `go.microsoft.com/fwlink` redirects those are usually documented
+  as. bitbake's `decodeurl()`/`encodeurl()` round trip percent-escapes a
+  query string, so `?linkid=2239775` becomes `%3Flinkid%3D2239775` and the
+  fetch fails. The `%20` in the 2023 filenames survives that round trip
+  fine.
+* The fwlink IDs, for provenance: 321185, 321192, 321194 (2011 generation);
+  2239775, 2239776, 2239872 (2023).
 
 The two `*UEFI CA*` certificates are the **third-party** CAs — they are what
 signs shim, and therefore what lets Linux distributions boot. Drop them from
 `db` if you only ever intend to boot Windows.
+
+Building with `RPI5_SECURE_BOOT_DEFAULT_KEYS=0` removes these from `SRC_URI`
+entirely, so an offline build that does not want Secure Boot defaults needs
+no network access for them.
 
 ## Why both 2011 and 2023
 
