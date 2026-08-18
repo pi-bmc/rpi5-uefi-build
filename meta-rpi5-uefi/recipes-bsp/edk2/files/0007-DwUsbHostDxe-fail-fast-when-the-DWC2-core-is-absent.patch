@@ -1,0 +1,155 @@
+From: appkins <nbatkins@gmail.com>
+Date: Tue, 18 Aug 2026 08:20:00 -0500
+Subject: [PATCH] DwUsbHostDxe: fail fast when the DWC2 core is absent
+
+DwHcReset() arms one deadline and hands it to DwCoreInit() and
+DwHcInit(), whose every register handshake goes through Wait4Bit() -- a
+tight MmioRead32/CheckEvent busy-poll with no delay in it. When a polled
+bit never changes the driver burns the entire budget on that one wait,
+which on the Pi 5 was ten seconds of every boot before any USB device
+was contacted at all.
+
+Check whether there is a core there before starting the polled sequence:
+GSNPSID reads back the Synopsys ID, whose top 16 bits are ASCII "OT" on
+these OTG cores. Linux gates on the same register in
+dwc2_check_core_version(), and so does u-boot's dwc2. A block that is
+powered down reads all-zeroes or all-ones and is rejected in one MMIO
+read, so an absent controller costs microseconds instead of seconds.
+
+Two supporting changes:
+
+  * DriverStart now honours DwHcReset()'s status. It was discarded, so a
+    failed bring-up still published EFI_USB2_HC_PROTOCOL and handed
+    UsbBusDxe a controller on which every transfer would time out.
+
+  * DW_HC_RESET_TIMEOUT_MS 10s -> 1s. These handshakes complete in
+    microseconds; the timeout only bounds the broken case, and one
+    second is still ~1000x the hardware requirement.
+
+Upstream-Status: Submittable [with an RPi5 platform port]
+Signed-off-by: appkins <nbatkins@gmail.com>
+---
+--- a/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.c
++++ b/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.c
+@@ -13,9 +13,23 @@
+ #include "DwcHw.h"
+ 
+ /*
+- * Excessive (10s) timeout for reset.
++ * Bound for the whole reset/init sequence (DwCoreInit + DwHcInit share
++ * one deadline). The Synopsys core completes these register handshakes
++ * in microseconds, so this only ever matters when something is wrong --
++ * and Wait4Bit() busy-polls, so whatever is left of the budget is burnt
++ * as pure boot latency. One second is still ~1000x the hardware
++ * requirement; it used to be ten, which is a very long time to spend
++ * discovering that a controller is not there.
+  */
+-#define DW_HC_RESET_TIMEOUT_MS (10000)
++#define DW_HC_RESET_TIMEOUT_MS (1000)
++
++/*
++ * GSNPSID reads back the Synopsys core ID: the top 16 bits are ASCII
++ * "OT" on the OTG cores this driver drives. Linux's dwc2 gates on the
++ * same value (dwc2_check_core_version) and refuses the device otherwise.
++ */
++#define DWC2_GSNPSID_ID_MASK   0xFFFF0000
++#define DWC2_GSNPSID_OTG_ID    0x4F540000
+ 
+   /*
+    * TimerPeriodic to account for timeout processing
+@@ -1402,6 +1416,59 @@
+   return EFI_SUCCESS;
+ }
+ 
++/**
++  Report whether a DWC2 core is actually present and responding at the
++  configured base address.
++
++  Worth one MMIO read before anything else, because nothing further down
++  fails fast: DwCoreReset() and DwHcInit() hand every register handshake
++  to Wait4Bit(), which busy-polls a shared deadline. A core that is
++  powered down reads all-zeroes or all-ones, no polled bit ever changes,
++  and the driver spends the entire DW_HC_RESET_TIMEOUT_MS budget before
++  giving up -- straight-line boot latency, with a dead port at the end
++  of it either way.
++
++  That is the Pi 5 case, not a hypothetical: the BCM2712 DWC2 behind the
++  USB-C connector sits in the USB power domain, and its firmware DTB node
++  is "status = disabled" with power-domains = <&power RPI_POWER_DOMAIN_USB>.
++  The VideoCore SET_POWER_STATE (USB HCD) mailbox call this driver makes
++  is the BCM283x interface and does not turn that domain on, so unless
++  something else has powered the block, there is nothing here to talk to.
++
++  @param[in] DwHc  The controller instance, with DwUsbBase set.
++
++  @retval TRUE   A DWC2 OTG core answered with a valid Synopsys ID.
++  @retval FALSE  Nothing is responding at DwUsbBase.
++**/
++STATIC
++BOOLEAN
++DwCorePresent (
++  IN  DWUSB_OTGHC_DEV *DwHc
++  )
++{
++  UINT32 Id;
++
++  Id = MmioRead32 (DwHc->DwUsbBase + GSNPSID);
++  if ((Id & DWC2_GSNPSID_ID_MASK) != DWC2_GSNPSID_OTG_ID) {
++    DEBUG ((
++      DEBUG_ERROR,
++      "DwUsbHostDxe: no DWC2 core at 0x%lx (GSNPSID reads 0x%08x): the "
++      "block is unpowered, held in reset, or the base address is wrong\n",
++      (UINT64)DwHc->DwUsbBase,
++      Id
++      ));
++    return FALSE;
++  }
++
++  DEBUG ((
++    DEBUG_INFO,
++    "DwUsbHostDxe: DWC2 core at 0x%lx, GSNPSID 0x%08x\n",
++    (UINT64)DwHc->DwUsbBase,
++    Id
++    ));
++  return TRUE;
++}
++
+ EFI_STATUS
+ DwCoreInit (
+   IN  DWUSB_OTGHC_DEV *DwHc,
+@@ -1412,6 +1479,13 @@
+   UINT32 UsbCfg = 0;
+   EFI_STATUS Status;
+ 
++  //
++  // Bail before the first polled handshake, not after the deadline.
++  //
++  if (!DwCorePresent (DwHc)) {
++    return EFI_DEVICE_ERROR;
++  }
++
+   UsbCfg = MmioRead32 (DwHc->DwUsbBase + GUSBCFG);
+ 
+   UsbCfg |= DWC2_GUSBCFG_ULPI_EXT_VBUS_DRV;
+--- a/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DriverBinding.c
++++ b/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DriverBinding.c
+@@ -145,8 +145,18 @@
+   /*
+    * UsbBusDxe as of b4e96b82b4e2e47e95014b51787ba5b43abac784 expects
+    * the HCD to do this. There is no agent invoking DwHcReset anymore.
++   *
++   * Its result is load-bearing: it is where the controller is actually
++   * brought up, so if it fails there is no host here. Publishing
++   * EFI_USB2_HC_PROTOCOL anyway just hands UsbBusDxe a controller whose
++   * every transfer will time out.
+    */
+-  DwHcReset (&DwHc->DwUsbOtgHc, EFI_USB_HC_RESET_HOST_CONTROLLER);
++  Status = DwHcReset (&DwHc->DwUsbOtgHc, EFI_USB_HC_RESET_HOST_CONTROLLER);
++  if (EFI_ERROR (Status)) {
++    DEBUG ((DEBUG_ERROR, "DwUsbHostDxe: controller reset failed: %r\n", Status));
++    goto Exit;
++  }
++
+   DwHcSetState (&DwHc->DwUsbOtgHc, EfiUsbHcStateOperational);
+ 
+   Status = gBS->InstallMultipleProtocolInterfaces (

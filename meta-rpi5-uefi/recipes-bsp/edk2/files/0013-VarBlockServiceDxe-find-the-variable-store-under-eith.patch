@@ -1,0 +1,237 @@
+diff --git a/Platform/RaspberryPi/Drivers/VarBlockServiceDxe/FileIo.c b/Platform/RaspberryPi/Drivers/VarBlockServiceDxe/FileIo.c
+--- a/Platform/RaspberryPi/Drivers/VarBlockServiceDxe/FileIo.c
++++ b/Platform/RaspberryPi/Drivers/VarBlockServiceDxe/FileIo.c
+@@ -7,9 +7,35 @@
+  *
+  **/
+ 
++#include <Guid/SystemNvDataGuid.h>
++#include <Library/BaseMemoryLib.h>
++
+ #include "VarBlockService.h"
+ 
+ 
++//
++// The firmware image doubles as the NV variable store: this driver writes the
++// variable region straight back into the file the VPU bootloader loaded. What
++// that file is CALLED is a property of the SD card layout, not of the
++// firmware. Upstream keeps it as RPI_EFI.fd and points config.txt's armstub=
++// at it; this platform ships it under armstub8-2712.bin, the default BCM2712
++// stub name the VPU bootloader auto-loads, so config.txt needs no armstub=
++// line at all. A single hardcoded name silently loses every NV variable on
++// whichever layout it does not match -- SetVariable and the FTW both succeed
++// against the in-RAM copy of the FV, Setup shows the new value, and DumpVars()
++// then finds no store to write it to.
++//
++// So probe both, and latch whichever one this card actually uses. A firmware
++// update fixes an already-deployed card of either layout without reflashing.
++//
++CHAR16 *CONST  mMappedFileNames[] = {
++  L"armstub8-2712.bin",
++  L"RPI_EFI.FD"
++};
++
++CONST UINTN  mMappedFileNameCount = ARRAY_SIZE (mMappedFileNames);
++
++
+ EFI_STATUS
+ FileWrite (
+   IN EFI_FILE_PROTOCOL *File,
+@@ -30,6 +56,35 @@
+ }
+ 
+ 
++/**
++  Read from a mapped file. Unlike FileWrite this is a probe helper, so a short
++  or absent file is an expected answer rather than a bug: no ASSERT.
++
++  @param  File[in]      Open file protocol instance.
++  @param  Offset[in]    Byte offset within the file.
++  @param  Buffer[out]   Destination buffer.
++  @param  Size[in,out]  On input, bytes to read; on output, bytes read.
++
++**/
++EFI_STATUS
++FileRead (
++  IN     EFI_FILE_PROTOCOL *File,
++  IN     UINTN             Offset,
++  OUT    VOID              *Buffer,
++  IN OUT UINTN             *Size
++  )
++{
++  EFI_STATUS Status;
++
++  Status = File->SetPosition (File, Offset);
++  if (EFI_ERROR (Status)) {
++    return Status;
++  }
++
++  return File->Read (File, Size, Buffer);
++}
++
++
+ VOID
+ FileClose (
+   IN  EFI_FILE_PROTOCOL *File
+@@ -108,6 +163,65 @@
+ }
+ 
+ 
++/**
++  Test one candidate name on one volume.
++
++  Opening the file is not enough to claim it: the name armstub8-2712.bin is the
++  BCM2712 default, and the sibling u-boot SD image in this project uses it for a
++  completely different payload. Writing our 0x20000-byte variable region into
++  THAT would corrupt someone else's bootloader. So require the file to actually
++  carry this firmware's NV store -- an EFI_FIRMWARE_VOLUME_HEADER tagged with
++  gEfiSystemNvDataFvGuid, at exactly the offset DoDump() would write to.
++
++  The signature and GUID are checked, but deliberately not the header checksum:
++  the in-RAM copy is already validated (and reformatted if need be) at init, and
++  a card whose stored region was torn by a power loss mid-dump should still be
++  recognized as ours so the next dump can repair it.
++
++  @param  Device[in]  Device path of the volume to probe.
++  @param  Name[in]    Candidate file name in the volume root.
++
++  @retval EFI_SUCCESS    The file exists and holds our variable store.
++  @retval EFI_NOT_FOUND  It does not; the caller should keep looking.
++
++**/
++STATIC
++EFI_STATUS
++CheckStoreFile (
++  IN  EFI_DEVICE_PATH_PROTOCOL *Device,
++  IN  CHAR16                   *Name
++  )
++{
++  EFI_STATUS                 Status;
++  EFI_FILE_PROTOCOL          *File;
++  EFI_FIRMWARE_VOLUME_HEADER FwVolHeader;
++  UINTN                      Size;
++
++  Status = FileOpen (Device, Name, &File, EFI_FILE_MODE_READ);
++  if (EFI_ERROR (Status)) {
++    return EFI_NOT_FOUND;
++  }
++
++  Size = sizeof (FwVolHeader);
++  Status = FileRead (File, mFvInstance->Offset, &FwVolHeader, &Size);
++  FileClose (File);
++
++  if (EFI_ERROR (Status) || (Size != sizeof (FwVolHeader))) {
++    DEBUG ((DEBUG_WARN, "'%s' is too short to hold the variable store\n", Name));
++    return EFI_NOT_FOUND;
++  }
++
++  if ((FwVolHeader.Signature != EFI_FVH_SIGNATURE) ||
++      !CompareGuid (&FwVolHeader.FileSystemGuid, &gEfiSystemNvDataFvGuid)) {
++    DEBUG ((DEBUG_WARN, "'%s' has no NV store at 0x%lx, not ours\n",
++      Name, (UINT64)mFvInstance->Offset));
++    return EFI_NOT_FOUND;
++  }
++
++  return EFI_SUCCESS;
++}
++
++
+ EFI_STATUS
+ CheckStore (
+   IN  EFI_HANDLE SimpleFileSystemHandle,
+@@ -116,7 +230,7 @@
+ {
+   EFI_STATUS Status;
+   EFI_BLOCK_IO_PROTOCOL *BlkIo;
+-  EFI_FILE_PROTOCOL *File;
++  UINTN Index;
+ 
+   *Device = NULL;
+   Status = gBS->HandleProtocol (
+@@ -139,16 +253,19 @@
+     goto ErrHandle;
+   }
+ 
+-  Status = FileOpen (DevicePathFromHandle (SimpleFileSystemHandle),
+-             mFvInstance->MappedFile, &File,
+-             EFI_FILE_MODE_READ);
++  for (Index = 0; Index < mMappedFileNameCount; Index++) {
++    Status = CheckStoreFile (DevicePathFromHandle (SimpleFileSystemHandle),
++               mMappedFileNames[Index]);
++    if (!EFI_ERROR (Status)) {
++      mFvInstance->MappedFile = mMappedFileNames[Index];
++      break;
++    }
++  }
++
+   if (EFI_ERROR (Status)) {
+     goto ErrHandle;
+   }
+ 
+-  /* We found it! Maybe do more checks...? */
+-
+-  FileClose (File);
+   *Device = DuplicateDevicePath (DevicePathFromHandle (SimpleFileSystemHandle));
+ 
+   ASSERT (*Device != NULL);
+diff --git a/Platform/RaspberryPi/Drivers/VarBlockServiceDxe/VarBlockService.h b/Platform/RaspberryPi/Drivers/VarBlockServiceDxe/VarBlockService.h
+--- a/Platform/RaspberryPi/Drivers/VarBlockServiceDxe/VarBlockService.h
++++ b/Platform/RaspberryPi/Drivers/VarBlockServiceDxe/VarBlockService.h
+@@ -37,6 +37,13 @@
+ 
+ extern EFI_FW_VOL_INSTANCE *mFvInstance;
+ 
++//
++// Candidate names for the file that backs the variable store, most specific
++// first. See FileIo.c for why there is more than one.
++//
++extern CHAR16 *CONST mMappedFileNames[];
++extern CONST UINTN mMappedFileNameCount;
++
+ typedef struct {
+   MEDIA_FW_VOL_DEVICE_PATH  FvDevPath;
+   EFI_DEVICE_PATH_PROTOCOL  EndDevPath;
+@@ -208,4 +215,12 @@
+   IN  EFI_FILE_PROTOCOL *File
+   );
+ 
++EFI_STATUS
++FileRead (
++  IN     EFI_FILE_PROTOCOL *File,
++  IN     UINTN             Offset,
++  OUT    VOID              *Buffer,
++  IN OUT UINTN             *Size
++  );
++
+ #endif
+diff --git a/Platform/RaspberryPi/Drivers/VarBlockServiceDxe/VarBlockService.c b/Platform/RaspberryPi/Drivers/VarBlockServiceDxe/VarBlockService.c
+--- a/Platform/RaspberryPi/Drivers/VarBlockServiceDxe/VarBlockService.c
++++ b/Platform/RaspberryPi/Drivers/VarBlockServiceDxe/VarBlockService.c
+@@ -843,10 +843,12 @@
+   mFvInstance->FvBase = (UINTN)BaseAddress;
+   mFvInstance->FvLength = (UINTN)Length;
+   mFvInstance->Offset = StartOffset;
+-  /*
+-   * Should I parse config.txt instead and find the real name?
+-   */
+-  mFvInstance->MappedFile = L"RPI_EFI.FD";
++  //
++  // A placeholder so the debug prints have something to name before a store is
++  // found. CheckStore() replaces this with the candidate that this card really
++  // uses; nothing writes through MappedFile until it has.
++  //
++  mFvInstance->MappedFile = mMappedFileNames[0];
+ 
+   Status = ValidateFvHeader (mFvInstance->VolumeHeader);
+   if (!EFI_ERROR (Status)) {
+diff --git a/Platform/RaspberryPi/Drivers/VarBlockServiceDxe/VarBlockServiceDxe.inf b/Platform/RaspberryPi/Drivers/VarBlockServiceDxe/VarBlockServiceDxe.inf
+--- a/Platform/RaspberryPi/Drivers/VarBlockServiceDxe/VarBlockServiceDxe.inf
++++ b/Platform/RaspberryPi/Drivers/VarBlockServiceDxe/VarBlockServiceDxe.inf
+@@ -55,6 +55,7 @@
+   gEdkiiNvVarStoreFormattedGuid			## PRODUCES ## PROTOCOL
+   gEfiEventVirtualAddressChangeGuid
+   gEfiEventReadyToBootGuid
++  gEfiSystemNvDataFvGuid                        ## CONSUMES ## GUID
+ 
+ [Protocols]
+   gEfiSimpleFileSystemProtocolGuid

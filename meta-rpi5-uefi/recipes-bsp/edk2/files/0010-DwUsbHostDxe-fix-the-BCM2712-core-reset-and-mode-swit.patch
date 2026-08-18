@@ -1,0 +1,224 @@
+From: appkins <nbatkins@gmail.com>
+Date: Tue, 18 Aug 2026 10:15:00 -0500
+Subject: [PATCH] DwUsbHostDxe: fix the BCM2712 core reset and mode switch
+
+Two defects keep the DWC2 OTG core behind the Pi 5's USB-C data port
+from ever coming up, both inherited from the dwc_otg reference driver
+this code descends from.
+
+1. The core soft reset is ordered backwards.
+
+DwCoreReset() waits for GRSTCTL.AHBIDLE and only then writes
+GRSTCTL.CSFTRST. That deadlocks whenever the core is entered with its
+AHB master mid-transfer: the reset that would return the master to idle
+is exactly what the driver refuses to issue until it sees idle. Nothing
+breaks the tie, so Wait4Bit() -- a busy-poll against the deadline
+DwHcReset() shares between DwCoreInit() and DwHcInit() -- spends the
+whole budget and the port is dead at the end of it.
+
+Linux fixed this in commit b8ccc593eeea ("usb: dwc2: Reorder AHBIDLE and
+CSFTRST in dwc2_core_reset()"), by John Youn of Synopsys:
+
+    According to the databook, the core soft reset should be done
+    before checking for AHBIDLE. The gadget version of core reset had
+    it correct but the hcd version did not. This fixes the hcd version.
+
+u-boot's dwc2_core_reset() has the same order. Ours did not.
+
+It is reachable here because the BCM2712 DWC2 is the same core the boot
+ROM drives for rpiboot, so EDK2 can inherit it with a transfer
+outstanding. Observed as DwUsbHostDxe consuming the entire
+DW_HC_RESET_TIMEOUT_MS budget in DriverBinding Start -- 995 ms of a
+1360 ms DXE phase, and 99.5% of all driver-binding time in the
+firmware, per ShellPkg's `dp`.
+
+Note the wait for CSFTRST to self-clear stays correct: Synopsys cores
+from rev 4.20a on stop self-clearing it and set CSFTRST_DONE (bit 29)
+instead, but every Pi including the BCM2712 carries a pre-4.20a core --
+which is also why Linux on this SoC reports the "_CSFTRST" flavour of
+its soft-reset timeout and not "_CSFTRST_DONE".
+
+2. The forced host-mode switch was not actually waited for.
+
+The core samples as a device out of reset, and the soft reset above puts
+it back there, so GUSBCFG.FORCEHOSTMODE is followed by an IDDIG debounce
+before the core reports host mode. There is no OTG ID pin on the Pi 4 or
+Pi 5 to do the selection -- Raspberry Pi's own "Using OTG mode on
+Raspberry Pi SBCs" whitepaper says so -- which makes forcing the mode
+mandatory rather than optional, and makes the settle a required step.
+
+A fixed 25 ms sleep was both too short and unverified. Poll
+GINTSTS.CURMODE for up to 110 ms instead, which is Linux's own bound in
+dwc2_wait_for_mode(), and warn rather than fail on expiry exactly as
+Linux does: the mode can still settle while the rest of init proceeds,
+and bailing would turn a slow switch into no USB at all.
+
+Also log the VideoCore firmware revision. On BCM2712 the DWC2 PHY is
+initialised by the bootloader and by nothing else -- rpi-eeprom added it
+in the 2023-12-06 release ("Initialise DWC PHY to enable DWC
+host+peripheral support under Linux"), and before that Linux failed on
+this very core with "dwc2_core_reset: HANG! Soft Reset timeout
+GRSTCTL_CSFTRST". No driver can substitute for it; the PHY registers are
+undocumented and absent from the device tree. Since the revision is a
+build timestamp, printing it turns "the core answers MMIO but never
+finishes its reset" into a one-line diagnosis.
+
+Upstream-Status: Submittable [with an RPi5 platform port]
+Signed-off-by: appkins <nbatkins@gmail.com>
+---
+--- a/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.c
++++ b/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.c
+@@ -31,6 +31,15 @@
+ #define DWC2_GSNPSID_ID_MASK   0xFFFF0000
+ #define DWC2_GSNPSID_OTG_ID    0x4F540000
+ 
++/*
++ * How long the core is given to report host mode after GUSBCFG.FORCEHOSTMODE
++ * is set. Linux allows the same 110 ms (dwc2_wait_for_mode): the soft reset
++ * just before this drops the core to device mode, and the IDDIG debounce
++ * filter has to expire before it comes back. There is no OTG ID pin on the
++ * Pi 4 or Pi 5, so the mode has to be forced rather than strapped.
++ */
++#define DWC2_HOST_MODE_TIMEOUT_US  (110000)
++
+   /*
+    * TimerPeriodic to account for timeout processing
+    * within DwHcTransfer.
+@@ -219,20 +228,44 @@
+ {
+   EFI_STATUS Status;
+ 
+-  Status = Wait4Bit (Timeout, DwHc->DwUsbBase + GRSTCTL, DWC2_GRSTCTL_AHBIDLE, 1);
+-  if (Status) {
+-    DEBUG ((DEBUG_ERROR, "DwCoreReset: AHBIDLE Timeout!\n"));
+-    return Status;
+-  }
+-
++  //
++  // Soft reset FIRST, AHB idle after -- not the other way round.
++  //
++  // Per the Synopsys databook, and Linux commit b8ccc593eeea ("usb: dwc2:
++  // Reorder AHBIDLE and CSFTRST in dwc2_core_reset()") by John Youn of
++  // Synopsys: "the core soft reset should be done before checking for
++  // AHBIDLE. The gadget version of core reset had it correct but the hcd
++  // version did not." u-boot's dwc2_core_reset() agrees.
++  //
++  // This driver descends from the pre-fix dwc_otg reference code and kept
++  // the wrong order, which deadlocks whenever the core is entered with its
++  // AHB master mid-transfer: the reset that would return the master to
++  // idle is precisely what the driver refuses to issue until it sees idle.
++  // Nothing breaks the tie, so Wait4Bit() spends the whole shared deadline
++  // and the port is dead at the end of it. That is reachable on the Pi 5,
++  // where this same core is what the boot ROM drives for rpiboot before
++  // EDK2 ever runs.
++  //
+   MmioWrite32 (DwHc->DwUsbBase + GRSTCTL, DWC2_GRSTCTL_CSFTRST);
+ 
++  //
++  // The core clears CSFTRST itself once the reset retires. Synopsys cores
++  // from rev 4.20a on instead set GRSTCTL_CSFTRST_DONE (bit 29) and leave
++  // CSFTRST standing, but every Pi -- BCM2712 included -- carries a
++  // pre-4.20a core, so the self-clear is the correct wait here.
++  //
+   Status = Wait4Bit (Timeout, DwHc->DwUsbBase + GRSTCTL, DWC2_GRSTCTL_CSFTRST, 0);
+   if (Status) {
+     DEBUG ((DEBUG_ERROR, "DwCoreReset: CSFTRST Timeout!\n"));
+     return Status;
+   }
+ 
++  Status = Wait4Bit (Timeout, DwHc->DwUsbBase + GRSTCTL, DWC2_GRSTCTL_AHBIDLE, 1);
++  if (Status) {
++    DEBUG ((DEBUG_ERROR, "DwCoreReset: AHBIDLE Timeout!\n"));
++    return Status;
++  }
++
+   MicroSecondDelay (100000);
+   return EFI_SUCCESS;
+ }
+@@ -1477,6 +1510,7 @@
+ {
+   UINT32 AhbCfg = 0;
+   UINT32 UsbCfg = 0;
++  UINT32 Elapsed;
+   EFI_STATUS Status;
+ 
+   //
+@@ -1527,10 +1561,45 @@
+   // Pi 5 this core sits behind the USB-C connector and samples as a
+   // device out of reset (the boot ROM's rpiboot gadget runs on it), so
+   // without the force a connected peripheral is never seen. The Synopsys
+-  // core is allowed up to 25 ms to effect a mode change.
++  // core is allowed up to 110 ms to effect a mode change.
++  //
++  // 110 ms is Linux's own bound (dwc2_wait_for_mode), and it is a debounce
++  // interval rather than a guess: the core soft reset just above drops the
++  // core back to device mode, and the IDDIG filter has to settle before it
++  // returns to host. 25 ms was optimistic. Note there is no OTG ID pin on
++  // the Pi 4 or Pi 5 -- Raspberry Pi's own OTG whitepaper says so -- which
++  // is why the mode must be forced here rather than strapped.
+   //
+   MmioOr32 (DwHc->DwUsbBase + GUSBCFG, DWC2_GUSBCFG_FORCEHOSTMODE);
+-  MicroSecondDelay (25000);
++
++  //
++  // Then wait for the core to actually say it is in host mode, rather than
++  // sleeping a fixed interval and hoping. GINTSTS.CURMODE is the core's own
++  // report. Linux polls the same bit for the same 110 ms
++  // (dwc2_wait_for_mode) and, like this, warns rather than failing if it
++  // expires -- the mode can still settle while the rest of init proceeds,
++  // and refusing to continue would turn a slow switch into no USB at all.
++  //
++  for (Elapsed = 0; Elapsed < DWC2_HOST_MODE_TIMEOUT_US; Elapsed += 1000) {
++    if ((MmioRead32 (DwHc->DwUsbBase + GINTSTS) & DWC2_GINTSTS_CURMODE) ==
++        DWC2_GINTSTS_CURMODE_HOST)
++    {
++      break;
++    }
++
++    MicroSecondDelay (1000);
++  }
++
++  if (Elapsed >= DWC2_HOST_MODE_TIMEOUT_US) {
++    DEBUG ((
++      DEBUG_ERROR,
++      "DwCoreInit: core never reported host mode in %d ms (GINTSTS 0x%08x)\n",
++      DWC2_HOST_MODE_TIMEOUT_US / 1000,
++      MmioRead32 (DwHc->DwUsbBase + GINTSTS)
++      ));
++  } else {
++    DEBUG ((DEBUG_ERROR, "DwCoreInit: host mode after %d ms\n", Elapsed / 1000));
++  }
+ 
+   return EFI_SUCCESS;
+ }
+--- a/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DriverBinding.c
++++ b/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DriverBinding.c
+@@ -137,6 +137,28 @@
+     DEBUG ((DEBUG_ERROR, "Couldn't power on USB: %r (continuing)\n", Status));
+   }
+ 
++  //
++  // Report the VideoCore firmware revision, because on BCM2712 it decides
++  // whether this controller can work at all. The DWC2 PHY here is brought
++  // up by the bootloader, not by any driver -- rpi-eeprom added it in the
++  // 2023-12-06 release ("Initialise DWC PHY to enable DWC host+peripheral
++  // support under Linux"), and before that Linux failed on this same core
++  // with "dwc2_core_reset: HANG! Soft Reset timeout GRSTCTL_CSFTRST". The
++  // revision is a build timestamp, so a value predating that release is
++  // the answer to a core that answers MMIO but never finishes its reset.
++  //
++  if (mFwProtocol->GetFirmwareRevision != NULL) {
++    UINT32 FwRevision;
++
++    if (!EFI_ERROR (mFwProtocol->GetFirmwareRevision (&FwRevision))) {
++      DEBUG ((
++        DEBUG_ERROR,
++        "DwUsbHostDxe: VideoCore firmware revision 0x%08x\n",
++        FwRevision
++        ));
++    }
++  }
++
+   Status = CreateDwUsbHc (&DwHc);
+   if (EFI_ERROR (Status)) {
+     goto Exit;

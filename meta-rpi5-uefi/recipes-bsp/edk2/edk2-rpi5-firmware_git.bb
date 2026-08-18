@@ -20,7 +20,7 @@ HOMEPAGE = "https://github.com/tianocore/edk2"
 LICENSE = "BSD-2-Clause-Patent"
 LIC_FILES_CHKSUM = "file://License.txt;md5=2b415520383f7964e96700ae12b4570a"
 
-DEPENDS = "acpica-native arm-trusted-firmware util-linux-native"
+DEPENDS = "acpica-native arm-trusted-firmware util-linux-native dtc-native"
 DEPENDS += "${@bb.utils.contains('RPI5_IPXE', '1', 'ipxe-efi', '', d)}"
 # do_compile validates the Secure Boot key files are DER X.509 before
 # handing them to the FDF -- see the RPI5_SECURE_BOOT_DEFAULT_KEYS block.
@@ -41,9 +41,45 @@ PV = "202602+git${SRCPV}"
 #                         merges INTO the git checkout at
 #                         ${UNPACKDIR}/edk2-platforms during do_unpack, then
 #                         0000 (the former fork's changed files), then this
-#                         layer's own 0001..0006 -- which edit files the
-#                         merged tree adds (0006: DWC2 OTG host on the
-#                         USB-C data port).
+#                         layer's own 0001..0007, 0010, the ACPI pair
+#                         0011/0012, and 0013/0014/0015 -- which edit files the
+#                         merged tree adds. 0011 (an RP1 I2C1 device) and 0012 (an
+#                         RP1 GEM Ethernet device) both append to Rp1.asi, so
+#                         they must stay in that order relative to each other.
+#                         0013 teaches VarBlockServiceDxe that this layer
+#                         deploys the FD as armstub8-2712.bin, not RPI_EFI.fd
+#                         -- without it the driver finds no file to write
+#                         back to and NOTHING set in Setup survives a reboot.
+#                         It is therefore coupled to the mcopy target name in
+#                         recipes-bsp/images/rpi5-uefi-sdimg.bb: change one
+#                         and you change the other.
+#                         0014 flips the SystemTableMode default from ACPI to
+#                         Device Tree, in both the PcdsDynamicHii default and
+#                         the VFR's F9 "Restore Defaults" value -- the onboard
+#                         NIC has no working driver path under ACPI (see the
+#                         comment 0014 adds to RPi5.dsc), and a node that
+#                         cannot reach the network is no use to the BMC.
+#                         0015 makes FdtDxe hand the OS the upstream device
+#                         tree (built from devicetree-rebasing and embedded in
+#                         the FD by do_compile) rather than the one the VPU
+#                         bootloader loaded, copying the firmware tree's
+#                         runtime values into it first. The firmware tree
+#                         describes RP1 the downstream way and an upstream
+#                         kernel binds nothing to it -- no clocks, no GPIO
+#                         chip, no NIC. This is u-boot's split: its own tree
+#                         plus update_fdt_from_fw(). Paired with 0014: in ACPI
+#                         mode FdtDxe never runs at all.
+#
+#                         The DWC2 OTG host on the USB-C data port is 0006
+#                         (put the driver on the BCM2712 core: 64-bit base
+#                         PCD, forced host mode),
+#                         0007 (make an absent core cheap to discover) and
+#                         0010 (fix the reset ordering and the mode-switch
+#                         wait); they must stay in that order. Numbering is
+#                         sparse: 0008/0009 were a SET_DOMAIN_STATE mailbox
+#                         experiment that no longer exists -- Linux powers
+#                         USB through the OLD SET_POWER_STATE tag with
+#                         device id 3, which is the call 0006 already makes.
 #
 # ORDERING IS LOAD-BEARING: do_unpack processes SRC_URI entries in listing
 # order, and the git fetcher PRUNES its destsuffix dir before checkout --
@@ -54,8 +90,10 @@ SRC_URI = "gitsm://github.com/tianocore/edk2.git;protocol=https;branch=master;na
            git://github.com/tianocore/edk2-platforms.git;protocol=https;branch=master;name=platforms;destsuffix=edk2-platforms \
            git://github.com/tianocore/edk2-non-osi.git;protocol=https;branch=master;name=nonosi;destsuffix=edk2-non-osi \
            git://github.com/tianocore/edk2-redfish-client.git;protocol=https;branch=main;name=redfishclient;destsuffix=edk2-redfish-client \
+           git://git.kernel.org/pub/scm/linux/kernel/git/devicetree/devicetree-rebasing.git;protocol=https;nobranch=1;name=dts;destsuffix=devicetree-rebasing \
            file://config.txt \
            file://ipxe-fdf-snippet.fdf.inc \
+           file://upstream-dtb-fdf-snippet.fdf.inc \
            file://edk2-platforms \
            file://0001-EDK2-Sd-Mmc-v4.patch \
            file://0000-edk2-platforms-RPi5-port.patch;patchdir=../edk2-platforms \
@@ -65,6 +103,13 @@ SRC_URI = "gitsm://github.com/tianocore/edk2.git;protocol=https;branch=master;na
            file://0004-PlatformBm-return-boot-option-number-not-list-index.patch;patchdir=../edk2-platforms \
            file://0005-PlatformBm-prune-USB-NIC-network-boot-options.patch;patchdir=../edk2-platforms \
            file://0006-DwUsbHostDxe-support-the-BCM2712-DWC2-OTG-Pi-5-USB-C.patch;patchdir=../edk2-platforms \
+           file://0007-DwUsbHostDxe-fail-fast-when-the-DWC2-core-is-absent.patch;patchdir=../edk2-platforms \
+           file://0010-DwUsbHostDxe-fix-the-BCM2712-core-reset-and-mode-swit.patch;patchdir=../edk2-platforms \
+           file://0011-Silicon-RP1-add-an-ACPI-I2C1-device.patch;patchdir=../edk2-platforms \
+           file://0012-Silicon-RP1-add-an-ACPI-GEM-Ethernet-device.patch;patchdir=../edk2-platforms \
+           file://0013-VarBlockServiceDxe-find-the-variable-store-under-eith.patch;patchdir=../edk2-platforms \
+           file://0014-RPi5-default-SystemTableMode-to-Device-Tree.patch;patchdir=../edk2-platforms \
+           file://0015-FdtDxe-hand-Linux-the-upstream-RP1-device-tree.patch;patchdir=../edk2-platforms \
            file://0100-UsbNetwork-assume-media-on-a-point-to-point-gadget.patch \
            file://0101-RedfishDiscoverDxe-skip-the-IPv6-discovery-leg.patch \
            file://0102-RedfishConfigHandler-quiesce-the-Redfish-stack-after.patch \
@@ -167,7 +212,14 @@ SRCREV_nonosi = "94d048981116e2e3eda52dad1a89958ee404098d"
 # This pin is the last commit before that boundary; every external GUID it
 # references is declared by the pinned edk2's .dec files.
 SRCREV_redfishclient = "a75f45cd69c74121fbf58900b9d92735d9a3373c"
-SRCREV_FORMAT = "edk2_platforms_nonosi_redfishclient"
+
+# devicetree-rebasing v7.2-dts: the Linux kernel's device trees, split out of
+# the kernel tree and released per merge window. Pinned to a release tag, not
+# a branch tip -- the Pi 5 DT is what the OS binds RP1 through, so it moves
+# only when someone chooses to move it. Bump this to match the kernel your
+# nodes actually run if their bindings ever diverge.
+SRCREV_dts = "edd49c1cfb49fd14165e83e33360c789f23ce39e"
+SRCREV_FORMAT = "edk2_platforms_nonosi_redfishclient_dts"
 
 # UNPACKDIR only exists from styhead (Yocto 5.1) on; scarthgap unpacks
 # straight into WORKDIR. Without this shim, S = "${UNPACKDIR}/git" never
@@ -305,6 +357,11 @@ do_configure[noexec] = "1"
 # within RPi5.fdf; it has no meaning outside this build (freshly generated,
 # not reused from anywhere else).
 IPXE_DRIVER_FILE_GUID = "c3e36d1a-8f42-4b3e-9a5d-2f6c7b8e9a10"
+
+# FFS file GUID of the embedded upstream device tree. FdtDxe looks the blob up
+# by this GUID (mUpstreamFdtFileGuid in FdtDxe.c, added by patch 0015); the
+# grep guard in do_compile fails the build if the two ever drift apart.
+UPSTREAM_DTB_FILE_GUID = "5b544db4-2b31-4549-b20d-c232a8020a98"
 
 do_compile() {
     cd ${S}
@@ -479,6 +536,45 @@ do_compile() {
         grep -qF "${IPXE_DRIVER_FILE_GUID}" "${fdf}" || \
             sed -i "\|${fdf_marker}|r ${snippet}" "${fdf}"
     fi
+
+    # --- embed the upstream device tree ----------------------------------
+    # The VPU bootloader loads the Raspberry Pi firmware DT, which describes
+    # RP1 the downstream way: a bare "simple-bus" hung off the PCIe root port
+    # with no PCI reg. A kernel built against the upstream bindings binds
+    # nothing to that -- no clocks, no GPIO chip, no on-board NIC. So build
+    # the kernel's own Pi 5 DT and embed it; FdtDxe (patch 0015) hands that to
+    # the OS instead, after copying the runtime values the firmware DT carries
+    # (MAC, per-SKU dma-ranges, model, bootloader config placement) into it.
+    # Exactly the split u-boot runs: its own tree plus update_fdt_from_fw().
+    #
+    # cpp then dtc by hand rather than devicetree-rebasing's Makefile: that
+    # Makefile builds every DT for every architecture, and we want one file.
+    dts_src="${WORKDIR}/devicetree-rebasing"
+    dts_dir="${dts_src}/src/arm64/broadcom"
+    upstream_dtb="${B}/bcm2712-rpi-5-b-upstream.dtb"
+    if [ ! -e "${dts_dir}/bcm2712-rpi-5-b.dts" ]; then
+        bbfatal "devicetree-rebasing: bcm2712-rpi-5-b.dts not found -- upstream layout changed, update this recipe"
+    fi
+    ${BUILD_CPP} -nostdinc -I "${dts_src}/include" -I "${dts_dir}" \
+        -undef -D__DTS__ -x assembler-with-cpp \
+        -o "${B}/bcm2712-rpi-5-b.dts.pp" "${dts_dir}/bcm2712-rpi-5-b.dts"
+    dtc -I dts -O dtb -@ -i "${dts_dir}" -i "${dts_src}/include" \
+        -o "${upstream_dtb}" "${B}/bcm2712-rpi-5-b.dts.pp"
+
+    # The blob is useless if FdtDxe cannot find it, and it finds it by GUID.
+    # Fail loudly rather than shipping firmware that silently falls back to
+    # the firmware DT and leaves the OS without RP1.
+    grep -qF "${UPSTREAM_DTB_FILE_GUID}" \
+        "${EDK2_PLATFORMS_PATH}/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.c" || \
+        bbfatal "FdtDxe.c does not carry UPSTREAM_DTB_FILE_GUID ${UPSTREAM_DTB_FILE_GUID} -- patch 0015 and this recipe have drifted apart"
+
+    snippet="${B}/upstream-dtb-fdf-snippet.fdf.inc"
+    sed \
+        -e "s|@UPSTREAM_DTB_FILE_GUID@|${UPSTREAM_DTB_FILE_GUID}|" \
+        -e "s|@UPSTREAM_DTB_PATH@|${upstream_dtb}|" \
+        "${WORKDIR}/upstream-dtb-fdf-snippet.fdf.inc" > "${snippet}"
+    grep -qF "${UPSTREAM_DTB_FILE_GUID}" "${fdf}" || \
+        sed -i "\|${fdf_marker}|r ${snippet}" "${fdf}"
 
     # --- Secure Boot -----------------------------------------------------
     # SECURE_BOOT_ENABLE swaps RPi5.dsc onto the real AuthVariableLib and
