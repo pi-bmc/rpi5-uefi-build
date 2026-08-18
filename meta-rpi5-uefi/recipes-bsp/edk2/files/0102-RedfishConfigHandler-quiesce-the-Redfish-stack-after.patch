@@ -1,0 +1,386 @@
+From: appkins <nbatkins@gmail.com>
+Date: Mon, 17 Aug 2026 12:00:00 -0500
+Subject: [PATCH] RedfishConfigHandler: quiesce the Redfish stack after provisioning
+
+Hot-unplugging the NIC that carries the Redfish service is fatal after the
+feature drivers have bound to it. Observed on RPi5 (2026-08-17) with the
+BMC's USB CDC-NCM gadget re-enumerating while the user sat in Setup:
+
+  UsbBusDxe detach -> DisconnectController cascade (NetworkCommon, Snp,
+  Mnp, Arp, Ip4, Tcp teardown) -> destroying RedfishDiscoverDxe's TCP4
+  probe child re-enters its Stop(), which DisconnectControllers the
+  discover-protocol handle mid-cascade -> RedfishConfigDriverBindingStop
+  sweeps every registered EDKII_REDFISH_CONFIG_HANDLER's Stop() -> each
+  RedfishClientPkg feature driver calls RedfishCleanupService() on a
+  service whose HTTP child died earlier in the same cascade ->
+  HttpIoDestroyIo's Http->Configure(Http, NULL) branches through the freed
+  EFI_HTTP_PROTOCOL instance:
+
+    Synchronous Exception at 0xAFAFAFAFAFAFAFAF   (DEBUG freed-pool fill)
+    X0 = stale Http pointer, X1 = 0 (NULL config), X2 = 0xAF.. fn pointer
+
+The feature drivers hold their HTTP/REST EX references without driver-model
+opens, so the handle database cannot order the teardown for them.
+
+Fix: stop every config handler while the transport is still fully alive
+(RedfishCleanupService then runs against valid protocol instances and NULLs
+the service pointers - the handlers' Stop() is idempotent, so the later
+sweep from a real disconnect cascade finds nothing to free), and latch
+gRedfishConfigQuiesced so the config-handler driver never initializes
+handlers or re-acquires services past that point. The latch also keeps the
+cached gEfiRedfishDiscoverProtocol from being dereferenced when a
+re-enumerated NIC reinstalls the discover protocol after its old instance
+was freed.
+
+The trigger has to be chosen carefully. ReadyToBoot is the obvious one and
+is wrong whenever RedfishClientPkg is also built: its feature core
+provisions from a ReadyToBoot callback of its own, and the two callbacks
+sit in the same event group at the same TPL with nothing defining their
+order. In practice this driver's callback runs FIRST - the DXE core queues
+signal-list entries with InsertHeadList so the later-created event notifies
+earlier, and this driver is always dispatched after the feature core
+because of its dependency on the credential protocol. Even where that
+ordering is reversed, the feature core lowers to TPL_APPLICATION before it
+walks the resource tree, which drains this callback first regardless.
+Quiescing at ReadyToBoot therefore NULLs every feature driver's Redfish
+service moments before that driver is asked to use it; the feature drivers
+return EFI_NOT_READY without logging anything and the platform silently
+provisions nothing at all - no BIOS attributes, no attribute registry, no
+boot options.
+
+So: quiesce on the feature core's own after-provisioning event when the
+client feature core is present (detected by its protocol), fall back to
+ReadyToBoot when it is not, and backstop both at ExitBootServices. Setup
+and boot loaders still run after all of these (EfiBootManagerBoot signals
+ReadyToBoot before StartImage), so the in-Setup hot-unplug window stays
+covered.
+
+Upstream-Status: Submittable [generic RedfishPkg lifecycle fix]
+Signed-off-by: appkins <nbatkins@gmail.com>
+---
+diff --git a/RedfishPkg/RedfishConfigHandler/RedfishConfigHandlerCommon.c b/RedfishPkg/RedfishConfigHandler/RedfishConfigHandlerCommon.c
+index f6c8c3d..6f79693 100644
+--- a/RedfishPkg/RedfishConfigHandler/RedfishConfigHandlerCommon.c
++++ b/RedfishPkg/RedfishConfigHandler/RedfishConfigHandlerCommon.c
+@@ -16,6 +16,25 @@ REDFISH_CONFIG_DRIVER_DATA  gRedfishConfigData;     // Only one Redfish service
+ EFI_EVENT                          gEndOfDxeEvent        = NULL;
+ EFI_EVENT                          gExitBootServiceEvent = NULL;
+ EDKII_REDFISH_CREDENTIAL_PROTOCOL  *gCredential          = NULL;
++EFI_EVENT                          gReadyToBootEvent       = NULL;
++EFI_EVENT                          gAfterProvisioningEvent = NULL;
++BOOLEAN                            gRedfishConfigQuiesced  = FALSE;
++
++//
++// RedfishClientPkg's feature core installs gEdkIIRedfishFeatureProtocolGuid
++// from its entry point, and signals gEfiRedfishClientFeatureAfterProvisioningGuid
++// as soon as RedfishFeatureDriverStartup() has finished walking the resource
++// tree. Both GUIDs are declared in RedfishClientPkg.dec and are duplicated here
++// as literals on purpose: RedfishPkg is the lower layer and must not take a
++// build dependency on RedfishClientPkg, which many platforms do not build.
++//
++STATIC EFI_GUID  mRedfishClientAfterProvisioningGuid = {
++  0xE547CB6F, 0x306F, 0x4226, { 0xAB, 0x70, 0xA0, 0x6E, 0x26, 0xF1, 0x2E, 0xD0 }
++};
++
++STATIC EFI_GUID  mRedfishClientFeatureProtocolGuid = {
++  0x785CC694, 0x4930, 0xEFBF, { 0x2A, 0xCB, 0xA4, 0xB6, 0xA1, 0xCC, 0xAA, 0x34 }
++};
+ 
+ /**
+   Callback function executed when the EndOfDxe event group is signaled.
+@@ -45,6 +64,125 @@ RedfishConfigOnEndOfDxe (
+   gEndOfDxeEvent = NULL;
+ }
+ 
++/**
++  Stop every registered Redfish config handler while the network stack that
++  carries their Redfish services is still fully connected, and latch
++  gRedfishConfigQuiesced so discovery and configuration cannot restart.
++
++  Leaving the services alive into Setup or the OS is what made a hot-unplug of
++  the underlying NIC fatal (observed with a BMC USB network gadget
++  re-enumerating while the user sat in Setup, RPi5 2026-08-17): the
++  DisconnectController cascade destroys the HTTP and REST EX instances first,
++  then reaches RedfishConfigDriverBindingStop, whose handler sweep makes each
++  feature driver call RedfishCleanupService over the freed transport - ending
++  in Http->Configure through freed pool (0xAFAFAFAFAFAFAFAF fill). Stopping the
++  handlers here runs the same cleanup while every protocol instance is still
++  valid, so the later sweep from a real disconnect cascade finds only NULLed
++  services.
++
++  Idempotent: the first caller latches, the rest return immediately.
++
++  @param[in]  Reason  Human readable trigger, for the debug log.
++
++**/
++STATIC
++VOID
++RedfishConfigQuiesce (
++  IN CONST CHAR8  *Reason
++  )
++{
++  EFI_STATUS  Status;
++
++  if (gRedfishConfigQuiesced) {
++    return;
++  }
++
++  gRedfishConfigQuiesced = TRUE;
++
++  Status = RedfishConfigCommonStop ();
++  DEBUG ((DEBUG_INFO, "%a: Redfish config handlers stopped (%a) - %r\n", __func__, Reason, Status));
++}
++
++/**
++  Callback function executed when RedfishClientPkg's feature core has finished
++  provisioning.
++
++  This is the normal quiesce point on any platform that builds the Redfish
++  client feature drivers: provisioning is complete, the transport is still up,
++  and Setup or the boot loader has not been started yet.
++
++  @param[in]   Event    Event whose notification function is being invoked.
++  @param[out]  Context  Pointer to the Context buffer.
++
++**/
++VOID
++EFIAPI
++RedfishConfigOnAfterProvisioning (
++  IN  EFI_EVENT  Event,
++  OUT VOID       *Context
++  )
++{
++  RedfishConfigQuiesce ("after Redfish provisioning");
++
++  //
++  // Close event, so it will not be invoked again.
++  //
++  gBS->CloseEvent (gAfterProvisioningEvent);
++  gAfterProvisioningEvent = NULL;
++}
++
++/**
++  Callback function executed when the ReadyToBoot event group is signaled.
++
++  Quiesces only when RedfishClientPkg's feature core is absent. When it is
++  present, quiescing here would break provisioning outright, so the work is
++  deferred to RedfishConfigOnAfterProvisioning().
++
++  The feature core provisions from its own ReadyToBoot callback, and both
++  callbacks sit in the same event group at the same TPL, so nothing in either
++  driver defines their relative order. In practice this one runs FIRST: the DXE
++  core queues signal-list entries with InsertHeadList, so the later-created
++  event notifies earlier, and this driver is always dispatched after the
++  feature core because of its dependency on the credential protocol. Even where
++  that ordering is reversed, the feature core lowers to TPL_APPLICATION before
++  it walks the resource tree, which drains this callback first regardless.
++
++  Quiescing here therefore NULLs every feature driver's Redfish service moments
++  before that driver is asked to use it. The feature drivers then return
++  EFI_NOT_READY without logging anything, and the platform silently provisions
++  nothing at all.
++
++  @param[in]   Event    Event whose notification function is being invoked.
++  @param[out]  Context  Pointer to the Context buffer.
++
++**/
++VOID
++EFIAPI
++RedfishConfigOnReadyToBoot (
++  IN  EFI_EVENT  Event,
++  OUT VOID       *Context
++  )
++{
++  VOID  *FeatureProtocol;
++
++  //
++  // Close event, so it will not be invoked again.
++  //
++  gBS->CloseEvent (gReadyToBootEvent);
++  gReadyToBootEvent = NULL;
++
++  if (!EFI_ERROR (gBS->LocateProtocol (&mRedfishClientFeatureProtocolGuid, NULL, &FeatureProtocol))) {
++    DEBUG ((
++      DEBUG_INFO,
++      "%a: Redfish feature core present, quiesce deferred to after-provisioning\n",
++      __func__
++      ));
++    return;
++  }
++
++  RedfishConfigQuiesce ("ReadyToBoot");
++}
++
+ /**
+   Callback function executed when the ExitBootService event group is signaled.
+ 
+@@ -61,6 +199,14 @@ RedfishConfigOnExitBootService (
+ {
+   EFI_STATUS  Status;
+ 
++  //
++  // Backstop for a platform whose feature core never reached its
++  // after-provisioning signal - it registered no resource at all, or failed
++  // before the walk. The handlers would still be holding services over network
++  // hardware the OS is about to take.
++  //
++  RedfishConfigQuiesce ("ExitBootServices");
++
+   Status = gCredential->StopService (gCredential, ServiceStopTypeExitBootService);
+   if (EFI_ERROR (Status) && (Status != EFI_UNSUPPORTED)) {
+     DEBUG ((DEBUG_ERROR, "Redfish credential protocol failed to stop service on ExitBootService: %r", Status));
+@@ -90,6 +236,16 @@ RedfishConfigDriverCommonUnload (
+     gExitBootServiceEvent = NULL;
+   }
+ 
++  if (gReadyToBootEvent != NULL) {
++    gBS->CloseEvent (gReadyToBootEvent);
++    gReadyToBootEvent = NULL;
++  }
++
++  if (gAfterProvisioningEvent != NULL) {
++    gBS->CloseEvent (gAfterProvisioningEvent);
++    gAfterProvisioningEvent = NULL;
++  }
++
+   if (gRedfishConfigData.Event != NULL) {
+     gBS->CloseEvent (gRedfishConfigData.Event);
+     gRedfishConfigData.Event = NULL;
+@@ -160,6 +316,51 @@ RedfishConfigCommonInit (
+     return Status;
+   }
+ 
++  //
++  // Create ReadyToBoot event to stop the Redfish config handlers while the
++  // network transport underneath their services is still alive.
++  //
++  Status = EfiCreateEventReadyToBootEx (
++             TPL_CALLBACK,
++             RedfishConfigOnReadyToBoot,
++             NULL,
++             &gReadyToBootEvent
++             );
++  if (EFI_ERROR (Status)) {
++    gBS->CloseEvent (gEndOfDxeEvent);
++    gEndOfDxeEvent = NULL;
++    gBS->CloseEvent (gExitBootServiceEvent);
++    gExitBootServiceEvent = NULL;
++    DEBUG ((DEBUG_ERROR, "%a: Fail to register Ready To Boot event.", __func__));
++    return Status;
++  }
++
++  //
++  // Create the Redfish after-provisioning event. RedfishClientPkg's feature
++  // core signals it once provisioning has finished, which is the only point
++  // where the handlers can be stopped without cutting provisioning short. On a
++  // platform without the client feature drivers nothing ever signals it and
++  // the ReadyToBoot path above does the work instead.
++  //
++  Status = gBS->CreateEventEx (
++                  EVT_NOTIFY_SIGNAL,
++                  TPL_CALLBACK,
++                  RedfishConfigOnAfterProvisioning,
++                  NULL,
++                  &mRedfishClientAfterProvisioningGuid,
++                  &gAfterProvisioningEvent
++                  );
++  if (EFI_ERROR (Status)) {
++    gBS->CloseEvent (gEndOfDxeEvent);
++    gEndOfDxeEvent = NULL;
++    gBS->CloseEvent (gExitBootServiceEvent);
++    gExitBootServiceEvent = NULL;
++    gBS->CloseEvent (gReadyToBootEvent);
++    gReadyToBootEvent = NULL;
++    DEBUG ((DEBUG_ERROR, "%a: Fail to register Redfish after-provisioning event.", __func__));
++    return Status;
++  }
++
+   return EFI_SUCCESS;
+ }
+ 
+diff --git a/RedfishPkg/RedfishConfigHandler/RedfishConfigHandlerCommon.h b/RedfishPkg/RedfishConfigHandler/RedfishConfigHandlerCommon.h
+index 203b394..11e0d3c 100644
+--- a/RedfishPkg/RedfishConfigHandler/RedfishConfigHandlerCommon.h
++++ b/RedfishPkg/RedfishConfigHandler/RedfishConfigHandlerCommon.h
+@@ -46,6 +46,17 @@ typedef struct {
+   REDFISH_CONFIG_SERVICE_INFORMATION    RedfishServiceInfo; /// Redfish Service information discovered
+ } REDFISH_CONFIG_DRIVER_DATA;
+ 
++//
++// TRUE once the registered Redfish config handlers have been stopped - after
++// Redfish provisioning has finished, or at ReadyToBoot on a platform that
++// builds no Redfish client feature drivers. Redfish discovery and
++// configuration must not restart past this point: the network stack underneath
++// any Redfish service can now be torn down at any time (OS driver takeover,
++// device hot-unplug), and the handlers would then free services over dead
++// transports.
++//
++extern BOOLEAN  gRedfishConfigQuiesced;
++
+ /**
+   Common code of unloading image for both UEFI/DXE Redfish Configuration drivers.
+ 
+diff --git a/RedfishPkg/RedfishConfigHandler/RedfishConfigHandlerDriver.c b/RedfishPkg/RedfishConfigHandler/RedfishConfigHandlerDriver.c
+index d6498b5..3b166a8 100644
+--- a/RedfishPkg/RedfishConfigHandler/RedfishConfigHandlerDriver.c
++++ b/RedfishPkg/RedfishConfigHandler/RedfishConfigHandlerDriver.c
+@@ -77,6 +77,14 @@ RedfishConfigHandlerInstalledCallback (
+   IN VOID       *Context
+   )
+ {
++  if (gRedfishConfigQuiesced) {
++    //
++    // Past ReadyToBoot: do not initialize config handlers over a network
++    // stack that can be torn down at any time from here on.
++    //
++    return;
++  }
++
+   if (!gRedfishDiscoverActivated) {
+     //
+     // No Redfish service is discovered yet.
+@@ -313,9 +321,11 @@ RedfishServiceDiscoveredCallback (
+   gBS->CloseEvent (RedfishDiscoveredToken->Event);
+ 
+   //
+-  // Only support one Redfish service on platform.
++  // Only support one Redfish service on platform. Ignore services that
++  // complete discovery after ReadyToBoot: their transport is no longer
++  // guaranteed to outlive the handlers that would bind to them.
+   //
+-  if (!gRedfishServiceDiscovered) {
++  if (!gRedfishConfigQuiesced && !gRedfishServiceDiscovered) {
+     RedfishInstance = RedfishDiscoveredToken->DiscoverList.RedfishInstances;
+     //
+     // Only pick up the first found Redfish service.
+@@ -363,6 +373,13 @@ AcquireRedfishServiceOnNetworkInterfaceCallback (
+   UINTN                                   NetworkInterfaceIndex;
+   EFI_REDFISH_DISCOVERED_TOKEN            *ThisRedfishDiscoveredToken;
+ 
++  if (gRedfishConfigQuiesced) {
++    //
++    // Past ReadyToBoot: do not start new Redfish service discovery.
++    //
++    return;
++  }
++
+   ThisNetworkInterface = mNetworkInterfaces;
+   //
+   // Loop to discover Redfish service on each network interface.
+@@ -440,6 +457,16 @@ RedfishDiscoverProtocolInstalled (
+   EFI_HANDLE  HandleBuffer;
+   VOID        *RedfishHostInterfaceReadyProtocol;
+ 
++  if (gRedfishConfigQuiesced) {
++    //
++    // Past ReadyToBoot: a re-installed discover protocol means the NIC was
++    // hot-unplugged and rebuilt (BMC USB gadget re-enumeration). Do not
++    // re-acquire: the cached gEfiRedfishDiscoverProtocol may point into the
++    // torn-down instance, and no configuration runs past this point anyway.
++    //
++    return;
++  }
++
+   DEBUG ((DEBUG_MANAGEABILITY, "%a: New network interface is installed on system by EFI Redfish discover driver.\n", __func__));
+ 
+   BufferSize = sizeof (EFI_HANDLE);

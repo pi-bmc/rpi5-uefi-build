@@ -18,6 +18,13 @@
       Rp1GpioLib|RpiBmcPkg/Library/Rp1GpioLib/Rp1GpioLib.inf
   }
   RpiBmcPkg/Drivers/FanConfigDxe/FanConfigDxe.inf
+!if $(SECURE_BOOT_ENABLE) == TRUE
+  # Gated deliberately. The page edits SecurityPkg's SecureBootEnable
+  # variable, which only AuthVariableLib interprets - and RPi5.dsc maps
+  # AuthVariableLibNull whenever SECURE_BOOT_ENABLE is FALSE. Building this
+  # unconditionally would give Setup and Redfish a switch wired to nothing.
+  RpiBmcPkg/Drivers/SecureBootToggleDxe/SecureBootToggleDxe.inf
+!endif
 
 [LibraryClasses.common]
   # Dark Setup theme: DisplayEngineDxe paints every form through the

@@ -63,21 +63,50 @@ firmware phase lasts (BDS wait, Setup, the shell) and stop themselves the
 first time both fail. Fail-open: a BMC without the Chassis handler just
 404s and the host keeps regulating its own fan.
 
-The *persistent* fan policy is additionally exposed as BIOS attributes:
-FanConfigDxe's Setup questions carry `x-UEFI-redfish-Bios.v1_0_9` labels
-(`FanConfigDxeMap.uni`), so the edk2-redfish-client Bios feature driver
-publishes `FanMode` (`Automatic`/`FixedSpeed`/`CustomTripPoints`),
-`FanFixedLevel` (`Level0`..`Level4`) and `FanTrip1C`..`FanTrip4C` under
-`/redfish/v1/Systems/1/Bios` with their allowable values in the
-BiosAttributeRegistry. A BMC write through that path lands in the same
-FanPolicy variable the Setup page edits and ActiveCoolerDxe re-reads
-every second — use it for durable policy, and the Thermal override for
-live steering.
+## BIOS attributes
 
-## Lifecycle: everything stops at ReadyToBoot
+Every configurable Setup question on the platform is exposed at
+`/redfish/v1/Systems/1/Bios`, with allowable values, defaults and menu
+paths in the BiosAttributeRegistry. The mechanism is one `*Map.uni` file
+per formset: a `#string` in the `x-UEFI-redfish-Bios.v1_0_9` language whose
+value is the attribute's schema path. `RedfishPlatformConfigDxe` harvests
+those from the HII database and the Bios feature driver publishes them.
+A question with no such string is invisible to Redfish — there is no
+fallback to the prompt text or the question ID.
 
-The whole exchange is a BDS-time one-shot. Two crashes taught us the stack
-must be treated as *finished* once boot begins:
+| Formset | Map file | Attributes |
+|---|---|---|
+| FanConfigDxe | `FanConfigDxeMap.uni` | `FanMode`, `FanFixedLevel`, `FanTrip1C`..`FanTrip4C` |
+| RpiPlatformDxe | `RpiPlatformDxeHiiMap.uni` | `SystemTableMode`, `AcpiSdCompatMode`, `AcpiSdLimitUhs`, `AcpiPcieEcamCompatMode`, `AcpiPcie32BitBarSpaceSizeMB`, `Pcie1Enabled`, `Pcie1MaxLinkSpeed` |
+| BootloaderConfigDxe | `BootloaderConfigDxeMap.uni` | `BlBootOrder`, `BlBootUart`, `BlPowerOffOnHalt`, `BlWakeOnGpio`, `BlPsuMaxCurrent` |
+| MemoryAttributeManagerDxe | `MemoryAttributeManagerDxeHiiMap.uni` | `MemoryAttributeProtocol` |
+| SecureBootToggleDxe | `SecureBootToggleDxeMap.uni` | `SecureBoot` (only with `RPI5_SECURE_BOOT=1`) |
+
+Attribute names share one flat namespace across the whole platform, hence
+the per-formset prefixes. Storage is each question's own efivarstore:
+HiiDatabase's ConfigRouting reads and writes `EFI_HII_VARSTORE_EFI_VARIABLE`
+questions with `gRT->GetVariable`/`SetVariable` directly, so a BMC write
+lands in exactly the variable the Setup page edits — no ConfigAccess
+needed. Most carry `RESET_REQUIRED` and take effect on the next boot; the
+fan policy applies live (ActiveCoolerDxe re-reads it every second).
+
+Two caveats worth knowing:
+
+* `Bl*` writes reach the `BlCfg` variable, **not** the EEPROM.
+  BootloaderConfigDxe re-seeds that variable from the live blconfig every
+  boot, and only the interactive "stage update" action in Setup writes the
+  SPI flash. Treat them as read-mostly.
+* Both platform formsets hide most questions behind `suppressif`, so
+  `PcdRedfishPlatformConfigFeatureProperty` is set to `0x03` in
+  `RpiRedfishClient.dsc.inc` (bit 1 harvests suppressed questions, bit 0
+  records menu paths). At the default of `0` the BMC would see one
+  attribute per formset, appearing and disappearing with unrelated
+  settings.
+
+## Lifecycle: everything stops once provisioning is done
+
+The whole exchange is a BDS-time one-shot. Three bugs taught us how narrow
+the window is:
 
 * Same-boot `EfiBootManagerBoot()` from the config-handler callback
   use-after-freed in-flight discovery state (fixed: override always stages
@@ -88,15 +117,38 @@ must be treated as *finished* once boot begins:
   `Stop()`, and the RedfishClientPkg feature drivers then ran
   `RedfishCleanupService` over the already-freed HTTP instance
   (`Http->Configure` through `0xAFAFAFAFAFAFAFAF`). Fixed by recipe patch
-  0102: `RedfishConfigHandlerDriver` stops all handlers at ReadyToBoot while
-  the transport is alive and latches so discovery/config never restarts
-  (Setup runs after ReadyToBoot, so the hot-unplug window is covered).
-  Patch 0103 additionally keeps USB NICs out of BDS boot-option enumeration
-  entirely, so Boot Manager refreshes in Setup stop poking the gadget link.
+  0102, which stops all handlers while the transport is alive and latches
+  so discovery/config never restarts. Patch 0103 additionally keeps USB
+  NICs out of BDS boot-option enumeration entirely, so Boot Manager
+  refreshes in Setup stop poking the gadget link.
+* **The first version of that 0102 fix quiesced at ReadyToBoot, and that
+  silently disabled the entire client feature layer.** `RedfishFeatureCoreDxe`
+  provisions from a ReadyToBoot callback of its own
+  (`PcdEdkIIRedfishFeatureDriverStartupEventGuid` defaults to that group),
+  and both callbacks sat in the same group at `TPL_CALLBACK` with nothing
+  ordering them. The quiesce won every time — the DXE core queues signal
+  entries with `InsertHeadList` so the later-created event notifies first,
+  and `RedfishConfigHandlerDriver` is dispatched after the feature core
+  because of its credential-protocol depex; and even reversed, the feature
+  core lowers to `TPL_APPLICATION` before walking the tree, which drains the
+  quiesce first anyway. Every feature driver then found
+  `RedfishService == NULL` and returned `EFI_NOT_READY` **without logging
+  anything**, so the platform published no BIOS attributes, no attribute
+  registry and no boot options, while `RpiRedfishSyncDxe` — which runs at
+  discovery time, long before any of this — kept working and made the stack
+  look healthy. 0102 now quiesces on the feature core's own
+  after-provisioning event (`gEfiRedfishClientFeatureAfterProvisioningGuid`,
+  detected via its feature protocol), falls back to ReadyToBoot only when
+  the client layer is absent, and backstops at ExitBootServices.
 
 Consequence: if the gadget enumerates so late that discovery would finish
 after ReadyToBoot, that boot simply skips the sync (fail-open) and the next
 reboot retries.
+
+**Rule for anything added here later:** never hang cleanup on ReadyToBoot
+while RedfishClientPkg is built in. That is the same event the feature core
+provisions on, and losing that race costs you the entire feature layer with
+no diagnostic whatsoever.
 
 ## Deployment contract (both sides MUST agree)
 

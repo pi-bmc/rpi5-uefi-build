@@ -1,0 +1,45 @@
+/** @file
+ *
+ *  Secure Boot enable/disable formset.
+ *
+ *  The varstore is SecurityPkg's own SecureBootEnable variable, not a
+ *  private one: a checkbox stores 1/0, which is exactly
+ *  SECURE_BOOT_ENABLE / SECURE_BOOT_DISABLE, so the browser's efivarstore
+ *  write is byte-for-byte what SecureBootConfigDxe's SaveSecureBootVariable
+ *  would have written. AuthVariableLib converts it to the global SecureBoot
+ *  state on the next boot - hence RESET_REQUIRED.
+ *
+ *  SPDX-License-Identifier: BSD-2-Clause-Patent
+ *
+ **/
+
+#include <Uefi/UefiMultiPhase.h>
+#include <Guid/HiiPlatformSetupFormset.h>
+#include <Guid/RpiSecureBootToggle.h>
+
+formset
+    guid      = RPI_SECURE_BOOT_TOGGLE_FORMSET_GUID,
+    title     = STRING_TOKEN(STR_FORM_SET_TITLE),
+    help      = STRING_TOKEN(STR_FORM_SET_TITLE_HELP),
+    classguid = EFI_HII_PLATFORM_SETUP_FORMSET_GUID,
+
+    efivarstore RPI_SECURE_BOOT_TOGGLE_VARSTORE_DATA,
+      attribute = EFI_VARIABLE_BOOTSERVICE_ACCESS | EFI_VARIABLE_NON_VOLATILE,
+      name  = SecureBootEnable,
+      guid  = RPI_SECURE_BOOT_ENABLE_VARIABLE_GUID;
+
+    form formid = 1,
+        title = STRING_TOKEN(STR_FORM_SET_TITLE);
+
+        subtitle text = STRING_TOKEN(STR_SECURE_BOOT_SUBTITLE);
+
+        checkbox varid = SecureBootEnable.Enable,
+            prompt      = STRING_TOKEN(STR_SECURE_BOOT_PROMPT),
+            help        = STRING_TOKEN(STR_SECURE_BOOT_HELP),
+            flags       = RESET_REQUIRED,
+            default     = 0,
+        endcheckbox;
+
+    endform;
+
+endformset;

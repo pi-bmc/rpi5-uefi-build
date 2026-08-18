@@ -27,6 +27,7 @@ usb_max_current_enable=1
 force_turbo=1
 
 [pi5]
+dtoverlay=dwc2,dr_mode=host
 usb_max_current_enable=1
 # Keep the dedicated 3-pin debug UART up: the UEFI console is hardwired to
 # it (PL011 @ 0x107d001000, 115200 8N1, PcdSerialRegisterBase in RPi5.dsc)

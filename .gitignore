@@ -17,3 +17,10 @@ openbmc
 # Python bytecode from running the host-BIOS ROM tooling in-tree
 __pycache__/
 *.pyc
+
+# Secure Boot signing keys. Only DER public certificates belong in-tree
+# (meta-rpi5-uefi/recipes-bsp/edk2/files/secureboot-keys); the PK private
+# key lives outside this work tree entirely -- see that directory's README.
+*.key
+*.pem
+secureboot-pk/

@@ -197,6 +197,20 @@ READ_LOCK_STATUS   = TRUE
 !include ArmPlatformPkg/SecureBootDefaultKeys.fdf.inc
   INF SecurityPkg/VariableAuthenticated/SecureBootConfigDxe/SecureBootConfigDxe.inf
   INF SecurityPkg/VariableAuthenticated/SecureBootDefaultKeysDxe/SecureBootDefaultKeysDxe.inf
+  #
+  # RPi5.dsc has always BUILT this application, but upstream never placed it
+  # in an FV, so the binary went nowhere. It enrolls db/KEK/PK from the
+  # embedded defaults and no-ops when the platform is already in User Mode.
+  #
+  # Being here does not by itself make it runnable: an application in a
+  # firmware volume needs a boot option with a MEDIA_FW_VOL_FILEPATH device
+  # path (FILE_GUID 6F18CB2F-1293-4BC1-ABB8-35F84C71812E), because the Shell
+  # does not map FVs as a filesystem. It is included so that a boot option
+  # or a PlatformBootManagerLib hook CAN reference it. The supported route
+  # today is Setup: Device Manager > Secure Boot Configuration > Reset
+  # Secure Boot Keys.
+  #
+  INF SecurityPkg/EnrollFromDefaultKeysApp/EnrollFromDefaultKeysApp.inf
 !endif
   INF SecurityPkg/Hash2DxeCrypto/Hash2DxeCrypto.inf
   INF MdeModulePkg/Universal/MonotonicCounterRuntimeDxe/MonotonicCounterRuntimeDxe.inf

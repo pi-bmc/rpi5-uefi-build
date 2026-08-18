@@ -6,27 +6,26 @@
 # pinned to the newest revision this edk2 fork's RedfishPkg can satisfy -
 # see the SRCREV_redfishclient comment in the recipe for the exact window.
 #
-# The FV side (RpiRedfishClient.fdf.inc) includes the client's own
-# RedfishClient.fdf.inc verbatim (REDFISH_CLIENT=TRUE from the recipe), so
-# the [Components] list below MUST build every module that file names -
-# the full upstream set, including the pieces the earlier explicit list
-# left out (Memory feature, the HiiToRedfish sample forms, SecureBoot).
-# The lists stay explicit here rather than using the client's gated
-# RedfishClient*.dsc.inc so the nuc-bios-build 0100 library adjustment
-# survives:
+# Both this list and the FV side (RpiRedfishClient.fdf.inc) are explicit
+# rather than !includes of the client's own gated RedfishClient*.dsc.inc /
+# RedfishClient.fdf.inc - those are keyed on REDFISH_CLIENT, which is not
+# defined at the sed insertion point, and using them would also lose the
+# nuc-bios-build 0100 library adjustment. The two lists MUST stay in sync:
+# a module built here but missing from the .fdf.inc compiles and then never
+# dispatches, which is silent.
 #
 #   * Every feature driver gets RedfishResourceIdentifyLibNull (the global
 #     mapping below) rather than the UUID-matching instance - on a DSP0270
 #     point-to-point link there is one host and one ComputerSystem, nothing
 #     to disambiguate.
 #
-# Upstream-parity behavior notes: HiiToRedfishBiosDxe surfaces its
-# BiosOption1..4 sample attributes next to the real FanConfigDxe ones, the
-# Memory feature provisions from HiiToRedfishMemoryDxe's sample questions
-# (RpiRedfishSyncDxe still reports the real SMBIOS type 17 modules), and
-# SecureBootDxe's provisioning fail-opens against a BMC without the
-# resource. All three are the price of tracking RedfishClient.fdf.inc
-# verbatim.
+# Behavior notes for the sample/inventory modules built here:
+# HiiToRedfishBiosDxe surfaces its BiosOption1..4 sample attributes next to
+# the real annotated platform ones (useful as a known-good control when
+# bringing the Bios path up); the Memory feature provisions from
+# HiiToRedfishMemoryDxe's sample questions while RpiRedfishSyncDxe keeps
+# reporting the real SMBIOS type 17 modules; and SecureBootDxe fail-opens
+# against a BMC that does not serve Systems/1/SecureBoot.
 #
 # Same section discipline as RpiRedfish.dsc.inc: opens the sections it
 # needs, MUST end by reopening [Components.common].
@@ -51,15 +50,34 @@
   AttributeRegistryV1_3_6Lib|RedfishClientPkg/ConverterLib/edk2library/AttributeRegistry/v1_3_6/Lib.inf
   BootOptionCollectionLib|RedfishClientPkg/ConverterLib/edk2library/BootOptionCollection/Lib.inf
   BootOptionV1_0_4Lib|RedfishClientPkg/ConverterLib/edk2library/BootOption/v1_0_4/Lib.inf
-  # MemoryV1_7_1Lib|RedfishClientPkg/ConverterLib/edk2library/Memory/v1_7_1/Lib.inf
-  # MemoryCollectionLib|RedfishClientPkg/ConverterLib/edk2library/MemoryCollection/Lib.inf
-  # SecureBootV1_1_0Lib|RedfishClientPkg/ConverterLib/edk2library/SecureBoot/v1_1_0/Lib.inf
-  # SecureBootDxe's variable access. RPi5.dsc maps these only under
-  # SECURE_BOOT_ENABLE (FALSE on this platform), so the client layer
-  # carries its own mappings; their remaining deps (VariablePolicyHelperLib
-  # etc.) are global in RPi5.dsc.
-  # SecureBootVariableLib|SecurityPkg/Library/SecureBootVariableLib/SecureBootVariableLib.inf
-  # PlatformPKProtectionLib|SecurityPkg/Library/PlatformPKProtectionLibVarPolicy/PlatformPKProtectionLibVarPolicy.inf
+  MemoryV1_7_1Lib|RedfishClientPkg/ConverterLib/edk2library/Memory/v1_7_1/Lib.inf
+  MemoryCollectionLib|RedfishClientPkg/ConverterLib/edk2library/MemoryCollection/Lib.inf
+  SecureBootV1_1_0Lib|RedfishClientPkg/ConverterLib/edk2library/SecureBoot/v1_1_0/Lib.inf
+  # SecureBootDxe's variable access. RPi5.dsc maps these itself, but only
+  # inside its !if $(SECURE_BOOT_ENABLE) == TRUE block, so the client layer
+  # has to cover the FALSE case - and must NOT redefine them in the TRUE
+  # case. Their remaining deps (VariablePolicyHelperLib etc.) are global in
+  # RPi5.dsc either way.
+!if $(SECURE_BOOT_ENABLE) == FALSE
+  SecureBootVariableLib|SecurityPkg/Library/SecureBootVariableLib/SecureBootVariableLib.inf
+  PlatformPKProtectionLib|SecurityPkg/Library/PlatformPKProtectionLibVarPolicy/PlatformPKProtectionLibVarPolicy.inf
+!endif
+
+[PcdsFixedAtBuild.common]
+  # RedfishPlatformConfigDxe feature bits (RedfishPlatformConfigDxe.h):
+  #   0x01 REDFISH_PLATFORM_CONFIG_BUILD_MENU_PATH  - record each question's
+  #        Setup menu path so BiosAttributeRegistryDxe can emit MenuPath in
+  #        the registry, which is what makes the registry navigable.
+  #   0x02 REDFISH_PLATFORM_CONFIG_ALLOW_SUPPRESSED - harvest questions that
+  #        are currently suppressed.
+  #
+  # Bit 1 is not optional here. Both platform formsets hide most of their
+  # questions behind suppressif on another question's value - RpiPlatformDxe
+  # gates every ACPI question on SystemTableMode, FanConfigDxe gates the
+  # fixed level and all four trip points on FanPolicy.Mode - so with the
+  # default of 0 the BMC would see one attribute per formset and the rest
+  # would appear and disappear depending on unrelated settings.
+  gEfiRedfishPkgTokenSpaceGuid.PcdRedfishPlatformConfigFeatureProperty|0x03
 
 [Components.common]
   # RedfishPkg/MdeModulePkg pieces the client depends on, kept out of the
@@ -76,7 +94,7 @@
   RedfishClientPkg/RedfishConfigLangMapDxe/RedfishConfigLangMapDxe.inf
   RedfishClientPkg/HiiToRedfishBootDxe/HiiToRedfishBootDxe.inf
   RedfishClientPkg/HiiToRedfishBiosDxe/HiiToRedfishBiosDxe.inf
-  # RedfishClientPkg/HiiToRedfishMemoryDxe/HiiToRedfishMemoryDxe.inf
+  RedfishClientPkg/HiiToRedfishMemoryDxe/HiiToRedfishMemoryDxe.inf
   # Features. ComputerSystemDxe deliberately has NO scoped
   # RedfishResourceIdentifyLib override: the global Null mapping above is
   # the point (see header).
@@ -86,9 +104,9 @@
   RedfishClientPkg/Features/BiosAttributeRegistry/v1_3_6/BiosAttributeRegistryDxe.inf
   RedfishClientPkg/Features/BootOptionCollection/BootOptionCollectionDxe.inf
   RedfishClientPkg/Features/BootOption/v1_0_4/Dxe/BootOptionDxe.inf
-  # RedfishClientPkg/Features/SecureBoot/v1_1_0/Dxe/SecureBootDxe.inf
-  # RedfishClientPkg/Features/Memory/V1_7_1/Dxe/MemoryDxe.inf
-  # RedfishClientPkg/Features/MemoryCollectionDxe/MemoryCollectionDxe.inf
+  RedfishClientPkg/Features/SecureBoot/v1_1_0/Dxe/SecureBootDxe.inf
+  RedfishClientPkg/Features/Memory/V1_7_1/Dxe/MemoryDxe.inf
+  RedfishClientPkg/Features/MemoryCollectionDxe/MemoryCollectionDxe.inf
   # Schema converters for exactly the features built.
   RedfishClientPkg/Converter/ComputerSystem/v1_5_0/RedfishComputerSystem_V1_5_0_Dxe.inf
   RedfishClientPkg/Converter/ComputerSystemCollection/RedfishComputerSystemCollection_Dxe.inf
@@ -96,5 +114,6 @@
   RedfishClientPkg/Converter/AttributeRegistry/v1_3_6/RedfishAttributeRegistry_V1_3_6_Dxe.inf
   RedfishClientPkg/Converter/BootOptionCollection/RedfishBootOptionCollection_Dxe.inf
   RedfishClientPkg/Converter/BootOption/v1_0_4/RedfishBootOption_V1_0_4_Dxe.inf
-  # RedfishClientPkg/Converter/Memory/v1_7_1/RedfishMemory_V1_7_1_Dxe.inf
-  # RedfishClientPkg/Converter/MemoryCollection/RedfishMemoryCollection_Dxe.inf
+  RedfishClientPkg/Converter/Memory/v1_7_1/RedfishMemory_V1_7_1_Dxe.inf
+  RedfishClientPkg/Converter/MemoryCollection/RedfishMemoryCollection_Dxe.inf
+  RedfishClientPkg/Converter/SecureBoot/v1_1_0/RedfishSecureBoot_V1_1_0_Dxe.inf

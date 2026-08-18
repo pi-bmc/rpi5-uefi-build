@@ -17,6 +17,7 @@
 [Sources]
   RpiPlatformDxe.c
   RpiPlatformDxeHii.uni
+  RpiPlatformDxeHiiMap.uni
   RpiPlatformDxeHii.vfr
   ConfigTable.c
   Peripherals.c

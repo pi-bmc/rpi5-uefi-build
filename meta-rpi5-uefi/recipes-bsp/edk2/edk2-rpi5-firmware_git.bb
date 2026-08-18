@@ -22,6 +22,9 @@ LIC_FILES_CHKSUM = "file://License.txt;md5=2b415520383f7964e96700ae12b4570a"
 
 DEPENDS = "acpica-native arm-trusted-firmware util-linux-native"
 DEPENDS += "${@bb.utils.contains('RPI5_IPXE', '1', 'ipxe-efi', '', d)}"
+# do_compile validates the Secure Boot key files are DER X.509 before
+# handing them to the FDF -- see the RPI5_SECURE_BOOT_DEFAULT_KEYS block.
+DEPENDS += "${@bb.utils.contains('RPI5_SECURE_BOOT_DEFAULT_KEYS', '1', 'openssl-native', '', d)}"
 
 PV = "202602+git${SRCPV}"
 
@@ -29,8 +32,10 @@ PV = "202602+git${SRCPV}"
 #   edk2 tree:            0001-EDK2-Sd-Mmc-v4 (the former fork's only commit),
 #                         then 0100 (UsbNetwork point-to-point media),
 #                         0101 (skip IPv6 discovery leg), 0102 (quiesce the
-#                         Redfish stack at ReadyToBoot -- the in-Setup
-#                         gadget-detach use-after-free), 0103 (keep USB NICs
+#                         Redfish stack after provisioning -- the in-Setup
+#                         gadget-detach use-after-free; NOT at ReadyToBoot,
+#                         which races the client feature core and kills
+#                         provisioning outright), 0103 (keep USB NICs
 #                         out of BDS boot-option enumeration).
 #   edk2-platforms tree:  file://edk2-platforms (the RPi5 port's ADDED files)
 #                         merges INTO the git checkout at
@@ -62,15 +67,53 @@ SRC_URI = "gitsm://github.com/tianocore/edk2.git;protocol=https;branch=master;na
            file://0006-DwUsbHostDxe-support-the-BCM2712-DWC2-OTG-Pi-5-USB-C.patch;patchdir=../edk2-platforms \
            file://0100-UsbNetwork-assume-media-on-a-point-to-point-gadget.patch \
            file://0101-RedfishDiscoverDxe-skip-the-IPv6-discovery-leg.patch \
-           file://0102-RedfishConfigHandler-quiesce-the-Redfish-stack-at-Re.patch \
+           file://0102-RedfishConfigHandler-quiesce-the-Redfish-stack-after.patch \
            file://0103-UefiBootManagerLib-do-not-enumerate-USB-NICs-as-boot.patch \
            file://0104-JsonLib-fix-RELEASE-build-of-lex_unget_unsave.patch \
            file://RpiBmcPkg \
            file://Rp1GemPkg \
            file://RpiRedfishPkg \
+           file://secureboot-keys \
            file://usbnet-dsc-snippet.inc \
            file://usbnet-fdf-snippet.fdf.inc \
+           ${SECUREBOOT_MS_CERTS} \
            "
+
+# Microsoft's Secure Boot CA certificates, fetched rather than vendored.
+#
+# These are the canonical URLs behind Microsoft's fwlink redirects (321185,
+# 321192, 321194 for the 2011 generation; 2239775, 2239776, 2239872 for
+# 2023). Use these direct URLs, NOT the fwlinks: bitbake's decodeurl() /
+# encodeurl() round trip mangles a query string, turning "?linkid=2239775"
+# into "%3Flinkid%3D2239775" and breaking the fetch. The %20 in the 2023
+# paths does survive the round trip -- verified against poky's own
+# bitbake/lib/bb/fetch2.
+#
+# The sha256sum of each file IS that certificate's SHA-256 fingerprint,
+# because these are raw DER blobs. So the checksums below are not just
+# download integrity -- they pin the exact certificate identity, and
+# bitbake refuses to build if Microsoft ever serves different bytes at
+# these paths. Cross-check any change against the fingerprint table in
+# files/secureboot-keys/README.md before accepting it.
+#
+# Only pulled in when the default key set is wanted, so a build with
+# RPI5_SECURE_BOOT_DEFAULT_KEYS=0 needs no network access for this.
+SECUREBOOT_MS_CERT_BASE = "https://www.microsoft.com/pkiops/certs"
+SECUREBOOT_MS_CERTS = "${@bb.utils.contains('RPI5_SECURE_BOOT_DEFAULT_KEYS', '1', ' \
+    ${SECUREBOOT_MS_CERT_BASE}/MicCorKEKCA2011_2011-06-24.crt;name=mskek2011;downloadfilename=MicCorKEKCA2011.crt;subdir=secureboot-certs \
+    ${SECUREBOOT_MS_CERT_BASE}/microsoft%20corporation%20kek%202k%20ca%202023.crt;name=mskek2023;downloadfilename=MicCorKEK2KCA2023.crt;subdir=secureboot-certs \
+    ${SECUREBOOT_MS_CERT_BASE}/MicWinProPCA2011_2011-10-19.crt;name=msdbwin2011;downloadfilename=MicWinProPCA2011.crt;subdir=secureboot-certs \
+    ${SECUREBOOT_MS_CERT_BASE}/MicCorUEFCA2011_2011-06-27.crt;name=msdbuefi2011;downloadfilename=MicCorUEFCA2011.crt;subdir=secureboot-certs \
+    ${SECUREBOOT_MS_CERT_BASE}/windows%20uefi%20ca%202023.crt;name=msdbwin2023;downloadfilename=WindowsUEFICA2023.crt;subdir=secureboot-certs \
+    ${SECUREBOOT_MS_CERT_BASE}/microsoft%20uefi%20ca%202023.crt;name=msdbuefi2023;downloadfilename=MicrosoftUEFICA2023.crt;subdir=secureboot-certs \
+', '', d)}"
+
+SRC_URI[mskek2011.sha256sum]   = "a1117f516a32cefcba3f2d1ace10a87972fd6bbe8fe0d0b996e09e65d802a503"
+SRC_URI[mskek2023.sha256sum]   = "3cd3f0309edae228767a976dd40d9f4affc4fbd5218f2e8cc3c9dd97e8ac6f9d"
+SRC_URI[msdbwin2011.sha256sum] = "e8e95f0733a55e8bad7be0a1413ee23c51fcea64b3c8fa6a786935fddcc71961"
+SRC_URI[msdbuefi2011.sha256sum] = "48e99b991f57fc52f76149599bff0a58c47154229b9f8d603ac40d3500248507"
+SRC_URI[msdbwin2023.sha256sum] = "076f1fea90ac29155ebf77c17682f75f1fdd1be196da302dc8461e350a9ae330"
+SRC_URI[msdbuefi2023.sha256sum] = "f6124e34125bee3fe6d79a574eaa7b91c0e7bd9d929c1a321178efd611dad901"
 # Upstream pins chosen for byte-parity with the retired NumberOneGit forks
 # (audited 2026-08-17 with git merge-base + reconstruction diffs):
 #   edk2:      the fork was upstream master @ this exact commit plus ONE
@@ -168,6 +211,47 @@ RPI5_REDFISH_MAC ??= "da:c0:ff:ee:10:02"
 # disabled (the credential library then reports AuthMethodNone).
 RPI5_REDFISH_USER ??= "admin"
 RPI5_REDFISH_PASSWORD ??= "admin"
+
+# UEFI Secure Boot. RPi5.dsc already carries a complete SECURE_BOOT_ENABLE
+# story -- real AuthVariableLib instead of the Null one, SecureBootConfigDxe
+# (the Setup pages for enrolling PK/KEK/db and the "Attempt Secure Boot"
+# toggle), SecureBootDefaultKeysDxe, EnrollFromDefaultKeysApp, and
+# DxeImageVerificationLib wired into SecurityStubDxe -- all of it behind
+# !if blocks that default to FALSE upstream. This knob just turns it on.
+#
+# Two things follow from it:
+#   * RpiBmcPkg/SecureBootToggleDxe's checkbox (and therefore the
+#     /Bios/Attributes/SecureBoot Redfish attribute) only does anything with
+#     this on: with AuthVariableLibNull the SecureBootEnable variable is not
+#     interpreted by anyone.
+#   * RedfishClientPkg's SecureBootDxe feature driver, which serves
+#     Systems/1/SecureBoot, links SecureBootVariableLib either way --
+#     RpiRedfishClient.dsc.inc maps it itself when this is FALSE.
+#
+# Size: enabling this pulls OpensslLib/BaseCryptLib into VariableRuntimeDxe
+# and SecurityStubDxe. Check FVMAIN_COMPACT headroom in RPI_EFI.report.txt
+# after the first build with it on.
+RPI5_SECURE_BOOT ??= "1"
+
+# Embed the default key set (files/secureboot-keys, see its README) as
+# PKDefault/KEKDefault/dbDefault. Without this the SECURE_BOOT_ENABLE build
+# still boots, but comes up in Setup Mode with empty defaults and there is
+# nothing for "Reset Secure Boot Keys" to enroll.
+#
+# Every file must be a DER X.509 cert with an RSA key: the FDF wires each
+# one in as a SECTION RAW and SecureBootVariableProvisionLib runs
+# RsaGetPublicKeyFromX509() over it, building the EFI_SIGNATURE_LISTs
+# itself. No PEM, no .esl.
+#
+# DBX is deliberately unset: the UEFI revocation list is image hashes, not
+# certificates, so it cannot go through this path at all. Apply revocations
+# at runtime with a signed dbx update.
+#
+# Enrolling stays a deliberate act — see the README. SecureBootDefaultKeysDxe
+# only populates the *Default variables; the platform boots in Setup Mode
+# until someone runs "Reset Secure Boot Keys" in Setup or
+# EnrollFromDefaultKeysApp from the Shell.
+RPI5_SECURE_BOOT_DEFAULT_KEYS ??= "1"
 
 # RELEASE, DEBUG or NOOPT, per RPi5.dsc's [Defines] BUILD_TARGETS.
 RPI5_BUILD_TARGET ??= "RELEASE"
@@ -343,12 +427,72 @@ do_compile() {
             sed -i "\|${fdf_marker}|r ${snippet}" "${fdf}"
     fi
 
+    # --- Secure Boot -----------------------------------------------------
+    # SECURE_BOOT_ENABLE swaps RPi5.dsc onto the real AuthVariableLib and
+    # brings in SecureBootConfigDxe, SecureBootDefaultKeysDxe and
+    # DxeImageVerificationLib. DEFAULT_KEYS then embeds the key set;
+    # ArmPlatformPkg/SecureBootDefaultKeys.fdf.inc (already !included by
+    # RPi5.fdf inside its SECURE_BOOT_ENABLE guard) reads these five macros.
+    #
+    # NOTE: an undefined macro in an FDF/DSC !if evaluates to 0 rather than
+    # erroring, so a typo here does not fail the build -- it silently ships
+    # firmware with empty key defaults. Verify "PK Default"/"KEK Default"/
+    # "DB Default" appear in RPI_EFI.report.txt after building.
+    secure_boot_define=""
+    if [ "${RPI5_SECURE_BOOT}" = "1" ]; then
+        secure_boot_define="-D SECURE_BOOT_ENABLE=TRUE"
+
+        if [ "${RPI5_SECURE_BOOT_DEFAULT_KEYS}" = "1" ]; then
+            # Two sources, on purpose. The PK is ours and ships in the layer
+            # (only its public DER -- the private key lives outside this
+            # tree entirely); Microsoft's CAs are fetched by the bitbake
+            # fetcher into secureboot-certs/, checksum-pinned in SRC_URI.
+            #
+            # ${WORKDIR}, not ${UNPACKDIR}: this recipe already locates its
+            # other file:// directories that way (see the RpiBmcPkg copy
+            # above), so keep the one convention.
+            pkdir="${WORKDIR}/secureboot-keys"
+            certdir="${WORKDIR}/secureboot-certs"
+
+            [ -f "${pkdir}/PkDefault.der" ] || \
+                bbfatal "RPI5_SECURE_BOOT_DEFAULT_KEYS=1 but ${pkdir}/PkDefault.der is missing"
+            for k in MicCorKEKCA2011.crt MicCorKEK2KCA2023.crt \
+                     MicWinProPCA2011.crt MicCorUEFCA2011.crt \
+                     WindowsUEFICA2023.crt MicrosoftUEFICA2023.crt; do
+                [ -f "${certdir}/$k" ] || \
+                    bbfatal "RPI5_SECURE_BOOT_DEFAULT_KEYS=1 but ${certdir}/$k was not fetched"
+            done
+
+            # Every one of these must be a DER X.509 cert with an RSA key:
+            # SecureBootVariableProvisionLib runs RsaGetPublicKeyFromX509()
+            # over each SECTION RAW. Catch a bad file here rather than
+            # shipping firmware whose key defaults silently fail to load.
+            for k in "${pkdir}/PkDefault.der" "${certdir}"/*.crt; do
+                openssl x509 -inform DER -in "$k" -noout >/dev/null 2>&1 || \
+                    bbfatal "$k is not a DER X.509 certificate"
+            done
+
+            secure_boot_define="${secure_boot_define} -D DEFAULT_KEYS=TRUE"
+            secure_boot_define="${secure_boot_define} -D PK_DEFAULT_FILE=${pkdir}/PkDefault.der"
+            # KEK: both Microsoft generations (2011 expired 2026-06-24).
+            secure_boot_define="${secure_boot_define} -D KEK_DEFAULT_FILE1=${certdir}/MicCorKEKCA2011.crt"
+            secure_boot_define="${secure_boot_define} -D KEK_DEFAULT_FILE2=${certdir}/MicCorKEK2KCA2023.crt"
+            # db: Windows + third-party (shim) CAs, both generations. Drop
+            # the two UEFI CAs if this board must never boot shim/Linux.
+            secure_boot_define="${secure_boot_define} -D DB_DEFAULT_FILE1=${certdir}/MicWinProPCA2011.crt"
+            secure_boot_define="${secure_boot_define} -D DB_DEFAULT_FILE2=${certdir}/MicCorUEFCA2011.crt"
+            secure_boot_define="${secure_boot_define} -D DB_DEFAULT_FILE3=${certdir}/WindowsUEFICA2023.crt"
+            secure_boot_define="${secure_boot_define} -D DB_DEFAULT_FILE4=${certdir}/MicrosoftUEFICA2023.crt"
+        fi
+    fi
+
     build \
         -a AARCH64 -t GCC -b ${RPI5_BUILD_TARGET} \
         -p edk2-platforms/Platform/RaspberryPi/RPi5/RPi5.dsc \
         -n ${@oe.utils.cpu_count()} \
         -D TFA_BUILD_ARTIFACTS=${DEPLOY_DIR_IMAGE} \
         ${redfish_client_define} \
+        ${secure_boot_define} \
         --pcd gEfiMdeModulePkgTokenSpaceGuid.PcdFirmwareVersionString=L"${RPI5_FW_VERSION}" \
         ${RPI5_EDK2_EXTRA_FLAGS} \
         -y ${B}/RPI_EFI.report.txt

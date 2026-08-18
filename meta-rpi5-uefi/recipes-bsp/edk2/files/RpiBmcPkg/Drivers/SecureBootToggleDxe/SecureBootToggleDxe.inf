@@ -1,0 +1,52 @@
+## @file
+#
+#  SecureBootToggleDxe - "Secure Boot" Setup page (Device Manager) editing
+#  SecurityPkg's SecureBootEnable variable, annotated so it also becomes the
+#  SecureBoot BIOS attribute over Redfish.
+#
+#  Only meaningful with SECURE_BOOT_ENABLE=TRUE (real AuthVariableLib); the
+#  component is gated on that in RpiBmc.dsc.inc / RpiBmc.fdf.inc.
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+#
+##
+
+[Defines]
+  INF_VERSION                    = 0x0001001A
+  BASE_NAME                      = SecureBootToggleDxe
+  FILE_GUID                      = 7a4de931-08c6-4b25-9f13-5d2e6a08b74c
+  MODULE_TYPE                    = DXE_DRIVER
+  VERSION_STRING                 = 1.0
+  ENTRY_POINT                    = SecureBootToggleEntryPoint
+
+[Sources]
+  SecureBootToggleDxe.c
+  SecureBootToggleHii.vfr
+  SecureBootToggleDxe.uni
+  SecureBootToggleDxeMap.uni
+
+[Packages]
+  MdeModulePkg/MdeModulePkg.dec
+  MdePkg/MdePkg.dec
+  SecurityPkg/SecurityPkg.dec
+  RpiBmcPkg/RpiBmcPkg.dec
+
+[LibraryClasses]
+  DebugLib
+  DevicePathLib
+  HiiLib
+  UefiBootServicesTableLib
+  UefiDriverEntryPoint
+  UefiRuntimeServicesTableLib
+
+[Protocols]
+  gEfiDevicePathProtocolGuid                    ## PRODUCES
+
+[Guids]
+  gRpiSecureBootToggleFormSetGuid               ## PRODUCES ## GUID
+  gEfiSecureBootEnableDisableGuid               ## CONSUMES ## Variable:L"SecureBootEnable"
+  gEfiGlobalVariableGuid                        ## CONSUMES ## Variable:L"SecureBoot"
+  gEfiHiiPlatformSetupFormsetGuid               ## CONSUMES ## GUID
+
+[Depex]
+  gEfiVariableArchProtocolGuid AND gEfiVariableWriteArchProtocolGuid

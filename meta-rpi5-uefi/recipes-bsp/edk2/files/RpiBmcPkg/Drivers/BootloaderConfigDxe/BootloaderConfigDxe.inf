@@ -26,6 +26,7 @@
   BootloaderConfig.h
   BootloaderConfigDxe.c
   BootloaderConfigDxe.uni
+  BootloaderConfigDxeMap.uni
   BootloaderConfigSetup.c
   BootloaderConfigHii.vfr
   EepromImage.c

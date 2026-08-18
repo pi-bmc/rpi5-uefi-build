@@ -1,0 +1,19 @@
+/** @file
+ *
+ *  Display strings for the Secure Boot page.
+ *
+ *  SPDX-License-Identifier: BSD-2-Clause-Patent
+ *
+ **/
+
+#langdef en-US "English"
+
+#string STR_NULL_STRING          #language en-US ""
+
+#string STR_FORM_SET_TITLE       #language en-US "Secure Boot"
+#string STR_FORM_SET_TITLE_HELP  #language en-US "Enable or disable UEFI Secure Boot image verification."
+
+#string STR_SECURE_BOOT_SUBTITLE #language en-US "Secure Boot only takes effect once a Platform Key is enrolled. Use Device Manager > Secure Boot Configuration to enroll PK/KEK/db."
+
+#string STR_SECURE_BOOT_PROMPT   #language en-US "Attempt Secure Boot"
+#string STR_SECURE_BOOT_HELP     #language en-US "Verify the signature of every image loaded from a fixed or removable device. Takes effect on the next boot, and only while the platform is in User Mode (a Platform Key is enrolled); with no PK the platform stays in Setup Mode and nothing is verified whatever this is set to. Also settable remotely as the SecureBoot BIOS attribute over Redfish."

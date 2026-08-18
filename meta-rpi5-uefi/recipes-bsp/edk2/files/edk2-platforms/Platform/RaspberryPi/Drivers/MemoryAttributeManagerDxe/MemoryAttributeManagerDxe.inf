@@ -17,6 +17,7 @@
 [Sources]
   MemoryAttributeManagerDxe.c
   MemoryAttributeManagerDxeHii.uni
+  MemoryAttributeManagerDxeHiiMap.uni
   MemoryAttributeManagerDxeHii.vfr
 
 [Packages]

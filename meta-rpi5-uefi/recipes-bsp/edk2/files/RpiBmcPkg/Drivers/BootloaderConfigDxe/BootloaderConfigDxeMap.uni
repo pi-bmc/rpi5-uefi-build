@@ -1,0 +1,45 @@
+/** @file
+ *
+ *  x-UEFI-redfish configure-language map for the bootloader EEPROM formset.
+ *
+ *  RedfishPlatformConfigDxe harvests these strings from the HII database:
+ *  each question prompt labeled in the x-UEFI-redfish-Bios.v1_0_9 language
+ *  becomes a BIOS attribute at /redfish/v1/Systems/1/Bios (published by
+ *  the edk2-redfish-client Bios v1_0_9 feature driver, with allowable
+ *  values in the BiosAttributeRegistry), named by the last segment of the
+ *  configure-language path. Option strings in the same language are the
+ *  enum value names the BMC reads and writes for oneof questions - kept
+ *  as clean identifiers rather than display text (en-US remains the
+ *  display name).
+ *
+ *  Attribute names are prefixed "Bl" because Redfish BIOS attributes share
+ *  one flat namespace across every annotated formset on the platform.
+ *
+ *  IMPORTANT - these settings do NOT reach the EEPROM on write. Storage is
+ *  the BlCfg efivarstore, which BootloaderConfigDxe re-seeds from the live
+ *  blconfig on every boot; edits only reach the bootloader through the
+ *  interactive "stage update" action in Setup, which has no Redfish
+ *  equivalent. A BMC write therefore lands in the variable and is visible
+ *  in the Setup form, but is overwritten on the next boot unless the user
+ *  stages it. Exposed read-mostly, deliberately.
+ *
+ *  SPDX-License-Identifier: BSD-2-Clause-Patent
+ *
+ **/
+
+/=#
+#langdef   x-UEFI-redfish-Bios.v1_0_9 "Bios.v1_0_9"
+
+#string STR_BOOT_ORDER_PROMPT    #language x-UEFI-redfish-Bios.v1_0_9   "/Bios/Attributes/BlBootOrder"
+#string STR_BOOT_UART_PROMPT     #language x-UEFI-redfish-Bios.v1_0_9   "/Bios/Attributes/BlBootUart"
+#string STR_POWER_OFF_PROMPT     #language x-UEFI-redfish-Bios.v1_0_9   "/Bios/Attributes/BlPowerOffOnHalt"
+#string STR_WAKE_GPIO_PROMPT     #language x-UEFI-redfish-Bios.v1_0_9   "/Bios/Attributes/BlWakeOnGpio"
+#string STR_PSU_PROMPT           #language x-UEFI-redfish-Bios.v1_0_9   "/Bios/Attributes/BlPsuMaxCurrent"
+
+// Shared by BootUart, PowerOffOnHalt and WakeOnGpio.
+#string STR_DISABLED             #language x-UEFI-redfish-Bios.v1_0_9   "Disabled"
+#string STR_ENABLED              #language x-UEFI-redfish-Bios.v1_0_9   "Enabled"
+
+#string STR_PSU_AUTO             #language x-UEFI-redfish-Bios.v1_0_9   "Auto"
+#string STR_PSU_3000             #language x-UEFI-redfish-Bios.v1_0_9   "Milliamps3000"
+#string STR_PSU_5000             #language x-UEFI-redfish-Bios.v1_0_9   "Milliamps5000"

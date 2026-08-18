@@ -1,0 +1,25 @@
+/** @file
+ *
+ *  x-UEFI-redfish configure-language map for the Secure Boot formset.
+ *
+ *  Publishes the toggle as the "SecureBoot" BIOS attribute at
+ *  /redfish/v1/Systems/1/Bios, so it can be flipped either from Setup or
+ *  by a PATCH to Bios/Settings.
+ *
+ *  This is deliberately a SECOND Redfish path to the same state. The
+ *  standards-track one is RedfishClientPkg's SecureBootDxe feature driver,
+ *  which serves /redfish/v1/Systems/1/SecureBoot and reads/writes the same
+ *  SecureBootEnable variable directly, without going through HII at all
+ *  (it has no x-UEFI namespace of its own). Both end up in the same
+ *  variable; the SecureBoot resource additionally reports
+ *  SecureBootCurrentBoot and SecureBootMode, which a BIOS attribute
+ *  cannot express.
+ *
+ *  SPDX-License-Identifier: BSD-2-Clause-Patent
+ *
+ **/
+
+/=#
+#langdef   x-UEFI-redfish-Bios.v1_0_9 "Bios.v1_0_9"
+
+#string STR_SECURE_BOOT_PROMPT   #language x-UEFI-redfish-Bios.v1_0_9   "/Bios/Attributes/SecureBoot"

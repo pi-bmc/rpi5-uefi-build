@@ -5,3 +5,6 @@
   INF RpiBmcPkg/Drivers/PowerButtonDxe/PowerButtonDxe.inf
   INF RpiBmcPkg/Drivers/ActiveCoolerDxe/ActiveCoolerDxe.inf
   INF RpiBmcPkg/Drivers/FanConfigDxe/FanConfigDxe.inf
+!if $(SECURE_BOOT_ENABLE) == TRUE
+  INF RpiBmcPkg/Drivers/SecureBootToggleDxe/SecureBootToggleDxe.inf
+!endif
