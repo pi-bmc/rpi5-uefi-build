@@ -1,0 +1,440 @@
+diff --git a/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.c b/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.c
+--- a/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.c
++++ b/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.c
+@@ -25,6 +25,61 @@
+ 
+ STATIC VOID                             *mFdtImage;
+ 
++//
++// The device tree the VPU firmware loaded and patched. We do not hand this to
++// the OS when the OS brings its own -- we mine it for the values only it
++// carries. See UpdateFdtFromFw().
++//
++STATIC VOID                             *mFwFdtImage;
++
++//
++// EFI_DT_FIXUP_PROTOCOL. Not an edk2 protocol: it was defined by u-boot
++// (lib/efi_loader/efi_dt_fixup.c) and is what systemd-boot calls from
++// src/boot/devicetree.c, for both a loader entry's "devicetree" file and a
++// UKI's .dtb/.dtbauto section.
++//
++// It exists to get the dependency the right way round. A device tree has to
++// match the kernel that consumes it, and firmware does not ship that kernel --
++// so the OS supplies the tree and the firmware writes its board knowledge into
++// it, rather than the firmware shipping a tree and hoping it fits.
++//
++#define EFI_DT_FIXUP_PROTOCOL_REVISION  0x00010000
++
++#define EFI_DT_APPLY_FIXUPS             0x00000001
++#define EFI_DT_RESERVE_MEMORY           0x00000002
++#define EFI_DT_INSTALL_TABLE            0x00000004
++#define EFI_DT_ALL                      (EFI_DT_APPLY_FIXUPS | \
++                                         EFI_DT_RESERVE_MEMORY | \
++                                         EFI_DT_INSTALL_TABLE)
++
++typedef struct _EFI_DT_FIXUP_PROTOCOL EFI_DT_FIXUP_PROTOCOL;
++
++typedef
++EFI_STATUS
++(EFIAPI *EFI_DT_FIXUP)(
++  IN     EFI_DT_FIXUP_PROTOCOL  *This,
++  IN OUT VOID                   *Fdt,
++  IN OUT UINTN                  *BufferSize,
++  IN     UINT32                 Flags
++  );
++
++struct _EFI_DT_FIXUP_PROTOCOL {
++  UINT64          Revision;
++  EFI_DT_FIXUP    Fixup;
++};
++
++STATIC EFI_GUID mEfiDtFixupProtocolGuid = {
++  0xe617d64c, 0xfe08, 0x46da, { 0xf4, 0xdc, 0xbb, 0xd5, 0x87, 0x0c, 0x73, 0x00 }
++};
++
++//
++// Slack added on top of the caller's tree before we start adding properties.
++// systemd-boot retries a EFI_BUFFER_TOO_SMALL exactly once, so whatever we ask
++// for has to be enough the second time round -- a page is far more than the
++// dozen small properties below can consume.
++//
++#define FDT_FIXUP_HEADROOM  SIZE_4KB
++
+ STATIC RASPBERRY_PI_FIRMWARE_PROTOCOL   *mFwProtocol;
+ STATIC UINT32                           mBoardRevision;
+ 
+@@ -210,6 +265,318 @@
+ }
+ 
+ STATIC
++UINT64
++ReadFdtCells (
++  IN CONST UINT32  *Cells,
++  IN INT32         Count
++  )
++{
++  UINT64  Value;
++  INT32   Index;
++
++  Value = 0;
++  for (Index = 0; Index < Count; Index++) {
++    Value = LShiftU64 (Value, 32) | Fdt32ToCpu (Cells[Index]);
++  }
++
++  return Value;
++}
++
++/**
++  Take one region out of the UEFI memory map.
++
++  Best-effort by design: a region the platform has already reserved, or one
++  that falls outside the map entirely, fails here and needs nothing from us.
++
++**/
++STATIC
++VOID
++ReserveFdtPages (
++  IN UINT64  Base,
++  IN UINT64  Size
++  )
++{
++  EFI_STATUS            Status;
++  EFI_PHYSICAL_ADDRESS  Address;
++  UINT64                End;
++
++  if (Size == 0) {
++    return;
++  }
++
++  Address = Base & ~(UINT64)EFI_PAGE_MASK;
++  End     = ALIGN_VALUE (Base + Size, EFI_PAGE_SIZE);
++
++  Status = gBS->AllocatePages (
++                  AllocateAddress,
++                  EfiReservedMemoryType,
++                  EFI_SIZE_TO_PAGES (End - Address),
++                  &Address
++                  );
++  DEBUG ((
++    DEBUG_INFO,
++    "%a: 0x%lx..0x%lx: %r\n",
++    __func__,
++    Address,
++    End,
++    Status
++    ));
++}
++
++/**
++  Honour a device tree's memory reservations against the UEFI memory map:
++  the reservation block, and the fixed-address children of /reserved-memory.
++
++  Children carrying only a "size" are for the OS to place, so there is nothing
++  for us to carve out.
++
++**/
++STATIC
++VOID
++ReserveFdtMemory (
++  IN VOID  *Fdt
++  )
++{
++  UINT64        Base;
++  UINT64        Size;
++  INTN          Count;
++  INTN          Index;
++  INT32         Node;
++  INT32         Child;
++  INT32         AddressCells;
++  INT32         SizeCells;
++  INT32         Length;
++  CONST UINT32  *Reg;
++
++  Count = FdtGetNumberOfReserveMapEntries (Fdt);
++  for (Index = 0; Index < Count; Index++) {
++    if (FdtGetReserveMapEntry (Fdt, Index, &Base, &Size) != 0) {
++      continue;
++    }
++
++    ReserveFdtPages (Base, Size);
++  }
++
++  Node = FdtPathOffset (Fdt, "/reserved-memory");
++  if (Node < 0) {
++    return;
++  }
++
++  AddressCells = FdtAddressCells (Fdt, Node);
++  SizeCells    = FdtSizeCells (Fdt, Node);
++  if ((AddressCells < 1) || (SizeCells < 1)) {
++    return;
++  }
++
++  for (Child = FdtFirstSubnode (Fdt, Node); Child >= 0;
++       Child = FdtNextSubnode (Fdt, Child))
++  {
++    Reg = FdtGetProp (Fdt, Child, "reg", &Length);
++    if ((Reg == NULL) ||
++        (Length < (INT32)((AddressCells + SizeCells) * sizeof (UINT32))))
++    {
++      continue;
++    }
++
++    Base = ReadFdtCells (Reg, AddressCells);
++    Size = ReadFdtCells (Reg + AddressCells, SizeCells);
++    ReserveFdtPages (Base, Size);
++  }
++}
++
++/**
++  Copy one property out of the firmware device tree into the caller's.
++
++  Absence is not an error on either side: the firmware only populates what the
++  board actually has, and trees name some nodes differently, so a miss just
++  means there is nothing to carry across. Mirrors u-boot's copy_property().
++
++  @param  Fdt[in,out]   The tree being fixed up.
++  @param  SrcPath[in]   Node path (or alias) in the firmware tree.
++  @param  DstPath[in]   Node path (or alias) in the tree being fixed up.
++  @param  Property[in]  Property to copy.
++
++**/
++STATIC
++VOID
++CopyFwPropertyEx (
++  IN OUT VOID        *Fdt,
++  IN CONST CHAR8     *SrcPath,
++  IN CONST CHAR8     *DstPath,
++  IN CONST CHAR8     *Property
++  )
++{
++  INT32       SrcNode;
++  INT32       DstNode;
++  INT32       Length;
++  CONST VOID  *Value;
++
++  SrcNode = FdtPathOffset (mFwFdtImage, SrcPath);
++  DstNode = FdtPathOffset (Fdt, DstPath);
++  if ((SrcNode < 0) || (DstNode < 0)) {
++    return;
++  }
++
++  Value = FdtGetProp (mFwFdtImage, SrcNode, Property, &Length);
++  if (Value == NULL) {
++    return;
++  }
++
++  if (FdtSetProp (Fdt, DstNode, Property, Value, Length) != 0) {
++    DEBUG ((DEBUG_WARN, "%a: could not set %a of %a\n", __func__, Property, DstPath));
++  }
++}
++
++STATIC
++VOID
++CopyFwProperty (
++  IN OUT VOID     *Fdt,
++  IN CONST CHAR8  *Path,
++  IN CONST CHAR8  *Property
++  )
++{
++  CopyFwPropertyEx (Fdt, Path, Path, Property);
++}
++
++/**
++  Write into the caller's tree the values only the VPU firmware knows.
++
++  A tree that ships with an OS describes the board in general; it cannot
++  describe THIS board. The model string, the per-SKU DMA windows, where the
++  bootloader config blob landed, the KASLR seed and the OTP MAC address are all
++  computed at boot and written into the firmware's own tree. This is u-boot's
++  update_fdt_from_fw(), which exists for exactly the same reason and which
++  u-boot likewise runs against whatever tree it is handed.
++
++**/
++STATIC
++VOID
++UpdateFdtFromFw (
++  IN OUT VOID  *Fdt
++  )
++{
++  if (mFwFdtImage == NULL) {
++    return;
++  }
++
++  CopyFwProperty (Fdt, "/", "model");
++  CopyFwProperty (Fdt, "/reserved-memory/linux,cma", "size");
++
++  //
++  // dma-ranges vary with silicon revision. The firmware tree exposes no
++  // pcie0/1/2 aliases on BCM2712, so address the three root ports by path.
++  //
++  CopyFwProperty (Fdt, "/axi/pcie@1000100000", "dma-ranges");
++  CopyFwProperty (Fdt, "/axi/pcie@1000110000", "dma-ranges");
++  CopyFwProperty (Fdt, "/axi/pcie@1000120000", "dma-ranges");
++
++  //
++  // Bootloader configuration block, exposed to the OS as nvmem. Only
++  // meaningful once the firmware has patched in where it put it.
++  //
++  CopyFwProperty (Fdt, "blconfig", "reg");
++  CopyFwProperty (Fdt, "blconfig", "status");
++
++  CopyFwProperty (Fdt, "/chosen", "kaslr-seed");
++  CopyFwProperty (Fdt, "/chosen", "user-warnings");
++  CopyFwProperty (Fdt, "/chosen", "log");
++
++  //
++  // The RP1 GEM's OTP MAC address, and the PHY's MDIO address. Upstream put
++  // the PHY under an "mdio" subnode; the firmware tree keeps it a direct child
++  // of the MAC. Try both shapes -- the one that does not exist is a no-op, so
++  // this keeps working across either layout moving.
++  //
++  CopyFwProperty (Fdt, "ethernet0", "local-mac-address");
++  CopyFwPropertyEx (Fdt, "ethernet0/ethernet-phy@1", "ethernet0/mdio/ethernet-phy@1", "reg");
++  CopyFwProperty (Fdt, "ethernet0/ethernet-phy@1", "reg");
++
++  //
++  // Bluetooth address, off the UART the on-board module hangs from. RPi4 and
++  // RPi5 put that UART at different paths.
++  //
++  CopyFwProperty (Fdt, "/soc/serial@7e201000/bluetooth", "local-bd-address");
++  CopyFwProperty (Fdt, "/soc@107c000000/serial@7d50c000/bluetooth", "local-bd-address");
++
++  CopyFwProperty (Fdt, "/clocks/clk-uart", "clock-frequency");
++}
++
++/**
++  EFI_DT_FIXUP_PROTOCOL.Fixup().
++
++  @param  This[in]              This protocol instance.
++  @param  Fdt[in,out]           The caller's device tree, fixed up in place.
++  @param  BufferSize[in,out]    Size of the buffer holding it; on
++                                EFI_BUFFER_TOO_SMALL, the size we need.
++  @param  Flags[in]             EFI_DT_* bits selecting what to do.
++
++  @retval EFI_SUCCESS           Done.
++  @retval EFI_INVALID_PARAMETER Bad arguments, or not a device tree.
++  @retval EFI_BUFFER_TOO_SMALL  Buffer too small; *BufferSize updated.
++
++**/
++STATIC
++EFI_STATUS
++EFIAPI
++Rpi5DtFixup (
++  IN     EFI_DT_FIXUP_PROTOCOL  *This,
++  IN OUT VOID                   *Fdt,
++  IN OUT UINTN                  *BufferSize,
++  IN     UINT32                 Flags
++  )
++{
++  EFI_STATUS  Status;
++  UINTN       Required;
++
++  if ((This == NULL) || (Fdt == NULL) || (BufferSize == NULL) ||
++      (Flags == 0) || ((Flags & ~(UINT32)EFI_DT_ALL) != 0))
++  {
++    return EFI_INVALID_PARAMETER;
++  }
++
++  if (FdtCheckHeader (Fdt) != 0) {
++    return EFI_INVALID_PARAMETER;
++  }
++
++  if ((Flags & EFI_DT_APPLY_FIXUPS) != 0) {
++    Required = FdtTotalSize (Fdt) + FDT_FIXUP_HEADROOM;
++    if (Required > *BufferSize) {
++      *BufferSize = Required;
++      return EFI_BUFFER_TOO_SMALL;
++    }
++
++    //
++    // Grow the tree in place into the room the caller gave us, so the copies
++    // below have somewhere to go.
++    //
++    if (FdtOpenInto (Fdt, Fdt, (INT32)*BufferSize) != 0) {
++      return EFI_INVALID_PARAMETER;
++    }
++
++    UpdateFdtFromFw (Fdt);
++  }
++
++  if ((Flags & EFI_DT_RESERVE_MEMORY) != 0) {
++    ReserveFdtMemory (Fdt);
++  }
++
++  if ((Flags & EFI_DT_INSTALL_TABLE) != 0) {
++    Status = gBS->InstallConfigurationTable (&gFdtTableGuid, Fdt);
++    if (EFI_ERROR (Status)) {
++      DEBUG ((DEBUG_ERROR, "%a: failed to install devicetree: %r\n", __func__, Status));
++      return Status;
++    }
++  }
++
++  return EFI_SUCCESS;
++}
++
++STATIC EFI_DT_FIXUP_PROTOCOL mDtFixupProtocol = {
++  EFI_DT_FIXUP_PROTOCOL_REVISION,
++  Rpi5DtFixup
++};
++
++STATIC
+ EFI_STATUS
+ CleanMemoryNodes (
+   VOID
+@@ -455,6 +822,7 @@
+   EFI_STATUS Status;
+   UINTN      FdtSize;
+   VOID       *FdtImage = NULL;
++  EFI_HANDLE Handle;
+ 
+   if (PcdGet32 (PcdSystemTableMode) != SYSTEM_TABLE_MODE_BOTH &&
+       PcdGet32 (PcdSystemTableMode) != SYSTEM_TABLE_MODE_DT) {
+@@ -473,6 +841,25 @@
+         __func__, Status));
+   }
+ 
++  //
++  // Publish the fixup protocol before anything else can fail. This is the
++  // interface that matters to a systemd-boot/UKI system: it brings its own
++  // device tree, matched to the kernel in the same image, and asks us to write
++  // the board-specific parts into it. Nothing below is a prerequisite --
++  // reserving memory and installing the table are useful to a caller even on a
++  // board where we found no firmware tree to mine.
++  //
++  Handle = NULL;
++  Status = gBS->InstallMultipleProtocolInterfaces (
++                  &Handle,
++                  &mEfiDtFixupProtocolGuid,
++                  &mDtFixupProtocol,
++                  NULL
++                  );
++  if (EFI_ERROR (Status)) {
++    DEBUG ((DEBUG_ERROR, "Failed to install EFI_DT_FIXUP_PROTOCOL: %r\n", Status));
++  }
++
+   FdtImage = FdtPlatformGetBase ();
+   if (FdtImage == NULL) {
+     /*
+@@ -484,6 +871,8 @@
+     return EFI_NOT_FOUND;
+   }
+ 
++  mFwFdtImage = FdtImage;
++
+   FdtSize = FdtTotalSize (FdtImage);
+   DEBUG ((DEBUG_INFO, "Devicetree passed via config.txt (0x%lx bytes)\n", FdtSize));
+ 
+@@ -545,6 +934,12 @@
+     }
+   }
+ 
++  //
++  // Install the firmware's own tree as the configuration table. This is only
++  // a fallback: it describes RP1 the downstream way, which an upstream kernel
++  // will not bind. Anything that brings its own tree replaces this table, and
++  // should -- that is what the fixup protocol above is for.
++  //
+   DEBUG ((DEBUG_INFO, "Installed devicetree at address %p\n", mFdtImage));
+   Status = gBS->InstallConfigurationTable (&gFdtTableGuid, mFdtImage);
+   if (EFI_ERROR (Status)) {

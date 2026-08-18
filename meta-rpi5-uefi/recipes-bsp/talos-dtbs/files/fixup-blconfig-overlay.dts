@@ -1,0 +1,75 @@
+/*
+ * Bootloader NVRAM nodes for Raspberry Pi 5 / BCM2712 (blconfig + blpubkey).
+ *
+ * Baked into the Talos base DTBs at build time (see talos-dtbs.bb, fdtoverlay),
+ * NOT shipped as a runtime .dtbo.
+ *
+ * The stock Raspberry Pi DTB carries two labelled reserved-memory nvram nodes:
+ *
+ *     blconfig: nvram@0 { compatible = "raspberrypi,bootloader-config", ... };
+ *     blpubkey: nvram@1 { compatible = "raspberrypi,bootloader-public-key", ... };
+ *
+ * Both ship with reg = <0 0 0 0> and status = "disabled". At boot the RPi5
+ * co-processor copies the bootloader config / secure-boot public-key blobs into
+ * RAM, writes each node's placement (reg) and enables it, exposing them to
+ * Linux as nvmem devices.
+ *
+ * The base DTB used by this project is the stripped mainline bcm2712-rpi-5-b
+ * from the Talos kernel OCI image: it has neither node. Applying this as a
+ * runtime overlay does NOT work - the VPU firmware's blconfig fixup only patches
+ * a node already present in the DTB it loads, and a runtime .dtbo is applied
+ * after that fixup has run (observed: reg stays 0). So we merge these nodes into
+ * the base DTB at build time instead, making it present before the firmware
+ * fixup, exactly as on a stock DTB. reg is left zeroed / status "disabled" for
+ * the firmware to populate.
+ *
+ * /reserved-memory on the base DTB is #address-cells = <2>, #size-cells = <2>,
+ * so each reg is <addr_hi addr_lo size_hi size_lo>. The inner #address-cells /
+ * #size-cells = <1> describe nvmem cell children and mirror upstream.
+ */
+/dts-v1/;
+/plugin/;
+
+/ {
+	compatible = "brcm,bcm2712";
+
+	fragment@0 {
+		target-path = "/reserved-memory";
+		__overlay__ {
+			#address-cells = <2>;
+			#size-cells = <2>;
+
+			blconfig: nvram@0 {
+				compatible = "raspberrypi,bootloader-config",
+					     "nvmem-rmem";
+				#address-cells = <1>;
+				#size-cells = <1>;
+				reg = <0x00 0x00 0x00 0x00>;
+				no-map;
+				status = "disabled";
+			};
+
+			blpubkey: nvram@1 {
+				compatible = "raspberrypi,bootloader-public-key",
+					     "nvmem-rmem";
+				#address-cells = <1>;
+				#size-cells = <1>;
+				reg = <0x00 0x00 0x00 0x00>;
+				no-map;
+				status = "disabled";
+			};
+		};
+	};
+
+	/*
+	 * Stock DTBs expose these by alias; the firmware and downstream consumers
+	 * (e.g. U-Boot's blconfig lookup) may key on them, so mirror it.
+	 */
+	fragment@1 {
+		target-path = "/aliases";
+		__overlay__ {
+			blconfig = "/reserved-memory/nvram@0";
+			blpubkey = "/reserved-memory/nvram@1";
+		};
+	};
+};

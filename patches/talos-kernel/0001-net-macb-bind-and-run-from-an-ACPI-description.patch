@@ -1,0 +1,168 @@
+From: pi-bmc rpi5-uefi-build
+Subject: [PATCH] net: macb: bind and run from an ACPI description
+
+The Raspberry Pi 5's on-board NIC is a Cadence GEM inside the RP1
+southbridge. Under UEFI+ACPI -- which is how a firmware boots an OS it does
+not ship a device tree for -- macb never comes up, for three separate
+reasons, none of which are about the hardware:
+
+ 1. Matching already works. A firmware can describe the block as _HID
+    "PRP0001" with a _DSD "compatible" of "raspberrypi,rp1-gem", and
+    acpi_driver_match_device() falls through to acpi_of_match_device() and
+    matches it against macb_dt_ids. Nothing to fix here.
+
+ 2. macb_probe() then loses the match data: of_match_node() needs an
+    of_node, so an ACPI instance silently gets default_gem_config and drops
+    every per-SoC cap -- on RP1 that is MACB_CAPS_USRIO_HAS_MII,
+    MACB_CAPS_CLK_HW_CHG and MACB_CAPS_EEE.
+
+ 3. macb_clk_init_dflt() then hard-fails on devm_clk_get("pclk"), because
+    clkdev has no ACPI path whatsoever: clk_get() consults dev->of_node and
+    then the clkdev list, and an ACPI device has neither. Probe ends at
+    "failed to get pclk" every time.
+
+ 4. of_get_phy_mode() likewise reads nothing, so the interface silently
+    defaults to MII and a gigabit RGMII link never comes up.
+
+Fix 2 by repeating the compatible lookup through the fwnode property API,
+fix 3 by treating pclk/hclk as optional when there is no of_node (on such
+platforms the clocks are already running before the OS starts -- on RP1 the
+VPU firmware programs the whole tree), and fix 4 by reading the phy-mode
+from the fwnode, which is identical for DT.
+
+DT-described instances are unaffected: every changed path keys off
+dev_of_node() or is a fwnode call that behaves identically for an of_node.
+
+Applies to v6.18. NOT COMPILE-TESTED -- written against the v6.18 source and
+verified to apply cleanly, but no kernel was built. Build it before trusting
+it.
+
+---
+diff --git a/drivers/net/ethernet/cadence/macb_main.c b/drivers/net/ethernet/cadence/macb_main.c
+--- a/drivers/net/ethernet/cadence/macb_main.c
++++ b/drivers/net/ethernet/cadence/macb_main.c
+@@ -24,10 +24,11 @@
+ #include <linux/platform_device.h>
+ #include <linux/phylink.h>
+ #include <linux/of.h>
+ #include <linux/of_mdio.h>
+ #include <linux/of_net.h>
++#include <linux/property.h>
+ #include <linux/ip.h>
+ #include <linux/udp.h>
+ #include <linux/tcp.h>
+ #include <linux/iopoll.h>
+ #include <linux/phy/phy.h>
+@@ -4428,25 +4429,44 @@
+ 
+ 	pdata = dev_get_platdata(&pdev->dev);
+ 	if (pdata) {
+ 		*pclk = pdata->pclk;
+ 		*hclk = pdata->hclk;
+-	} else {
++	} else if (dev_of_node(&pdev->dev)) {
+ 		*pclk = devm_clk_get(&pdev->dev, "pclk");
+ 		*hclk = devm_clk_get(&pdev->dev, "hclk");
++	} else {
++		/*
++		 * Firmware-described (ACPI) instances have no clock provider to
++		 * ask: clkdev is not wired to ACPI at all, so clk_get() can only
++		 * ever fail here. On such platforms the clocks are already
++		 * running by the time we are probed -- the RP1 southbridge on a
++		 * Raspberry Pi 5 is the case in point, where the VPU firmware
++		 * programs the whole tree before the OS starts -- so treat them
++		 * as optional rather than refusing to drive the MAC.
++		 *
++		 * The cost is that clk_set_rate() on link-speed changes becomes
++		 * a no-op, which is correct for those same platforms: the rate
++		 * is not ours to change.
++		 */
++		*pclk = devm_clk_get_optional(&pdev->dev, "pclk");
++		*hclk = devm_clk_get_optional(&pdev->dev, "hclk");
+ 	}
+ 
+-	if (IS_ERR_OR_NULL(*pclk))
+-		return dev_err_probe(&pdev->dev,
+-				     IS_ERR(*pclk) ? PTR_ERR(*pclk) : -ENODEV,
++	if (IS_ERR(*pclk))
++		return dev_err_probe(&pdev->dev, PTR_ERR(*pclk),
+ 				     "failed to get pclk\n");
+ 
+-	if (IS_ERR_OR_NULL(*hclk))
+-		return dev_err_probe(&pdev->dev,
+-				     IS_ERR(*hclk) ? PTR_ERR(*hclk) : -ENODEV,
++	if (IS_ERR(*hclk))
++		return dev_err_probe(&pdev->dev, PTR_ERR(*hclk),
+ 				     "failed to get hclk\n");
+ 
++	if (dev_of_node(&pdev->dev) &&
++	    (IS_ERR_OR_NULL(*pclk) || IS_ERR_OR_NULL(*hclk)))
++		return dev_err_probe(&pdev->dev, -ENODEV,
++				     "failed to get pclk/hclk\n");
++
+ 	*tx_clk = devm_clk_get_optional(&pdev->dev, "tx_clk");
+ 	if (IS_ERR(*tx_clk))
+ 		return PTR_ERR(*tx_clk);
+ 
+ 	*rx_clk = devm_clk_get_optional(&pdev->dev, "rx_clk");
+@@ -5453,10 +5473,39 @@
+ 			macb_config = match->data;
+ 			clk_init = macb_config->clk_init;
+ 			init = macb_config->init;
+ 		}
+ 	}
++#if defined(CONFIG_OF)
++	else {
++		const struct of_device_id *id;
++		const char *compat;
++
++		/*
++		 * ACPI, via PRP0001: acpi_driver_match_device() already matched
++		 * this device by comparing the _DSD "compatible" property
++		 * against macb_dt_ids, which is how we got here. It does not
++		 * tell us which entry won, and of_match_node() cannot without an
++		 * of_node, so repeat the lookup. Getting this wrong is not
++		 * harmless -- falling back to default_gem_config silently drops
++		 * the per-SoC caps, and on RP1 that means losing
++		 * MACB_CAPS_USRIO_HAS_MII and the EEE and clock-change bits.
++		 */
++		if (!device_property_read_string(&pdev->dev, "compatible", &compat)) {
++			for (id = macb_dt_ids; id->compatible[0]; id++) {
++				if (strcmp(id->compatible, compat))
++					continue;
++				if (id->data) {
++					macb_config = id->data;
++					clk_init = macb_config->clk_init;
++					init = macb_config->init;
++				}
++				break;
++			}
++		}
++	}
++#endif
+ 
+ 	err = clk_init(pdev, &pclk, &hclk, &tx_clk, &rx_clk, &tsu_clk);
+ 	if (err)
+ 		return err;
+ 
+@@ -5584,13 +5633,18 @@
+ 	if (err == -EPROBE_DEFER)
+ 		goto err_out_free_netdev;
+ 	else if (err)
+ 		macb_get_hwaddr(bp);
+ 
+-	err = of_get_phy_mode(np, &interface);
++	/*
++	 * fwnode rather than of_node: identical for DT, and it is the only way
++	 * an ACPI _DSD "phy-mode" is ever read. Without it an ACPI instance
++	 * silently falls back to MII and a gigabit RGMII link never comes up.
++	 */
++	err = fwnode_get_phy_mode(dev_fwnode(&pdev->dev), &interface);
+ 	if (err)
+-		/* not found in DT, MII by default */
++		/* not described by firmware, MII by default */
+ 		bp->phy_interface = PHY_INTERFACE_MODE_MII;
+ 	else
+ 		bp->phy_interface = interface;
+ 
+ 	/* IP specific init */

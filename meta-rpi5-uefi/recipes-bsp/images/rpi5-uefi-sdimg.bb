@@ -4,8 +4,11 @@ DESCRIPTION = "Assembles rpi5-uefi-sd.img: an MBR disk image with a single \
                bootloader needs to start the alternative TF-A+EDK2 bootloader \
                stack -- armstub8-2712.bin (RPI_EFI.fd under the default \
                armstub filename, so config.txt needs no armstub= line), \
-               config.txt, the bcm2712 device trees, and the overlays/ \
-               directory. This image is intentionally NOT compatible with the \
+               config.txt, the bcm2712 device trees (from the Talos kernel \
+               image, so they match the kernel that consumes them), and the \
+               overlays/ directory (from the Pi firmware release). \
+\
+               This image is intentionally NOT compatible with the \
                u-boot-based RPi image from ../nanokvm-build: both stacks claim \
                the armstub8-2712.bin name with different payloads (bare BL31 \
                + kernel=u-boot.bin there, BL31+UEFI here), so a card carries \
@@ -31,7 +34,7 @@ do_patch[noexec] = "1"
 do_configure[noexec] = "1"
 do_install[noexec] = "1"
 
-do_compile[depends] += "edk2-rpi5-firmware:do_deploy rpi-boot-dtbs:do_deploy"
+do_compile[depends] += "edk2-rpi5-firmware:do_deploy rpi-boot-dtbs:do_deploy talos-boot-dtbs:do_deploy"
 
 # FAT32 boot partition size. Contents are ~9 MiB (3.8M firmware + ~4M
 # overlays + DTBs); 64 MiB leaves comfortable room for dtoverlay additions
@@ -65,8 +68,21 @@ do_compile() {
     mcopy -i "${part}" "${DEPLOY_DIR_IMAGE}/RPI_EFI.fd" ::/armstub8-2712.bin
     mcopy -i "${part}" "${DEPLOY_DIR_IMAGE}/config.txt" ::/config.txt
 
-    # Board device trees + overlays (see rpi-boot-dtbs).
-    for dtb in "${DEPLOY_DIR_IMAGE}/rpi-boot-dtbs/"*.dtb; do
+    # Board device trees from the Talos kernel image, NOT from the Raspberry Pi
+    # firmware release (see talos-boot-dtbs).
+    #
+    # The VPU bootloader loads the board's .dtb, patches it (memory, MAC,
+    # bootloader config placement) and leaves it at device_tree_address for
+    # FdtDxe to hand on. Whatever lands here is therefore the tree Linux gets,
+    # and it has to match the kernel that consumes it -- the stock Raspberry Pi
+    # DTBs are built from the downstream kernel and describe hardware in ways a
+    # mainline-based kernel does not bind. Taking them from the Talos kernel's
+    # own OCI image keeps the two in step by construction.
+    #
+    # Overlays still come from the firmware release: they resolve against
+    # config.txt's dtoverlay= lines, which the VPU processes, and the Talos
+    # kernel image ships none.
+    for dtb in "${DEPLOY_DIR_IMAGE}/talos-boot-dtbs/"*.dtb; do
         mcopy -i "${part}" "${dtb}" ::/
     done
     mmd -i "${part}" ::/overlays
