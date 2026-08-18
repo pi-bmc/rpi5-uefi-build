@@ -42,7 +42,7 @@ PV = "202602+git${SRCPV}"
 #                         ${UNPACKDIR}/edk2-platforms during do_unpack, then
 #                         0000 (the former fork's changed files), then this
 #                         layer's own 0001..0007, 0010, the ACPI pair
-#                         0011/0012, and 0013/0014/0015 -- which edit files the
+#                         0011/0012, and 0013..0016 -- which edit files the
 #                         merged tree adds. 0011 (an RP1 I2C1 device) and 0012 (an
 #                         RP1 GEM Ethernet device) both append to Rp1.asi, so
 #                         they must stay in that order relative to each other.
@@ -69,6 +69,14 @@ PV = "202602+git${SRCPV}"
 #                         chip, no NIC. This is u-boot's split: its own tree
 #                         plus update_fdt_from_fw(). Paired with 0014: in ACPI
 #                         mode FdtDxe never runs at all.
+#                         0016 clears the RP1 MSIX_CFG routing 0001 arms for
+#                         the two xHCIs, at ExitBootServices. Linux's
+#                         drivers/misc/rp1/rp1_pci.c owns those same registers
+#                         but only ever clears ENABLE per-IRQ as its own IRQ
+#                         domain tears one down -- it never zeroes the block on
+#                         probe -- so anything left armed stays armed behind
+#                         the OS's back. Depends on 0001, which is where the
+#                         arming lives.
 #
 #                         The DWC2 OTG host on the USB-C data port is 0006
 #                         (put the driver on the BCM2712 core: 64-bit base
@@ -110,6 +118,7 @@ SRC_URI = "gitsm://github.com/tianocore/edk2.git;protocol=https;branch=master;na
            file://0013-VarBlockServiceDxe-find-the-variable-store-under-eith.patch;patchdir=../edk2-platforms \
            file://0014-RPi5-default-SystemTableMode-to-Device-Tree.patch;patchdir=../edk2-platforms \
            file://0015-FdtDxe-hand-Linux-the-upstream-RP1-device-tree.patch;patchdir=../edk2-platforms \
+           file://0016-Rp1BusDxe-disarm-RP1-interrupt-routing-at-handoff.patch;patchdir=../edk2-platforms \
            file://0100-UsbNetwork-assume-media-on-a-point-to-point-gadget.patch \
            file://0101-RedfishDiscoverDxe-skip-the-IPv6-discovery-leg.patch \
            file://0102-RedfishConfigHandler-quiesce-the-Redfish-stack-after.patch \

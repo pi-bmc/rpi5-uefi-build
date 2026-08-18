@@ -1,0 +1,156 @@
+diff --git a/Silicon/RaspberryPi/RpiSiliconPkg/Drivers/Rp1BusDxe/Rp1BusDxe.c b/Silicon/RaspberryPi/RpiSiliconPkg/Drivers/Rp1BusDxe/Rp1BusDxe.c
+--- a/Silicon/RaspberryPi/RpiSiliconPkg/Drivers/Rp1BusDxe/Rp1BusDxe.c
++++ b/Silicon/RaspberryPi/RpiSiliconPkg/Drivers/Rp1BusDxe/Rp1BusDxe.c
+@@ -7,6 +7,7 @@
+  **/
+ 
+ #include <Uefi.h>
++#include <Guid/EventGroup.h>
+ #include <IndustryStandard/Pci.h>
+ #include <Library/BaseMemoryLib.h>
+ #include <Library/DebugLib.h>
+@@ -278,6 +279,61 @@
+     );
+ }
+ 
++//
++// Undo Rp1BusEnableInterrupts().
++//
++// MSIX_CFG is RP1's own interrupt-to-MSI-X routing block, and it belongs to
++// the OS the moment we leave. Linux drives these exact registers from
++// drivers/misc/rp1/rp1_pci.c -- same APB base (0x108000), same set/clear
++// aliases, same MSIX_CFG(hwirq) stride -- but it only ever clears ENABLE for
++// one hwirq at a time, as its IRQ domain tears that mapping down. It never
++// zeroes the block when it probes.
++//
++// So anything we leave armed stays armed behind the OS's back: it comes up
++// believing all 61 RP1 sources are masked while two of them are live in
++// hardware, still routed at whatever MSI-X table entries this firmware
++// programmed.
++//
++// Symmetric with what we armed, rather than a sweep of all 61: undoing our
++// own writes is the part we can be sure about, and the boot firmware may have
++// its own reasons for anything else that is set.
++//
++STATIC
++VOID
++EFIAPI
++Rp1BusDisableInterrupts (
++  IN RP1_BUS_DATA  *Rp1Data
++  )
++{
++  MmioWrite32 (
++    Rp1Data->PeripheralBase + RP1_PCIE_REG_CLR + RP1_PCIE_MSIX_CFG (RP1_INT_USBHOST0_0),
++    RP1_PCIE_MSIX_CFG_ENABLE
++    );
++  MmioWrite32 (
++    Rp1Data->PeripheralBase + RP1_PCIE_REG_CLR + RP1_PCIE_MSIX_CFG (RP1_INT_USBHOST1_0),
++    RP1_PCIE_MSIX_CFG_ENABLE
++    );
++}
++
++/**
++  Quiesce RP1's interrupt routing at ExitBootServices, so the OS inherits the
++  device with nothing armed that it does not know about.
++
++  @param  Event[in]    The event that fired.
++  @param  Context[in]  Driver private data.
++
++**/
++STATIC
++VOID
++EFIAPI
++Rp1BusNotifyExitBootServices (
++  IN EFI_EVENT  Event,
++  IN VOID       *Context
++  )
++{
++  Rp1BusDisableInterrupts ((RP1_BUS_DATA *)Context);
++}
++
+ STATIC
+ EFI_PHYSICAL_ADDRESS
+ EFIAPI
+@@ -444,6 +500,28 @@
+   Rp1BusRegisterDevices (Rp1Data);
+   Rp1BusEnableInterrupts (Rp1Data);
+ 
++  //
++  // Nothing else disarms these. The driver is not stopped on the normal boot
++  // path, so without this hook RP1 reaches the OS with our USB host sources
++  // still routed. Best-effort: a device that keeps working is better than a
++  // failed Start, and failing here would take both xHCIs down with it.
++  //
++  Status = gBS->CreateEventEx (
++                  EVT_NOTIFY_SIGNAL,
++                  TPL_CALLBACK,
++                  Rp1BusNotifyExitBootServices,
++                  Rp1Data,
++                  &gEfiEventExitBootServicesGuid,
++                  &Rp1Data->ExitBootServicesEvent
++                  );
++  if (EFI_ERROR (Status)) {
++    DEBUG ((
++      DEBUG_ERROR,
++      "RP1: Failed to register the ExitBootServices handler. Status=%r\n",
++      Status
++      ));
++  }
++
+   return EFI_SUCCESS;
+ 
+ Fail:
+@@ -554,6 +632,7 @@
+   EFI_STATUS        Status;
+   UINTN             Index;
+   RP1_BUS_PROTOCOL  *Rp1Bus;
++  RP1_BUS_DATA      *Rp1Data;
+   BOOLEAN           AllChildrenStopped;
+ 
+   if (NumberOfChildren == 0) {
+@@ -571,6 +650,14 @@
+       return Status;
+     }
+ 
++    Rp1Data = RP1_BUS_DATA_FROM_THIS (Rp1Bus);
++
++    Rp1BusDisableInterrupts (Rp1Data);
++
++    if (Rp1Data->ExitBootServicesEvent != NULL) {
++      gBS->CloseEvent (Rp1Data->ExitBootServicesEvent);
++    }
++
+     Status = gBS->UninstallMultipleProtocolInterfaces (
+                     ControllerHandle,
+                     &gRp1BusProtocolGuid,
+@@ -579,7 +666,7 @@
+                     );
+     ASSERT_EFI_ERROR (Status);
+ 
+-    FreePool (RP1_BUS_DATA_FROM_THIS (Rp1Bus));
++    FreePool (Rp1Data);
+ 
+     Status = gBS->CloseProtocol (
+                     ControllerHandle,
+diff --git a/Silicon/RaspberryPi/RpiSiliconPkg/Drivers/Rp1BusDxe/Rp1BusDxe.h b/Silicon/RaspberryPi/RpiSiliconPkg/Drivers/Rp1BusDxe/Rp1BusDxe.h
+--- a/Silicon/RaspberryPi/RpiSiliconPkg/Drivers/Rp1BusDxe/Rp1BusDxe.h
++++ b/Silicon/RaspberryPi/RpiSiliconPkg/Drivers/Rp1BusDxe/Rp1BusDxe.h
+@@ -23,6 +23,7 @@
+   RP1_BUS_PROTOCOL               Rp1Bus;
+   EFI_PHYSICAL_ADDRESS           PeripheralBase;
+   UINT32                         ChipId;
++  EFI_EVENT                      ExitBootServicesEvent;
+ } RP1_BUS_DATA;
+ 
+ #define RP1_BUS_DATA_FROM_THIS(a)  CR (a, RP1_BUS_DATA, Rp1Bus, RP1_BUS_DATA_SIGNATURE)
+diff --git a/Silicon/RaspberryPi/RpiSiliconPkg/Drivers/Rp1BusDxe/Rp1BusDxe.inf b/Silicon/RaspberryPi/RpiSiliconPkg/Drivers/Rp1BusDxe/Rp1BusDxe.inf
+--- a/Silicon/RaspberryPi/RpiSiliconPkg/Drivers/Rp1BusDxe/Rp1BusDxe.inf
++++ b/Silicon/RaspberryPi/RpiSiliconPkg/Drivers/Rp1BusDxe/Rp1BusDxe.inf
+@@ -43,6 +43,7 @@
+ [Guids]
+   gRp1GemNonDiscoverableDeviceGuid
+   gRp1DwI2cNonDiscoverableDeviceGuid
++  gEfiEventExitBootServicesGuid                 ## CONSUMES ## Event
+ 
+ [Depex]
+   TRUE
