@@ -997,6 +997,29 @@
   # capsule signing certificate.
   #
   FmpDevicePkg/FmpDxe/FmpDxe.inf {
+    #
+    # FmpDxe refuses to start on its own FILE_GUID: its entry point compares
+    # gEfiCallerIdGuid against the value shipped in FmpDevicePkg and returns
+    # EFI_UNSUPPORTED if they match, because one FMP instance per updatable
+    # image means one FILE_GUID per instance. In DEBUG that is an ASSERT; in
+    # RELEASE the ASSERT compiles away but the early return does not, so the
+    # driver quietly never publishes EFI_FIRMWARE_MANAGEMENT_PROTOCOL and the
+    # whole capsule path is inert with nothing on the console to say so.
+    #
+    # Same GUID as PcdFmpDeviceImageTypeIdGuid below, deliberately: that PCD
+    # is what Rpi5FmpDeviceLib defers to for the ESRT entry (it returns
+    # EFI_UNSUPPORTED from FmpDeviceGetImageTypeIdGuidPtr precisely so the
+    # value lives in one place), and upstream's own comment calls FILE_GUID
+    # "the ESRT GUID". Keeping them equal means there is a single identity for
+    # this firmware image rather than two that can drift.
+    #
+    # Do not change it casually once boards are in the field: FmpDxe namespaces
+    # its non-volatile state -- version, lowest supported version, last attempt
+    # status -- under gEfiCallerIdGuid, so a new value orphans all of it and the
+    # FDF entry at RPi5.fdf must be updated in step.
+    #
+    <Defines>
+      FILE_GUID = a3f8e2d1-5c47-4b96-8f0a-6d21b7e4c358
     <LibraryClasses>
       FmpDeviceLib|Platform/RaspberryPi/RPi5/Library/Rpi5FmpDeviceLib/Rpi5FmpDeviceLib.inf
       FmpPayloadHeaderLib|FmpDevicePkg/Library/FmpPayloadHeaderLibV1/FmpPayloadHeaderLibV1.inf

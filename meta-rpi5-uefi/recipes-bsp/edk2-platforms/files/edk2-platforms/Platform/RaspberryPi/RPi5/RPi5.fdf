@@ -418,7 +418,9 @@ READ_LOCK_STATUS   = TRUE
   #
   # FMP capsule update + ESRT.
   #
-  INF FmpDevicePkg/FmpDxe/FmpDxe.inf
+  # FILE_GUID must match the <Defines> override in RPi5.dsc -- see the
+  # comment there for why FmpDxe will not run without one.
+  INF FILE_GUID = a3f8e2d1-5c47-4b96-8f0a-6d21b7e4c358 FmpDevicePkg/FmpDxe/FmpDxe.inf
   INF MdeModulePkg/Universal/EsrtFmpDxe/EsrtFmpDxe.inf
 
 [FV.FVMAIN_COMPACT]

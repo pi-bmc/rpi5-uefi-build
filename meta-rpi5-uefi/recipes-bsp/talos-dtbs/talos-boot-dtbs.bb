@@ -1,22 +1,22 @@
 SUMMARY = "Broadcom device trees from the Talos kernel OCI image"
 DESCRIPTION = "Extracts the bcm2712 device trees from ghcr.io/siderolabs/kernel \
-so the DTB the VPU bootloader loads is the one the kernel Talos actually runs \
-was built against, and bakes in the nodes that DTB omits. \
+               so the DTB the VPU bootloader loads is the one the kernel Talos actually runs \
+               was built against, and bakes in the nodes that DTB omits. \
 \
-This exists because the device tree has to match the kernel, and this repo does \
-not build that kernel. Sourcing it from the kernel's own image is the only way \
-to keep the two in step without pinning a DT into firmware and hoping it fits -- \
-see the header of rpi5-uefi-sdimg.bb for how the pieces land on the card. \
+               This exists because the device tree has to match the kernel, and this repo does \
+               not build that kernel. Sourcing it from the kernel's own image is the only way \
+               to keep the two in step without pinning a DT into firmware and hoping it fits -- \
+               see the header of rpi5-uefi-sdimg.bb for how the pieces land on the card. \
 \
-Trees are deployed twice: once flat, for the VPU bootloader, and once under \
-by-uname/<kernel release>/ for FdtDxe to pick from at boot. The second copy is \
-what makes a Talos A/B upgrade safe -- see TALOS_KERNEL_TAGS below. \
+               Trees are deployed twice: once flat, for the VPU bootloader, and once under \
+               by-uname/<kernel release>/ for FdtDxe to pick from at boot. The second copy is \
+               what makes a Talos A/B upgrade safe -- see TALOS_KERNEL_TAGS below. \
 \
-Adapted from the talos-dtbs recipe in ../nanokvm-build, which does the same job \
-for the u-boot build. The uefi-eeprom overlay is deliberately not carried over: \
-that one wires up an I2C EEPROM as U-Boot's UEFI variable store, and this \
-firmware keeps its variables in the FD file instead (see the edk2 recipe's \
-patch 0013)."
+               Adapted from the talos-dtbs recipe in ../nanokvm-build, which does the same job \
+               for the u-boot build. The uefi-eeprom overlay is deliberately not carried over: \
+               that one wires up an I2C EEPROM as U-Boot's UEFI variable store, and this \
+               firmware keeps its variables in the FD file instead (see the edk2 recipe's \
+               patch 0013)."
 HOMEPAGE = "https://github.com/siderolabs/kernel"
 
 LICENSE = "GPL-2.0-only"
@@ -53,9 +53,11 @@ TALOS_KERNEL_TAGS ?= "${TALOS_KERNEL_TAG}"
 # shipped as runtime .dtbo files -- see each .dts header for why that ordering
 # matters (blconfig in particular is unpatchable if it is not already present
 # when the VPU firmware's fixup runs).
-SRC_URI = " \
-    file://fixup-blconfig-overlay.dts \
+SRC_URI = "\
+    file://bcm2712-blconfig-overlay.dts \
     file://bcm2712-thermal-overlay.dts \
+    file://bcm2712-boot-spi-overlay.dts \
+    file://bcm2712-dwc2-usb-overlay.dts \
 "
 
 DEPENDS = "dtc-native crane-native"
@@ -68,7 +70,17 @@ do_configure[noexec] = "1"
 do_install[noexec] = "1"
 
 # The overlays baked into every tree below.
-TALOS_DTB_OVERLAYS = "fixup-blconfig-overlay bcm2712-thermal-overlay"
+# The two bcm2712-* additions below are not features: they put back nodes
+# mainline omits that the VPU BOOTLOADER's own overlays reference by symbol.
+# A symbol it cannot resolve makes it drop the whole overlay, so their
+# absence silently cost this board the D0 stepping adaptations
+# (bcm2712d0.dtbo, via spi10 and dma40) and USB-C host mode (dwc2.dtbo, via
+# usb). Order is not load-bearing between them -- each targets a different
+# path, and the one cross-reference (spi10 -> dma40) sits inside a single
+# overlay where dtc resolves it through __local_fixups__. See each .dts
+# header for the evidence.
+TALOS_DTB_OVERLAYS = "bcm2712-blconfig-overlay bcm2712-thermal-overlay \
+                      bcm2712-boot-spi-overlay bcm2712-dwc2-usb-overlay"
 
 # The trees taken out of each image. The Talos kernel ships three bcm2712 ones;
 # bcm2712-rpi-5-b-ovl-rp1.dtb is deliberately not among these two.
@@ -141,27 +153,30 @@ do_compile() {
         done
         bbnote "talos-boot-dtbs: ${tag} is ${release}; baked overlays (${TALOS_DTB_OVERLAYS}) into ${TALOS_DTB_TREES}"
 
-        # The one kernel whose trees the VPU bootloader itself loads, from the
+        # The one kernel whose tree the VPU bootloader itself loads, from the
         # root of the boot partition. Everything else is reachable only through
         # FdtDxe's by-uname lookup.
+        #
+        # The BASE tree only, deliberately -- not the D0 one beside it. The VPU
+        # bootloader's own flow is base tree plus a stepping overlay: on D0
+        # silicon it loads this tree and then applies bcm2712d0.dtbo from
+        # overlays/, which is Raspberry Pi's description of their own part.
+        # Leaving a prebuilt D0 tree at the root only invites it to be loaded
+        # as the base and then patched a second time.
+        #
+        # That flow is why bcm2712-boot-spi-overlay.dts exists: the stepping
+        # overlay resolves &spi10 and &dma40 through this tree's __symbols__,
+        # and one unresolved symbol makes the bootloader drop the whole overlay
+        # ("dterror: can't find symbol 'spi10'"), leaving D0 silicon running a
+        # C0 description.
+        #
+        # The result is closer to the part than the mainline D0 tree is: base +
+        # bcm2712d0.dtbo differs from bcm2712-d-rpi-5-b.dtb in 7 lines, and in
+        # the substantive ones -- main GIO bank widths <0x20 0x04> rather than
+        # <0x20 0x16>, HDMI DMA channels present -- the overlay is the side
+        # with Raspberry Pi's numbers.
         if [ "${tag}" = "${TALOS_KERNEL_TAG}" ]; then
-            cp ${B}/dtbs/by-uname/${release}/*.dtb ${B}/dtbs/
-
-            # The VPU bootloader picks the tree by board AND SoC stepping, and
-            # it asks for Raspberry Pi's downstream filenames. The two naming
-            # schemes disagree for D0 silicon: mainline -- and therefore Talos
-            # -- calls that tree bcm2712-d-rpi-5-b, while the firmware release
-            # calls the same silicon bcm2712d0-rpi-5-b (its bcm2712-d-rpi-5-b
-            # is a different tree again, with no main d0 pinctrl node).
-            #
-            # A D0 board asks for bcm2712d0-rpi-5-b.dtb, does not find it on
-            # this card and falls back to bcm2712-rpi-5-b.dtb -- a C0 tree on
-            # D0 silicon. It boots, which is what makes this hard to notice,
-            # but every pinctrl offset in it is wrong. Ship the D0 tree under
-            # both names so the fallback never happens.
-            if [ -f ${B}/dtbs/bcm2712-d-rpi-5-b.dtb ]; then
-                cp ${B}/dtbs/bcm2712-d-rpi-5-b.dtb ${B}/dtbs/bcm2712d0-rpi-5-b.dtb
-            fi
+            cp ${B}/dtbs/by-uname/${release}/bcm2712-rpi-5-b.dtb ${B}/dtbs/
         fi
     done
 

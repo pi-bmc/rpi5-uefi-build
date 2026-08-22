@@ -1,0 +1,72 @@
+/*
+ * Restore the BCM2712 DWC2 OTG controller behind the USB-C port, with the
+ * fixed clock and NOP PHY it references.
+ *
+ * Same class of problem as bcm2712-boot-spi-overlay.dts: mainline's
+ * bcm2712.dtsi does not describe usb@480000, so the base tree exports no
+ * "usb" symbol, and dwc2.dtbo -- which this project applies from config.txt
+ * as "dtoverlay=dwc2,dr_mode=host" -- is:
+ *
+ *   fragment@0 { target = <&usb>; __overlay__ { dr_mode = "otg"; ... } };
+ *   __fixups__ { usb = "/fragment@0:target:0"; };
+ *
+ * With no usb symbol the overlay cannot resolve, the VPU bootloader drops it,
+ * and the USB-C port is never switched into host mode -- silently, because a
+ * dropped overlay is not a boot failure. The port simply does nothing.
+ *
+ * The node is left status = "disabled" exactly as downstream leaves it;
+ * dwc2.dtbo is what sets status = "okay" along with dr_mode and the FIFO
+ * sizes. Adding it here only makes that overlay resolvable -- it does not by
+ * itself turn the controller on, so a build that drops the dtoverlay= line
+ * behaves as before.
+ *
+ * clk_usb and usbphy are carried along because the usb node references them
+ * and mainline has neither. Both are the downstream definitions verbatim.
+ */
+/dts-v1/;
+/plugin/;
+
+/ {
+	compatible = "brcm,bcm2712";
+
+	fragment@0 {
+		target-path = "/clocks";
+		__overlay__ {
+			clk_usb: clk-usb {
+				compatible = "fixed-clock";
+				#clock-cells = <0x00>;
+				clock-output-names = "otg";
+				clock-frequency = <0x1c9c3800>;
+			};
+		};
+	};
+
+	fragment@1 {
+		target-path = "/";
+		__overlay__ {
+			usbphy: phy {
+				compatible = "usb-nop-xceiv";
+				#phy-cells = <0x00>;
+			};
+		};
+	};
+
+	fragment@2 {
+		target-path = "/axi";
+		__overlay__ {
+			usb: usb@480000 {
+				compatible = "brcm,bcm2835-usb";
+				reg = <0x10 0x480000 0x00 0x10000>;
+				interrupts = <0x00 0x49 0x04>;
+				#address-cells = <0x01>;
+				#size-cells = <0x00>;
+				clocks = <&clk_usb>;
+				clock-names = "otg";
+				phys = <&usbphy>;
+				phy-names = "usb2-phy";
+				power-domains = <&power 0x06>;
+				status = "disabled";
+			};
+		};
+	};
+};

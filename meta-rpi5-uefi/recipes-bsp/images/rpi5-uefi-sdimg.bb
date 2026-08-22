@@ -85,8 +85,16 @@ do_compile() {
     # Overlays still come from the firmware release: they resolve against
     # config.txt's dtoverlay= lines, which the VPU processes, and the Talos
     # kernel image ships none.
+    # Twice: at the root, and under broadcom/ -- the layout mainline uses
+    # (arch/arm64/boot/dts/broadcom, which is also where the Talos kernel image
+    # keeps them and what U-Boot's DTB_DIR points at on arm64). config.txt sets
+    # upstream_kernel=1 so the VPU bootloader asks for mainline names; the two
+    # locations cover both conventions for where those names live. ~24 KiB each
+    # on a 64 MiB partition, which is cheaper than a board that does not boot.
+    mmd -i "${part}" ::/broadcom
     for dtb in "${DEPLOY_DIR_IMAGE}/talos-boot-dtbs/"*.dtb; do
         mcopy -i "${part}" "${dtb}" ::/
+        mcopy -i "${part}" "${dtb}" ::/broadcom/
     done
 
     # The same trees again, filed by the kernel release they belong to, which

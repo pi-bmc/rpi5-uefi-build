@@ -40,7 +40,6 @@ overlay.
 
 Signed-off-by: meta-rpi5-uefi <nbatkins@gmail.com>
 ---
-diff -urN a/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.c b/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.c
 --- a/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.c
 +++ b/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.c
 @@ -97,8 +97,8 @@
@@ -99,10 +98,66 @@ diff -urN a/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.c b/Platform/RaspberryPi/
  
  //
  // Longest kernel release we will build a path out of. Linux caps its own
-@@ -832,6 +850,79 @@
+@@ -142,6 +160,12 @@
+ STATIC UINT32                           mBoardRevision;
+ 
+ //
++// The SoC stepping as a board-variant index, latched at entry from the tree
++// the VPU loaded. See SocVariantFromFdt().
++//
++STATIC UINTN                            mSocVariant = BOARD_VARIANT_FROM_REVISION;
++
++//
+ // The tree we last handed the OS, and how many pages it occupies. Kept so a
+ // better-matched tree can release it: the unkeyed tree below is installed
+ // before the boot option has even been loaded, so on a UKI boot it is
+@@ -832,6 +856,122 @@
  }
  
  /**
++  The SoC stepping, as a board-variant index, read out of the tree the VPU
++  loaded.
++
++  The VPU picks that tree from the chip ID, so its pinctrl compatible states
++  the stepping outright. The board revision nibble only stands in for it: the
++  nibble tracks PCB spins, and a later SKU can carry D0 silicon on a board
++  whose nibble is still 0 -- a 16 GB Pi 5 being the case in hand, where memory
++  size lives in bits 20-22 and moves nothing in the low nibble. Reading the
++  tree costs one lookup and removes the guess.
++
++  Latched at entry, before anything can install an OS tree in its place.
++
++  @retval 1                            D0.
++  @retval 0                            C0.
++  @retval BOARD_VARIANT_FROM_REVISION  The tree does not say; let the
++                                       revision code decide.
++
++**/
++STATIC
++UINTN
++SocVariantFromFdt (
++  VOID
++  )
++{
++  CONST VOID  *Fdt;
++
++  Fdt = FdtPlatformGetBase ();
++  if ((Fdt == NULL) || (FdtCheckHeader (Fdt) != 0)) {
++    return BOARD_VARIANT_FROM_REVISION;
++  }
++
++  if (FdtNodeOffsetByCompatible (Fdt, -1, "brcm,bcm2712d0-pinctrl") >= 0) {
++    return 1;
++  }
++
++  if (FdtNodeOffsetByCompatible (Fdt, -1, "brcm,bcm2712c0-pinctrl") >= 0) {
++    return 0;
++  }
++
++  return BOARD_VARIANT_FROM_REVISION;
++}
++
++/**
 +  Look for the device trees this board can boot, under one directory, and stop
 +  at the first that loads.
 +
@@ -130,7 +185,7 @@ diff -urN a/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.c b/Platform/RaspberryPi/
 +
 +  Count = 0;
 +
-+  Names[Count] = BoardRevisionGetFdtName (mBoardRevision);
++  Names[Count] = BoardRevisionGetFdtName (mBoardRevision, mSocVariant);
 +  if (Names[Count] != NULL) {
 +    Count++;
 +  }
@@ -179,7 +234,7 @@ diff -urN a/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.c b/Platform/RaspberryPi/
    At ReadyToBoot, prefer a device tree the OS installed over the one the VPU
    bootloader loaded.
  
-@@ -853,7 +944,7 @@
+@@ -853,7 +993,7 @@
    IN VOID       *Context
    )
  {
@@ -188,7 +243,7 @@ diff -urN a/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.c b/Platform/RaspberryPi/
  }
  
  /**
-@@ -1056,7 +1147,6 @@
+@@ -1056,7 +1196,6 @@
    EFI_HANDLE                 Handle;
    UINTN                      BufferSize;
    CHAR8                      Uname[FDT_OS_UNAME_MAX + 1];
@@ -196,7 +251,7 @@ diff -urN a/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.c b/Platform/RaspberryPi/
  
    while (TRUE) {
      BufferSize = sizeof (Handle);
-@@ -1099,15 +1189,13 @@
+@@ -1099,15 +1238,13 @@
      //
      mOsFdtMatched = TRUE;
  
@@ -215,23 +270,50 @@ diff -urN a/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.c b/Platform/RaspberryPi/
        Status
        ));
    }
-diff -urN a/Platform/RaspberryPi/Include/Library/BoardRevisionHelperLib.h b/Platform/RaspberryPi/Include/Library/BoardRevisionHelperLib.h
+@@ -1380,6 +1517,8 @@
+         __func__, Status));
+   }
+ 
++  mSocVariant = SocVariantFromFdt ();
++
+   //
+   // Publish the fixup protocol before anything else can fail. This is the
+   // interface that matters to a systemd-boot/UKI system: it brings its own
 --- a/Platform/RaspberryPi/Include/Library/BoardRevisionHelperLib.h
 +++ b/Platform/RaspberryPi/Include/Library/BoardRevisionHelperLib.h
-@@ -29,6 +29,12 @@
- 
- CHAR8 *
- EFIAPI
-+BoardRevisionGetFdtName (
-+  IN  UINT32  RevisionCode
-+  );
-+
-+CHAR8 *
-+EFIAPI
- BoardRevisionGetManufacturerName (
+@@ -27,6 +27,32 @@
    IN  UINT32  RevisionCode
    );
-diff -urN a/Platform/RaspberryPi/Library/BoardRevisionHelperLib/BoardRevisionHelperLib.c b/Platform/RaspberryPi/Library/BoardRevisionHelperLib/BoardRevisionHelperLib.c
+ 
++//
++// Passed as Variant when the caller has nothing better than the revision
++// code to go on.
++//
++#define BOARD_VARIANT_FROM_REVISION  MAX_UINTN
++
++/**
++  The device tree this board wants, as a bare file name.
++
++  @param  RevisionCode  The board's revision code.
++  @param  Variant       Which entry of a multi-tree model to take, or
++                        BOARD_VARIANT_FROM_REVISION to take the one the
++                        revision code implies. A model with a single tree
++                        ignores this.
++
++  @return  A static string, or NULL if the code names no board we know a tree
++           for. The caller owns nothing.
++
++**/
++CHAR8 *
++EFIAPI
++BoardRevisionGetFdtName (
++  IN  UINT32  RevisionCode,
++  IN  UINTN   Variant
++  );
++
+ CHAR8 *
+ EFIAPI
+ BoardRevisionGetManufacturerName (
 --- a/Platform/RaspberryPi/Library/BoardRevisionHelperLib/BoardRevisionHelperLib.c
 +++ b/Platform/RaspberryPi/Library/BoardRevisionHelperLib/BoardRevisionHelperLib.c
 @@ -16,6 +16,7 @@
@@ -242,7 +324,7 @@ diff -urN a/Platform/RaspberryPi/Library/BoardRevisionHelperLib/BoardRevisionHel
  
  UINT64
  EFIAPI
-@@ -120,6 +121,131 @@
+@@ -120,6 +121,144 @@
    return "Unknown Raspberry Pi Model";
  }
  
@@ -264,32 +346,43 @@ diff -urN a/Platform/RaspberryPi/Library/BoardRevisionHelperLib/BoardRevisionHel
 +};
 +
 +/**
-+  Pick one entry out of a revision-indexed device tree list.
++  Pick one entry out of a model's device tree list.
++
++  The list is indexed by board variant. For the Pi 5 B that axis is the SoC
++  stepping, and the revision nibble is only a proxy for it -- the nibble
++  tracks PCB spins, so a later SKU can carry D0 silicon on a board whose
++  nibble is still 0, and then the proxy names the C0 tree for a D0 part. A
++  caller that can read the stepping should say so rather than pass
++  BOARD_VARIANT_FROM_REVISION and inherit that guess.
 +
 +  @param  Names         The list, model default first.
 +  @param  Count         How many entries it has.
 +  @param  RevisionCode  The board's revision code.
++  @param  Variant       The entry to take, or BOARD_VARIANT_FROM_REVISION to
++                        take the one RevisionCode implies.
 +
-+  @return  The name for this board revision, or the model default if the list
-+           does not reach that far.
++  @return  The named entry, or the model default if the list does not reach
++           that far.
 +
 +**/
 +STATIC
 +CHAR8 *
-+FdtNameByRevision (
++FdtNameByVariant (
 +  IN  CONST CHAR8 *CONST  *Names,
 +  IN  UINTN               Count,
-+  IN  UINT32              RevisionCode
++  IN  UINT32              RevisionCode,
++  IN  UINTN               Variant
 +  )
 +{
-+  UINTN  Revision;
-+
-+  Revision = RPI_REVISION (RevisionCode);
-+  if (Revision >= Count) {
-+    Revision = 0;
++  if (Variant == BOARD_VARIANT_FROM_REVISION) {
++    Variant = RPI_REVISION (RevisionCode);
 +  }
 +
-+  return (CHAR8 *) Names[Revision];
++  if (Variant >= Count) {
++    Variant = 0;
++  }
++
++  return (CHAR8 *) Names[Variant];
 +}
 +
 +/**
@@ -304,7 +397,8 @@ diff -urN a/Platform/RaspberryPi/Library/BoardRevisionHelperLib/BoardRevisionHel
 +CHAR8 *
 +EFIAPI
 +BoardRevisionGetFdtName (
-+  IN  UINT32  RevisionCode
++  IN  UINT32  RevisionCode,
++  IN  UINTN   Variant
 +  )
 +{
 +  //
@@ -355,10 +449,11 @@ diff -urN a/Platform/RaspberryPi/Library/BoardRevisionHelperLib/BoardRevisionHel
 +    case 0x14:
 +      return "bcm2711-rpi-cm4.dtb";
 +    case 0x17:
-+      return FdtNameByRevision (
++      return FdtNameByVariant (
 +               mFdtNamesRpi5B,
 +               ARRAY_SIZE (mFdtNamesRpi5B),
-+               RevisionCode
++               RevisionCode,
++               Variant
 +               );
 +    case 0x18:
 +      return "bcm2712-rpi-cm5-cm5io.dtb";
