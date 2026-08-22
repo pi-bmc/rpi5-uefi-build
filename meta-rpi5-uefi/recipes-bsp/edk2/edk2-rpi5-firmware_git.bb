@@ -25,6 +25,10 @@ DEPENDS += "${@bb.utils.contains('RPI5_IPXE', '1', 'ipxe-efi', '', d)}"
 # do_compile validates the Secure Boot key files are DER X.509 before
 # handing them to the FDF -- see the RPI5_SECURE_BOOT_DEFAULT_KEYS block.
 DEPENDS += "${@bb.utils.contains('RPI5_SECURE_BOOT_DEFAULT_KEYS', '1', 'openssl-native', '', d)}"
+# The capsule signing keypair is generated, inspected and used to sign the
+# capsule with openssl -- see the RPI5_FMP block. Listed separately from the
+# Secure Boot line above because the two features are independent.
+DEPENDS += "${@bb.utils.contains('RPI5_FMP', '1', 'openssl-native', '', d)}"
 
 PV = "202602+git${SRCPV}"
 
@@ -363,34 +367,95 @@ RPI5_FW_VERSION ??= "${PV}"
 # capsule applied through UpdateCapsule() replaces the image in place, and the
 # running version shows up in ESRT and in the BMC's Redfish SoftwareInventory.
 #
-# OFF by default, and deliberately so: it cannot be built without a capsule
-# signing certificate (see RPI5_FMP_CERT), and this layer has no business
-# inventing key material on your behalf -- a vendored public cert whose private
-# key nobody holds would look like a working update path and be nothing of the
-# sort. Set both variables together. See files/RpiFmpPkg/README.md.
+# OFF by default. Turning it on needs no other configuration: with neither
+# RPI5_FMP_CERT nor RPI5_FMP_KEY set, do_compile generates a self-signed
+# capsule signing keypair under RPI5_FMP_KEYDIR and do_deploy emits a signed
+# RPi5Firmware.cap alongside the firmware. Read the RPI5_FMP_KEYDIR comment
+# before shipping anything built that way -- a generated key is convenient,
+# not managed. See files/RpiFmpPkg/README.md.
+#
+# What is NOT invented on your behalf is a certificate whose private key
+# nobody holds: that would look like a working update path and be nothing of
+# the sort, since FmpDxe authenticates every payload against the certificates
+# in PcdFmpDevicePkcs7CertBufferXdr and applies nothing when the loop over
+# candidate keys has no candidates.
 RPI5_FMP ??= "0"
 
 # The integer version ESRT publishes and FmpDxe compares for anti-rollback --
 # distinct from RPI5_FW_VERSION, which is the human-readable string. Derived
-# from PV's leading numeric part (202602+git -> 202602). It MUST only ever
-# increase: FmpDxe refuses an image whose version is below the running one, so
-# a number that goes backwards makes the board unupdatable by capsule.
+# from PV's leading numeric part (202602+git -> 202602). Carried both ways:
+# into the firmware as PcdRpi5FirmwareVersion (what FmpDeviceGetVersion
+# reports) and into the capsule as GenerateCapsule's --fw-version, so the
+# capsule always declares the version of the image inside it.
+#
+# It should only ever increase. What actually enforces that is RPI5_FMP_LSV,
+# not this: FmpDxe rejects an image whose version is below the lowest
+# supported version, and compares nothing against the running one.
 RPI5_FMP_VERSION ??= "${@d.getVar('PV').split('+')[0].replace('.', '') or '1'}"
 
-# DER certificate whose private key signs capsules for this platform.
+# Anti-rollback floor written into the capsule as GenerateCapsule's --lsv.
 #
-# There is no way to make this optional and still have a working update path:
-# FmpDxe authenticates every payload against the certificates in
-# PcdFmpDevicePkcs7CertBufferXdr, and an empty buffer means the loop over
-# candidate keys has no candidates, so nothing is ever applied. Rather than
-# ship firmware whose update path silently cannot work, the build fails when
-# RPI5_FMP=1 and this is unset.
+# STICKY, and in a way that cannot be undone from the board: on a successful
+# apply FmpDxe copies the payload's LSV into a variable and thereafter takes
+# the max of that, PcdFmpDeviceBuildTimeLowestSupportedVersion and the device
+# library's value (FmpDxe.c, SetLowestSupportedVersionInVariable). Shipping a
+# capsule with an LSV above a release you may need to go back to makes that
+# release unreachable by capsule for the life of the variable store. Leave it
+# at 0 unless you mean to burn a downgrade bridge.
+RPI5_FMP_LSV ??= "0"
+
+# Extra GenerateCapsule --capflag arguments. Empty on purpose.
 #
-# Generate a key and self-signed cert with, e.g.:
-#   openssl req -x509 -newkey rsa:2048 -keyout capsule.key -outform DER \
-#           -out capsule.cer -days 3650 -nodes -subj "/CN=pi-bmc capsule/"
-# and sign capsules with BaseTools/Scripts/GenerateCapsule.py.
+# The obvious candidate, PersistAcrossReset, does not work on this platform:
+# CapsuleRuntimeDxe returns EFI_UNSUPPORTED for it unless
+# PcdSupportUpdateCapsuleReset is TRUE, and RPi5 neither sets that PCD nor
+# builds the CapsulePei/CapsuleOnDisk machinery that would coalesce a staged
+# capsule after the reset. A capsule with no flags is applied immediately, in
+# the boot services call itself, which is the path that works here -- and so
+# also the one an OS-side fwupd cannot use.
+RPI5_FMP_CAPSULE_FLAGS ??= ""
+
+# DER certificate FmpDxe authenticates capsule payloads against, embedded in
+# the firmware as PcdFmpDevicePkcs7CertBufferXdr.
+#
+# Leave both this and RPI5_FMP_KEY unset to have the build generate a keypair
+# (see RPI5_FMP_KEYDIR). Set this ALONE when the private key lives somewhere
+# this build cannot reach -- an HSM, another machine, a release process --
+# and do_deploy will build the firmware but skip the capsule, with a warning
+# saying so, leaving you to sign one offline.
 RPI5_FMP_CERT ??= ""
+
+# PEM file holding the capsule signing private key AND its certificate,
+# concatenated. Both, in one file: GenerateCapsule signs by shelling out to
+# `openssl smime -sign -signer <file>` with no -inkey, so a bare private key
+# is not enough. do_deploy checks the certificate in here against the one the
+# firmware embeds and fails on a mismatch, because a capsule signed by the
+# wrong key of a matched pair fails authentication silently on the board.
+#
+# If this is set and RPI5_FMP_CERT is not, the DER the firmware embeds is
+# derived from this file's certificate rather than asked for twice.
+RPI5_FMP_KEY ??= ""
+
+# Where a generated keypair lives, when neither RPI5_FMP_CERT nor
+# RPI5_FMP_KEY is set. Four files: capsule.key (private key), capsule.crt
+# (PEM certificate), capsule.cer (the same certificate as DER, embedded in
+# the firmware) and capsule.pem (key + certificate, what signs capsules).
+#
+# Under TOPDIR rather than WORKDIR because the keypair has to OUTLIVE the
+# build: a capsule is authenticated by the firmware ALREADY ON THE BOARD, so
+# a key regenerated between releases produces capsules that fielded boards
+# reject. Nothing is ever regenerated over an existing file, and a
+# half-populated directory is an error rather than a silent re-key -- but
+# `rm -rf` the build directory and the next build makes a new identity that
+# no deployed board will trust. Point this somewhere backed up, or move to
+# RPI5_FMP_CERT + RPI5_FMP_KEY with real key management, before this leaves a
+# workbench. The private key is written unencrypted and mode 0600.
+RPI5_FMP_KEYDIR ??= "${TOPDIR}/fmp-keys"
+
+# Subject and lifetime of a generated certificate. Long-dated on purpose:
+# renewing means reflashing every board that embeds the old certificate.
+RPI5_FMP_SUBJECT ??= "/CN=pi-bmc RPi5 UEFI capsule signing/"
+RPI5_FMP_CERT_DAYS ??= "7300"
 
 # Escape hatch for one-off `-D FOO=BAR` / `--pcd ...` additions without
 # having to override do_compile wholesale.
@@ -402,6 +467,101 @@ do_configure[noexec] = "1"
 # within RPi5.fdf; it has no meaning outside this build (freshly generated,
 # not reused from anywhere else).
 IPXE_DRIVER_FILE_GUID = "c3e36d1a-8f42-4b3e-9a5d-2f6c7b8e9a10"
+
+# Generate the capsule signing keypair, once, if it is not already there.
+#
+# Deliberately all-or-nothing: a directory holding some of the four files is
+# an error rather than something to top up. The four are one identity, and
+# quietly re-deriving a missing piece is how you end up with a certificate in
+# the firmware that no longer matches the key signing capsules for it -- a
+# mismatch whose only symptom is that updates stop applying, on the board,
+# with no message anyone sees.
+#
+# Shell locals go unbraced throughout these functions: bitbake expands ${...}
+# in a task body against its own datastore before /bin/sh ever sees it, so a
+# braced shell variable is one name collision away from being replaced with
+# something else entirely.
+rpi5_fmp_generate_keys() {
+    fmp_keydir="${RPI5_FMP_KEYDIR}"
+
+    # Counted with string accumulation rather than arithmetic: bitbake's shell
+    # code parser raises NotImplementedError on $(( )) and the recipe will not
+    # parse at all.
+    fmp_present=""
+    fmp_missing=""
+    for f in capsule.key capsule.crt capsule.cer capsule.pem; do
+        if [ -e "$fmp_keydir/$f" ]; then
+            fmp_present="$fmp_present $f"
+        else
+            fmp_missing="$fmp_missing $f"
+        fi
+    done
+
+    if [ -z "$fmp_missing" ]; then
+        return 0
+    fi
+
+    if [ -n "$fmp_present" ]; then
+        bbfatal "$fmp_keydir is a partial capsule signing key directory (has:$fmp_present, missing:$fmp_missing). Refusing to regenerate: the certificate and the key that signs capsules for it must stay one pair, and boards already carrying this certificate would reject capsules signed by a new one. Restore the missing files from wherever this keypair is kept, or move the directory aside to start a new identity -- and reflash every board that has the old one."
+    fi
+
+    mkdir -p "$fmp_keydir"
+
+    # umask, not a later chmod: the private key must never exist, even for an
+    # instant, at a mode another user on the build host could read.
+    (umask 077 && openssl req -x509 -newkey rsa:2048 -nodes -sha256 \
+        -days ${RPI5_FMP_CERT_DAYS} -subj "${RPI5_FMP_SUBJECT}" \
+        -keyout "$fmp_keydir/capsule.key" -out "$fmp_keydir/capsule.crt") \
+        || bbfatal "could not generate a capsule signing keypair in $fmp_keydir"
+
+    # The DER form is what BinToPcd renders into the firmware; the PEM pair is
+    # what "openssl smime -sign -signer" wants, key first.
+    openssl x509 -in "$fmp_keydir/capsule.crt" -outform DER \
+        -out "$fmp_keydir/capsule.cer" \
+        || bbfatal "could not convert $fmp_keydir/capsule.crt to DER"
+    (umask 077 && cat "$fmp_keydir/capsule.key" "$fmp_keydir/capsule.crt" \
+        > "$fmp_keydir/capsule.pem") \
+        || bbfatal "could not write $fmp_keydir/capsule.pem"
+    chmod 0644 "$fmp_keydir/capsule.crt" "$fmp_keydir/capsule.cer"
+
+    bbwarn "Generated a self-signed capsule signing keypair in $fmp_keydir. This is now the identity every board flashed with this firmware will trust for updates, and it is stored unencrypted in the build directory: back it up, and replace it with managed key material (RPI5_FMP_CERT + RPI5_FMP_KEY) before shipping. Losing it means no board flashed with this firmware can ever be capsule-updated again."
+}
+
+# Resolve the capsule certificate and signer into $fmp_cert and $fmp_signer
+# for the caller. $fmp_signer comes back empty when the private key is
+# deliberately elsewhere; that is the offline-signing case, not an error.
+#
+# Generation happens only when NEITHER was configured -- setting one of them
+# means the operator has an identity of their own, and inventing a second one
+# alongside it would be worse than useless.
+rpi5_fmp_resolve_keys() {
+    fmp_cert="${RPI5_FMP_CERT}"
+    fmp_signer="${RPI5_FMP_KEY}"
+
+    if [ -z "$fmp_cert" ] && [ -z "$fmp_signer" ]; then
+        rpi5_fmp_generate_keys
+        fmp_cert="${RPI5_FMP_KEYDIR}/capsule.cer"
+        fmp_signer="${RPI5_FMP_KEYDIR}/capsule.pem"
+    fi
+
+    if [ -n "$fmp_signer" ] && [ ! -r "$fmp_signer" ]; then
+        bbfatal "RPI5_FMP_KEY '$fmp_signer' is not readable."
+    fi
+
+    if [ -z "$fmp_cert" ]; then
+        # A signer PEM alone is enough: the certificate the firmware embeds is
+        # that PEM's certificate, so derive it instead of asking for the same
+        # object twice and then having to check the two against each other.
+        mkdir -p "${B}"
+        fmp_cert="${B}/fmp-capsule-cert.der"
+        openssl x509 -in "$fmp_signer" -outform DER -out "$fmp_cert" \
+            || bbfatal "RPI5_FMP_KEY '$fmp_signer' holds no certificate. GenerateCapsule signs by running openssl smime -sign -signer <file> and passes no -inkey, so this file must contain the signing certificate as well as the private key -- concatenate them, key first."
+    fi
+
+    if [ ! -r "$fmp_cert" ]; then
+        bbfatal "RPI5_FMP_CERT '$fmp_cert' is not readable."
+    fi
+}
 
 do_compile() {
     cd ${S}
@@ -565,23 +725,22 @@ do_compile() {
     # --- FMP capsule update ---------------------------------------------
     # FmpDxe + EsrtFmpDxe, plus the certificate their capsule authentication
     # checks against. The certificate is not optional: FmpDxe walks the keys in
-    # PcdFmpDevicePkcs7CertBufferXdr and applies nothing if there are none, so a
-    # build without one produces firmware whose ESRT advertises an update path
-    # that can never succeed. Fail here instead.
+    # PcdFmpDevicePkcs7CertBufferXdr and applies nothing if there are none, so
+    # firmware built without one advertises an ESRT update path that can never
+    # succeed. Hence rpi5_fmp_resolve_keys, which always yields a certificate
+    # -- generating a keypair if the operator configured none -- or stops the
+    # build. The matching capsule is built in do_deploy.
     if [ "${RPI5_FMP}" = "1" ]; then
-        if [ -z "${RPI5_FMP_CERT}" ]; then
-            bbfatal "RPI5_FMP=1 needs RPI5_FMP_CERT set to a DER certificate whose key signs capsules -- FmpDxe rejects every payload without one. See the RPI5_FMP_CERT comment in this recipe for how to make a key."
-        fi
-        if [ ! -r "${RPI5_FMP_CERT}" ]; then
-            bbfatal "RPI5_FMP_CERT '${RPI5_FMP_CERT}' is not readable."
-        fi
+        # Sets $fmp_cert (and $fmp_signer, which only do_deploy needs),
+        # generating a keypair under RPI5_FMP_KEYDIR if none was configured.
+        rpi5_fmp_resolve_keys
 
         # BinToPcd renders the DER certificate as the XDR-encoded VOID* PCD
         # FmpDevicePkg expects. Passing it through --pcd is not an option: it is
         # a multi-hundred-byte binary blob.
         cert_pcd="${B}/fmp-capsule-cert.pcd"
         python3 "${S}/BaseTools/Scripts/BinToPcd.py" \
-            -i "${RPI5_FMP_CERT}" -x -o "${cert_pcd}" \
+            -i "$fmp_cert" -x -o "${cert_pcd}" \
             -p gFmpDevicePkgTokenSpaceGuid.PcdFmpDevicePkcs7CertBufferXdr
 
         printf '%s\n' '!include RpiFmpPkg/RpiFmp.dsc.inc' > "${B}/rpifmp-dsc-line.inc"
@@ -597,10 +756,23 @@ do_compile() {
         # section header, and the marker sits inside [Components.common] -- an
         # opened [PcdsFixedAtBuild] there would swallow every component after
         # it. Appending a fresh section at end of file cannot do that.
-        grep -qF 'PcdFmpDevicePkcs7CertBufferXdr' "${dsc}" || {
-            printf '\n#\n# Capsule signing certificate, appended by the edk2-rpi5-firmware recipe\n# from RPI5_FMP_CERT. FmpDxe authenticates every capsule payload against it.\n#\n[PcdsFixedAtBuild.common]\n' >> "${dsc}"
+        #
+        # The re-run guard matches THIS marker line, not the PCD name: patch
+        # 0018 names PcdFmpDevicePkcs7CertBufferXdr in a comment it adds to
+        # RPi5.dsc, so a grep for the PCD name matches that comment on a clean
+        # tree and skips the append entirely -- producing firmware whose
+        # certificate buffer is empty, which is to say firmware that accepts
+        # no capsule ever, with nothing said about it at build time.
+        cert_marker='# Capsule signing certificate, appended by the edk2-rpi5-firmware recipe.'
+        grep -qF "${cert_marker}" "${dsc}" || {
+            printf '\n#\n%s\n# FmpDxe authenticates every capsule payload against it.\n#\n[PcdsFixedAtBuild.common]\n' "${cert_marker}" >> "${dsc}"
             cat "${cert_pcd}" >> "${dsc}"
         }
+
+        # Belt and braces, because the failure above is invisible from the
+        # board: the assignment must be in the DSC and must carry bytes.
+        grep -q 'PcdFmpDevicePkcs7CertBufferXdr|{0x' "${dsc}" || \
+            bbfatal "the capsule signing certificate did not reach ${dsc}. Without it FmpDxe has no key to authenticate against and no capsule can ever be applied."
 
         fmp_pcds="--pcd gRpiFmpTokenSpaceGuid.PcdRpi5FirmwareVersion=${RPI5_FMP_VERSION}"
     else
@@ -697,6 +869,19 @@ do_compile() {
 
     [ -f "${WORKDIR}/Build/RPi5/${RPI5_BUILD_TARGET}_GCC/FV/RPI_EFI.fd" ] || \
         bbfatal "edk2 build produced no RPI_EFI.fd -- see ${B}/RPI_EFI.report.txt"
+
+    # Getting the assignment into the DSC is necessary but not sufficient; what
+    # decides whether updates work is the value the build actually resolved.
+    # The report is the only place that shows it, and an empty buffer there is
+    # firmware advertising an ESRT update path that can never succeed -- which
+    # nothing on the board will ever tell anyone. Same reasoning as the
+    # "PK Default"/"KEK Default" note in the Secure Boot block above, except
+    # this one is cheap enough to check rather than leave to a human.
+    if [ "${RPI5_FMP}" = "1" ]; then
+        if grep -q 'PcdFmpDevicePkcs7CertBufferXdr.*= {0x0}' "${B}/RPI_EFI.report.txt"; then
+            bbfatal "the build resolved PcdFmpDevicePkcs7CertBufferXdr to an empty buffer, so FmpDxe would have no certificate to authenticate capsules against and nothing could ever be applied. See ${B}/RPI_EFI.report.txt."
+        fi
+    fi
 }
 
 do_deploy() {
@@ -710,6 +895,87 @@ do_deploy() {
     install -m 0644 ${WORKDIR}/Build/RPi5/${RPI5_BUILD_TARGET}_GCC/FV/RPI_EFI.fd ${DEPLOYDIR}/armstub8-2712.bin
     install -m 0644 ${WORKDIR}/config.txt ${DEPLOYDIR}/config.txt
     install -m 0644 ${B}/RPI_EFI.report.txt ${DEPLOYDIR}/RPI_EFI.report.txt
+
+    # --- signed capsule ---------------------------------------------------
+    # The same FD, wrapped in the UEFI capsule headers and PKCS#7-signed with
+    # the key whose certificate the firmware above embeds. What it updates is
+    # the firmware region only: Rpi5FmpDeviceLib stops the write at
+    # PcdNvStorageVariableBase, so the variable store, the Secure Boot keys
+    # and every Setup choice survive being updated over.
+    #
+    # NOT byte-reproducible, and cannot be made so from here: GenerateCapsule
+    # signs by calling `openssl smime -sign`, which stamps a signingTime
+    # attribute into the PKCS#7 and offers no way to suppress it short of
+    # -noattr, which the script never passes. Two builds of identical inputs
+    # produce capsules that differ in those few bytes. Nothing downstream
+    # cares -- the capsule is not packaged, and FmpAuthenticationLibPkcs7
+    # ignores signingTime -- but a diff of two DEPLOYDIRs will show it.
+    if [ "${RPI5_FMP}" = "1" ]; then
+        rpi5_fmp_resolve_keys
+
+        if [ -z "$fmp_signer" ]; then
+            bbwarn "RPI5_FMP_CERT is set but RPI5_FMP_KEY is not, so no capsule was built -- the private key is not available to this build. Sign one offline against ${DEPLOYDIR}/RPI_EFI.fd with edk2's BaseTools/Source/Python/Capsule/GenerateCapsule.py; see files/RpiFmpPkg/README.md for the arguments, which must match this build's --fw-version ${RPI5_FMP_VERSION} and --lsv ${RPI5_FMP_LSV}."
+        else
+            # One source of truth for the image type GUID: read it back out of
+            # the DSC snippet that put it in the firmware. Duplicating the
+            # literal here is exactly the drift the snippet warns about -- a
+            # capsule built under a different GUID names a device that is not
+            # this one, and is refused with nothing to say why.
+            fmp_guid=$(sed -n 's/.*PcdFmpDeviceImageTypeIdGuid[[:space:]]*|[[:space:]]*{GUID("\([0-9A-Fa-f-]\{36\}\)").*/\1/p' \
+                "${WORKDIR}/RpiFmpPkg/RpiFmp.dsc.inc")
+            if [ -z "$fmp_guid" ]; then
+                bbfatal "could not read PcdFmpDeviceImageTypeIdGuid out of ${WORKDIR}/RpiFmpPkg/RpiFmp.dsc.inc -- if the PCD line was reformatted, fix this sed rather than hardcoding the GUID."
+            fi
+
+            # The signer's certificate must be the one the firmware trusts.
+            # Two files that were never a pair produce a capsule that builds,
+            # deploys and installs perfectly, then fails authentication on the
+            # board with an error nobody is watching for.
+            fmp_cert_pub=$(openssl x509 -inform DER -in "$fmp_cert" -noout -pubkey) \
+                || bbfatal "'$fmp_cert' is not a DER X.509 certificate."
+            fmp_signer_pub=$(openssl x509 -in "$fmp_signer" -noout -pubkey) \
+                || bbfatal "RPI5_FMP_KEY '$fmp_signer' holds no certificate. It must contain the signing certificate as well as the private key -- concatenate them, key first."
+            if [ "$fmp_cert_pub" != "$fmp_signer_pub" ]; then
+                bbfatal "RPI5_FMP_KEY '$fmp_signer' does not hold the certificate in '$fmp_cert'. Capsules signed with that key would be rejected by this firmware."
+            fi
+            # -passin pass: turns an encrypted key into a failure here rather
+            # than a prompt inside GenerateCapsule, which has no way to answer
+            # one and would sit waiting on a terminal bitbake does not give it.
+            openssl pkey -in "$fmp_signer" -passin pass: -noout >/dev/null 2>&1 \
+                || bbfatal "RPI5_FMP_KEY '$fmp_signer' holds no usable private key -- either it has only the certificate, or the key is passphrase-encrypted, which openssl smime -sign cannot be given a passphrase for from here. Decrypt it into a build-local copy, or sign offline and set RPI5_FMP_CERT alone."
+
+            # GenerateCapsule wants PEM for --other-public-cert and
+            # --trusted-public-cert, and both are mandatory even for a
+            # self-signed certificate that is its own chain and its own
+            # anchor. Derive them from the DER the firmware embeds, so what
+            # signs is checked against what verifies.
+            fmp_cert_pem="${B}/fmp-capsule-cert.pem"
+            openssl x509 -inform DER -in "$fmp_cert" -out "$fmp_cert_pem" \
+                || bbfatal "could not convert '$fmp_cert' to PEM"
+
+            # Run the script directly rather than through the BinWrappers
+            # PosixLike wrapper: the wrapper is what sets PYTHONPATH, and it
+            # is not on PATH here the way it is inside do_compile's build env.
+            # --signing-tool-path pins openssl to the native sysroot's, the
+            # one every check above used, instead of whatever is on PATH.
+            PYTHONPATH="${S}/BaseTools/Source/Python" python3 \
+                "${S}/BaseTools/Source/Python/Capsule/GenerateCapsule.py" -e \
+                --guid "$fmp_guid" \
+                --fw-version ${RPI5_FMP_VERSION} \
+                --lsv ${RPI5_FMP_LSV} \
+                ${RPI5_FMP_CAPSULE_FLAGS} \
+                --signer-private-cert "$fmp_signer" \
+                --other-public-cert "$fmp_cert_pem" \
+                --trusted-public-cert "$fmp_cert_pem" \
+                --signing-tool-path "${STAGING_BINDIR_NATIVE}" \
+                -o "${DEPLOYDIR}/RPi5Firmware.cap" \
+                "${WORKDIR}/Build/RPi5/${RPI5_BUILD_TARGET}_GCC/FV/RPI_EFI.fd" \
+                || bbfatal "GenerateCapsule failed to build ${DEPLOYDIR}/RPi5Firmware.cap"
+
+            chmod 0644 "${DEPLOYDIR}/RPi5Firmware.cap"
+            bbnote "Built ${DEPLOYDIR}/RPi5Firmware.cap: image type $fmp_guid, version ${RPI5_FMP_VERSION}, lsv ${RPI5_FMP_LSV}."
+        fi
+    fi
 }
 
 addtask deploy after do_compile

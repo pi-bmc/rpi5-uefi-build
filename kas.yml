@@ -14,6 +14,20 @@ target: rpi5-uefi-sdimg
 
 build_system: openembedded
 
+# Forwarded to bitbake as BB_ENV_PASSTHROUGH_ADDITIONS, so that
+#   RPI5_FMP=1 kas build kas.yml
+# reaches the edk2-rpi5-firmware recipe. kas builds an otherwise clean
+# environment: without this block those assignments are accepted by the shell,
+# never seen by bitbake, and the build quietly comes out with FMP off. Null
+# means "forward only if set", leaving the recipe's own defaults in charge.
+env:
+  RPI5_FMP:
+  RPI5_FMP_CERT:
+  RPI5_FMP_KEY:
+  RPI5_FMP_KEYDIR:
+  RPI5_FMP_VERSION:
+  RPI5_FMP_LSV:
+
 repos:
   poky:
     url: https://git.yoctoproject.org/poky
