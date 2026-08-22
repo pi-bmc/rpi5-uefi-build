@@ -20,7 +20,7 @@
 
 [Packages]
   MdePkg/MdePkg.dec
-  RpiBmcPkg/RpiBmcPkg.dec
+  Silicon/RaspberryPi/RpiSiliconPkg/RpiSiliconPkg.dec
   Silicon/RaspberryPi/RpiSiliconPkg/RpiSiliconPkg.dec
 
 [LibraryClasses]

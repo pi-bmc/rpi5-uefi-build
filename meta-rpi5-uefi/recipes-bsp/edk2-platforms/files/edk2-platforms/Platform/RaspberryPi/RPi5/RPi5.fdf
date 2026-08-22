@@ -360,6 +360,65 @@ READ_LOCK_STATUS   = TRUE
   #
   INF Platform/RaspberryPi/Drivers/LogoDxe/LogoDxe.inf
 
+  #
+  # Board integration (see the matching block in RPi5.dsc).
+  #
+  INF Platform/RaspberryPi/RPi5/Drivers/BootloaderConfigDxe/BootloaderConfigDxe.inf
+  INF Platform/RaspberryPi/RPi5/Drivers/PowerButtonDxe/PowerButtonDxe.inf
+  INF Platform/RaspberryPi/RPi5/Drivers/ActiveCoolerDxe/ActiveCoolerDxe.inf
+  INF Platform/RaspberryPi/RPi5/Drivers/FanConfigDxe/FanConfigDxe.inf
+!if $(SECURE_BOOT_ENABLE) == TRUE
+  INF Platform/RaspberryPi/Drivers/SecureBootToggleDxe/SecureBootToggleDxe.inf
+!endif
+
+  #
+  # Redfish host interface core, plus this board's inventory/firmware sync.
+  #
+  INF RedfishPkg/RedfishHostInterfaceDxe/RedfishHostInterfaceDxe.inf
+  INF RedfishPkg/RedfishRestExDxe/RedfishRestExDxe.inf
+  INF RedfishPkg/RedfishCredentialDxe/RedfishCredentialDxe.inf
+  INF RedfishPkg/RedfishDiscoverDxe/RedfishDiscoverDxe.inf
+  INF RedfishPkg/RedfishConfigHandler/RedfishConfigHandlerDriver.inf
+  INF RedfishPkg/RedfishHttpDxe/RedfishHttpDxe.inf
+  INF Platform/RaspberryPi/RPi5/Drivers/RpiRedfishSyncDxe/RpiRedfishSyncDxe.inf
+
+  #
+  # edk2-redfish-client feature drivers and schema converters.
+  #
+  INF RedfishPkg/RestJsonStructureDxe/RestJsonStructureDxe.inf
+  INF RedfishPkg/RedfishPlatformConfigDxe/RedfishPlatformConfigDxe.inf
+  INF MdeModulePkg/Universal/RegularExpressionDxe/RegularExpressionDxe.inf
+  INF RedfishClientPkg/RedfishFeatureCoreDxe/RedfishFeatureCoreDxe.inf
+  INF RedfishClientPkg/RedfishETagDxe/RedfishETagDxe.inf
+  INF RedfishClientPkg/RedfishConfigLangMapDxe/RedfishConfigLangMapDxe.inf
+  INF RedfishClientPkg/HiiToRedfishBootDxe/HiiToRedfishBootDxe.inf
+  INF RedfishClientPkg/HiiToRedfishBiosDxe/HiiToRedfishBiosDxe.inf
+  INF RedfishClientPkg/HiiToRedfishMemoryDxe/HiiToRedfishMemoryDxe.inf
+  INF RedfishClientPkg/Features/ComputerSystem/v1_5_0/Dxe/ComputerSystemDxe.inf
+  INF RedfishClientPkg/Features/ComputerSystemCollectionDxe/ComputerSystemCollectionDxe.inf
+  INF RedfishClientPkg/Features/Bios/v1_0_9/Dxe/BiosDxe.inf
+  INF RedfishClientPkg/Features/BiosAttributeRegistry/v1_3_6/BiosAttributeRegistryDxe.inf
+  INF RedfishClientPkg/Features/BootOptionCollection/BootOptionCollectionDxe.inf
+  INF RedfishClientPkg/Features/BootOption/v1_0_4/Dxe/BootOptionDxe.inf
+  INF RedfishClientPkg/Features/SecureBoot/v1_1_0/Dxe/SecureBootDxe.inf
+  INF RedfishClientPkg/Features/Memory/V1_7_1/Dxe/MemoryDxe.inf
+  INF RedfishClientPkg/Features/MemoryCollectionDxe/MemoryCollectionDxe.inf
+  INF RedfishClientPkg/Converter/ComputerSystem/v1_5_0/RedfishComputerSystem_V1_5_0_Dxe.inf
+  INF RedfishClientPkg/Converter/ComputerSystemCollection/RedfishComputerSystemCollection_Dxe.inf
+  INF RedfishClientPkg/Converter/Bios/v1_0_9/RedfishBios_V1_0_9_Dxe.inf
+  INF RedfishClientPkg/Converter/AttributeRegistry/v1_3_6/RedfishAttributeRegistry_V1_3_6_Dxe.inf
+  INF RedfishClientPkg/Converter/BootOptionCollection/RedfishBootOptionCollection_Dxe.inf
+  INF RedfishClientPkg/Converter/BootOption/v1_0_4/RedfishBootOption_V1_0_4_Dxe.inf
+  INF RedfishClientPkg/Converter/Memory/v1_7_1/RedfishMemory_V1_7_1_Dxe.inf
+  INF RedfishClientPkg/Converter/MemoryCollection/RedfishMemoryCollection_Dxe.inf
+  INF RedfishClientPkg/Converter/SecureBoot/v1_1_0/RedfishSecureBoot_V1_1_0_Dxe.inf
+
+  #
+  # FMP capsule update + ESRT.
+  #
+  INF FmpDevicePkg/FmpDxe/FmpDxe.inf
+  INF MdeModulePkg/Universal/EsrtFmpDxe/EsrtFmpDxe.inf
+
 [FV.FVMAIN_COMPACT]
 FvAlignment        = 16
 ERASE_POLARITY     = 1

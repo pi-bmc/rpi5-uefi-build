@@ -21,7 +21,8 @@
 
 [Packages]
   MdePkg/MdePkg.dec
-  RpiBmcPkg/RpiBmcPkg.dec
+  Platform/RaspberryPi/RPi5/RPi5.dec
+  Silicon/RaspberryPi/RpiSiliconPkg/RpiSiliconPkg.dec
   Silicon/RaspberryPi/RpiSiliconPkg/RpiSiliconPkg.dec
 
 [LibraryClasses]

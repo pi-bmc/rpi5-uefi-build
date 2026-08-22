@@ -34,7 +34,6 @@
   MdeModulePkg/MdeModulePkg.dec
   MdePkg/MdePkg.dec
   Platform/RaspberryPi/RaspberryPi.dec
-  RpiBmcPkg/RpiBmcPkg.dec
   Silicon/Broadcom/Drivers/Net/Rp1GemPkg.dec
   Silicon/RaspberryPi/RpiSiliconPkg/RpiSiliconPkg.dec
 

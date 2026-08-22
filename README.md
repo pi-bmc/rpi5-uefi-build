@@ -103,38 +103,35 @@ too). It does **not** make the onboard jack usable in UEFI. This matches the
 task's own "*This should enable ethernet/PXE*" hedge -- it does, but only for
 add-on NICs.
 
-## Local driver packages (pi-bmc port)
+## Local drivers (pi-bmc port)
 
-The `../u-boot` RPi 5 driver set is ported to EDK2 across two places (all fresh
-BSD-2-Clause-Patent code; the GPL u-boot drivers were behavioral/wire-format
-reference only). `meta-rpi5-uefi/recipes-bsp/edk2-platforms/files/` carries what
-belongs in the platform tree, and
-`meta-rpi5-uefi/recipes-bsp/edk2/files/` the out-of-tree packages:
+The `../u-boot` RPi 5 driver set is ported to EDK2 as fresh BSD-2-Clause-Patent
+code (the GPL u-boot drivers were behavioral/wire-format reference only). It all
+lives in the **edk2-platforms tree**, under
+`meta-rpi5-uefi/recipes-bsp/edk2-platforms/files/edk2-platforms/`, filed where
+upstream files its own drivers -- so upstreaming any of it is a move, not a
+rewrite:
 
-- **`Rp1GemDxe`** -- a native SNP driver for the onboard RJ45
-  (Cadence GEM_GXL in RP1), registers from Xilinx UG585 / FreeBSD `if_cgem.c`.
-  What iPXE never covered. Lives in the edk2-platforms tree at
-  `Silicon/Broadcom/Drivers/Net/`, mirroring upstream's `BcmNet.dec` +
-  `BcmGenetDxe/` (the RPi4 equivalent) one directory over, so upstreaming it is
-  a move rather than a rewrite.
-- **`RpiBmcPkg`** (`RPI5_BMC`) -- the host side of the BMC shared-EEPROM
-  contract (24c256 @0x50 on RP1 I2C1, real or BMC-emulated): `Rp1DwI2cDxe`
-  (DesignWare I2C master), `EepromVarStoreDxe` (UbEfiVa variable blob at
-  0x0000: restore at BDS, sync-back at ReadyToBoot/reset),
-  `SmbiosEepromMirrorDxe` (SM3 blob at 0x6000), `BlkInfoMirrorDxe`
-  (BLK1+JSON at 0x6800), `BootloaderConfigDxe` (blconfig -> UEFI variable,
-  timestamp-gated), plus `Rp1GpioLib`/`BmcEepromLib`.
-- **`0001-Rp1BusDxe-...patch`** (in `recipes-bsp/edk2-platforms/files/`, with
-  the rest of the `edk2-platforms` series) -- extends upstream `Rp1BusDxe` to
-  register the GEM and I2C1 blocks as vendor NonDiscoverable children (the xHCI
-  pattern); the only upstream file change the set needs.
-- **`RPI5_USBNET`** -- wires edk2's own (present-but-unwired) USB
-  CDC-ECM/NCM/RNDIS class drivers into the platform, so the BMC's
-  `g_ether` gadget is a bootable NIC.
+| Location | Contents |
+| --- | --- |
+| `Silicon/RaspberryPi/RpiSiliconPkg/` | RP1 southbridge silicon: `Rp1BusDxe`, `Library/Rp1GpioLib` (GPIO/PWM block behind the PHY reset and the fan) |
+| `Silicon/Broadcom/Drivers/Net/` | `Rp1GemDxe` + `Rp1GemPkg.dec` -- a native SNP driver for the onboard RJ45 (Cadence GEM_GXL in RP1, registers from Xilinx UG585 / FreeBSD `if_cgem.c`), beside upstream's `BcmGenetDxe` + `BcmNet.dec` in the identical shape |
+| `Platform/RaspberryPi/Drivers/`, `Library/` | board-independent: `SecureBootToggleDxe`, `PlatformThemeLib` |
+| `Platform/RaspberryPi/RPi5/Drivers/` | the board's own: `PowerButtonDxe`, `ActiveCoolerDxe`, `FanConfigDxe`, `BootloaderConfigDxe`, `RpiRedfishSyncDxe` |
+| `Platform/RaspberryPi/RPi5/Library/` | `RpiRedfishCredentialLib`, `RpiRedfishHostInterfaceLib`, `Rpi5FmpDeviceLib` |
 
-Integration is patch-light by design: the packages ride an extra
-`PACKAGES_PATH` entry and are pulled into `RPi5.dsc`/`.fdf` via the same
-sed-marker idiom the iPXE embedding uses.
+`RPi5.dsc`/`.fdf` list every one of them directly and unconditionally, the way
+`RPi4.dsc`/`.fdf` list theirs, and the GUIDs and PCDs they need are declared in
+`RPi5.dec`, `RaspberryPi.dec` and `RpiSiliconPkg.dec`. The firmware recipe adds
+no `PACKAGES_PATH` root and inserts nothing for them; its only remaining
+`sed`-marker insertions are for edk2-tree modules (`RPI5_USBNET`, profiling)
+whose sources are not in edk2-platforms at all.
+
+`0001-Rp1BusDxe-...patch` extends `Rp1BusDxe` to register the GEM and I2C1
+blocks as vendor NonDiscoverable children (the xHCI pattern), and
+`0019-RaspberryPi-declare-...patch` declares the Secure Boot toggle's formset
+GUID in the upstream `RaspberryPi.dec` -- the only two upstream-file changes the
+driver set needs.
 
 ## Variables
 
@@ -142,10 +139,10 @@ Set any of these in `kas.yml`'s `local_conf_header` (or `local.conf`):
 
 - `RPI5_IPXE` (default `"0"` since the native Rp1GemDxe covers onboard
   PXE) -- embed the iPXE driver for add-on PCIe/USB NICs.
-- `RPI5_BMC` (default `"1"`) -- build/embed the BMC-integration driver set
-  (`RpiBmcPkg`).
 - `RPI5_USBNET` (default `"1"`) -- wire edk2's USB CDC-ECM/NCM/RNDIS
-  drivers into the build.
+  drivers into the build; the Redfish host interface has no link without it.
+- `RPI5_REDFISH_MAC` / `RPI5_REDFISH_USER` / `RPI5_REDFISH_PASSWORD` -- the
+  wire contract with the BMC, appended to `RPi5.dsc` as PCD overrides.
 - `RPI5_BUILD_TARGET` (default `"RELEASE"`) -- `RELEASE`, `DEBUG` or `NOOPT`.
 - `RPI5_FW_VERSION` (default `${PV}`) -- `PcdFirmwareVersionString`.
 - `RPI5_EDK2_EXTRA_FLAGS` (default empty) -- extra `build` args

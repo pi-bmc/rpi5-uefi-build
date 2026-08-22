@@ -24,7 +24,7 @@
 [Packages]
   MdeModulePkg/MdeModulePkg.dec
   MdePkg/MdePkg.dec
-  RpiBmcPkg/RpiBmcPkg.dec
+  Platform/RaspberryPi/RPi5/RPi5.dec
 
 [LibraryClasses]
   DebugLib

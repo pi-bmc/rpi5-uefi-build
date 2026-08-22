@@ -21,7 +21,7 @@
 
 [Packages]
   MdePkg/MdePkg.dec
-  RpiBmcPkg/RpiBmcPkg.dec
+  Platform/RaspberryPi/RPi5/RPi5.dec
   Platform/RaspberryPi/RaspberryPi.dec
 
 [LibraryClasses]

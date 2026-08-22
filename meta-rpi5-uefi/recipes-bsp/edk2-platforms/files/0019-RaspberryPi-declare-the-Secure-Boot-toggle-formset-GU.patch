@@ -1,0 +1,26 @@
+From: meta-rpi5-uefi <nbatkins@gmail.com>
+Subject: [PATCH] RaspberryPi: declare the Secure Boot toggle formset GUID
+
+Platform/RaspberryPi/Drivers/SecureBootToggleDxe is added by this layer, as
+part of the files/edk2-platforms/ overlay. It publishes an HII formset that
+lets Setup -- and, through RedfishPlatformConfigDxe, the
+/Bios/Attributes/SecureBoot Redfish attribute -- flip the SecureBootEnable
+variable. The formset GUID has to be declared by the package the driver
+belongs to; the driver is board-independent, so that is RaspberryPi.dec
+rather than RPi5.dec.
+
+RaspberryPi.dec is an upstream file, which is why this is a patch rather
+than part of the overlay.
+
+Signed-off-by: meta-rpi5-uefi <nbatkins@gmail.com>
+---
+--- a/Platform/RaspberryPi/RaspberryPi.dec	2026-08-22 01:05:01.904538594 -0500
++++ b/Platform/RaspberryPi/RaspberryPi.dec	2026-08-22 01:05:01.915257584 -0500
+@@ -26,6 +26,7 @@
+   gRaspberryPiTokenSpaceGuid = {0xCD7CC258, 0x31DB, 0x11E6, {0x9F, 0xD3, 0x63, 0xB0, 0xB8, 0xEE, 0xD6, 0xB5}}
+   gConfigDxeFormSetGuid = {0xCD7CC258, 0x31DB, 0x22E6, {0x9F, 0x22, 0x63, 0xB0, 0xB8, 0xEE, 0xD6, 0xB5}}
+   gMemoryAttributeManagerFormSetGuid = { 0xefab3427, 0x4793, 0x4e9e, { 0xaa, 0x29, 0x88, 0x0c, 0x9a, 0x77, 0x5b, 0x5f } }
++  gRpiSecureBootToggleFormSetGuid = { 0x2f9c7e18, 0x5a64, 0x4b3d, { 0xa7, 0x1e, 0xc8, 0x35, 0x0d, 0x62, 0x84, 0x93 } }
+ 
+ [PcdsFixedAtBuild.common]
+   #

@@ -15,6 +15,13 @@
 [Includes]
   Include
 
+[LibraryClasses]
+  ##  @libraryclass  Direct access to the RP1 southbridge's GPIO block: pad
+  #                  control, function select and the PWM used by the Pi 5
+  #                  Active Cooler. Consumed by Rp1GemDxe (PHY reset) and by
+  #                  the board's ActiveCoolerDxe.
+  Rp1GpioLib|Include/Library/Rp1GpioLib.h
+
 [Guids]
   gRpiSiliconTokenSpaceGuid = { 0x0b3ce57a, 0xa82b, 0x4ada, { 0x8f, 0xb5, 0x52, 0xc8, 0x72, 0x30, 0x1f, 0xdb } }
 

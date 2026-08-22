@@ -26,7 +26,7 @@
   FmpDevicePkg/FmpDevicePkg.dec
   ArmPkg/ArmPkg.dec
   Platform/RaspberryPi/RaspberryPi.dec
-  RpiFmpPkg/RpiFmpPkg.dec
+  Platform/RaspberryPi/RPi5/RPi5.dec
 
 [LibraryClasses]
   BaseLib

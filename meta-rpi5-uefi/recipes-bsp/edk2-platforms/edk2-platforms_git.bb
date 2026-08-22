@@ -24,18 +24,36 @@ PV = "202403+git${SRCPV}"
 # compiles. The fork's bulk-sync churn in other vendors' trees (187 files
 # never referenced by RPi5.dsc/.fdf) is deliberately dropped.
 #
-# files/edk2-platforms/ ALSO carries source the fork never had: this layer's
-# own Rp1GemDxe, at Silicon/Broadcom/Drivers/Net/. That addition is purely
-# additive -- it touches no fork-derived file, so the byte-parity above still
-# holds for everything the audit covered -- and it sits where it does because
-# upstream already ships the RPi4 equivalent one directory over: BcmNet.dec
-# beside BcmGenetDxe/, wired into RPi4.dsc/.fdf right after the NetworkPkg
-# includes. Rp1GemPkg.dec + Rp1GemDxe/ mirror that shape exactly, down to the
-# component block's scoped DMA PCDs, so upstreaming the driver is a move
-# rather than a rewrite. RPi5.dsc/.fdf (also overlay files) carry the component
-# and INF entries inline and unconditionally, in the same place and the same
-# form RPi4 carries GENET's -- the firmware recipe inserts nothing for it and
-# has no knob for it: the onboard NIC is not optional on this board.
+# files/edk2-platforms/ ALSO carries source the fork never had: every driver
+# and library this project wrote for the Pi 5. It used to live in out-of-tree
+# packages (RpiBmcPkg, RpiRedfishPkg, RpiFmpPkg, Rp1GemPkg) that the firmware
+# recipe bolted on through a fifth PACKAGES_PATH root; it is now filed the way
+# upstream files its own, so upstreaming any of it is a move rather than a
+# rewrite:
+#
+#   Silicon/RaspberryPi/RpiSiliconPkg   RP1 southbridge silicon -- Rp1BusDxe,
+#                                       and Library/Rp1GpioLib (the GPIO/PWM
+#                                       block behind the PHY reset and the fan)
+#   Silicon/Broadcom/Drivers/Net        Rp1GemDxe + Rp1GemPkg.dec, beside
+#                                       upstream's BcmGenetDxe + BcmNet.dec --
+#                                       the same driver-family shape, for the
+#                                       Pi 5's onboard NIC instead of the Pi 4's
+#   Platform/RaspberryPi/Drivers        SecureBootToggleDxe, and
+#   Platform/RaspberryPi/Library        PlatformThemeLib -- board-independent,
+#                                       so they sit with ConfigDxe and friends
+#   Platform/RaspberryPi/RPi5/Drivers   the board's own: PowerButtonDxe,
+#                                       ActiveCoolerDxe, FanConfigDxe,
+#                                       BootloaderConfigDxe, RpiRedfishSyncDxe
+#   Platform/RaspberryPi/RPi5/Library   RpiRedfishCredentialLib,
+#                                       RpiRedfishHostInterfaceLib,
+#                                       Rpi5FmpDeviceLib
+#
+# All of it is purely additive -- no fork-derived file is touched, so the
+# byte-parity audit above still holds for everything it covered. RPi5.dsc and
+# RPi5.fdf (also overlay files) list every one of these directly and
+# unconditionally, exactly as RPi4.dsc/.fdf list theirs, and the .dec content
+# the retired packages carried was folded into RpiSiliconPkg.dec and RPi5.dec.
+# The firmware recipe therefore inserts nothing for any of them.
 #
 # Rp1GpioLib (Phy.c's PHY-reset line) still resolves out of RpiBmcPkg, which
 # the firmware recipe supplies as its own PACKAGES_PATH root -- so this driver
@@ -91,9 +109,12 @@ PV = "202403+git${SRCPV}"
 #   -- Linux powers USB through the OLD SET_POWER_STATE tag with device id 3,
 #   which is the call 0006 already makes.
 #
-#   0018 turns on the FMP/ESRT capsule path RpiFmpPkg supplies the device
-#   library for; it is inert unless edk2-rpi5-firmware's RPI5_FMP is set,
-#   which is what !includes RpiFmp.dsc.inc/.fdf.inc.
+#   0018 turns on the FMP/ESRT capsule path Rpi5FmpDeviceLib backs.
+#
+#   0019 declares the Secure Boot toggle's HII formset GUID in
+#   RaspberryPi.dec. It exists only because that .dec is an upstream file --
+#   the driver it belongs to, and everything else this layer adds, lives in
+#   the overlay instead of in a patch.
 #
 # ORDERING IS LOAD-BEARING: do_unpack processes SRC_URI entries in listing
 # order, and the git fetcher PRUNES its destsuffix dir before checkout -- the
@@ -119,6 +140,7 @@ SRC_URI = "git://github.com/tianocore/edk2-platforms.git;protocol=https;branch=m
            file://0016-Rp1BusDxe-disarm-RP1-interrupt-routing-at-handoff.patch \
            file://0017-FdtDxe-load-the-OS-provided-device-tree-from-its-own-.patch \
            file://0018-RPi5-enable-FMP-capsule-processing.patch \
+           file://0019-RaspberryPi-declare-the-Secure-Boot-toggle-formset-GU.patch \
            "
 
 # The fork's merge-base with upstream master (2024-03-13); its 32-commit RPi5

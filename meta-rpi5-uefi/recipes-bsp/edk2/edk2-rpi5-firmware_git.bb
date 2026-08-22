@@ -2,10 +2,13 @@ SUMMARY = "EDK2 UEFI firmware (RPI_EFI.fd) for the Raspberry Pi 5"
 DESCRIPTION = "Builds Platform/RaspberryPi/RPi5/RPi5.dsc against UPSTREAM \
                tianocore trees. This recipe owns the edk2 tree itself -- the former \
                NumberOneGit fork's edk2 delta is one commit (0001-EDK2-Sd-Mmc-v4.patch \
-               on the fork's exact master merge-base) -- plus the out-of-tree EDK2 \
-               source packages under files/ (RpiBmcPkg, RpiRedfishPkg, RpiFmpPkg; \
-               Rp1GemDxe lives in the edk2-platforms tree instead, beside upstream's \
-               BcmGenetDxe). The other three trees are recipes of \
+               on the fork's exact master merge-base). Every RPi5 driver and library \
+               this project wrote now lives in the edk2-platforms tree, filed the way \
+               upstream files its own -- board drivers under \
+               Platform/RaspberryPi/RPi5, board-independent ones under \
+               Platform/RaspberryPi, RP1 silicon under Silicon/RaspberryPi/RpiSiliconPkg \
+               and the GEM NIC beside upstream's BcmGenetDxe -- so this recipe carries \
+               no EDK2 source of its own beyond patches to the edk2 tree. The other three trees are recipes of \
                their own, named after their repositories and staged into this recipe's \
                sysroot: edk2-platforms (which carries the RPi5 port and its patch \
                series), edk2-non-osi and edk2-redfish-client. TF-A's bl31.bin (see the \
@@ -31,9 +34,10 @@ DEPENDS += "${@bb.utils.contains('RPI5_IPXE', '1', 'ipxe-efi', '', d)}"
 # handing them to the FDF -- see the RPI5_SECURE_BOOT_DEFAULT_KEYS block.
 DEPENDS += "${@bb.utils.contains('RPI5_SECURE_BOOT_DEFAULT_KEYS', '1', 'openssl-native', '', d)}"
 # The capsule signing keypair is generated, inspected and used to sign the
-# capsule with openssl -- see the RPI5_FMP block. Listed separately from the
-# Secure Boot line above because the two features are independent.
-DEPENDS += "${@bb.utils.contains('RPI5_FMP', '1', 'openssl-native', '', d)}"
+# capsule with openssl. Unconditional, because FMP is: see the RPI5_FMP_KEYDIR
+# block. Listed separately from the Secure Boot line above because that feature
+# needs openssl for its own reasons.
+DEPENDS += "openssl-native"
 
 PV = "202602+git${SRCPV}"
 
@@ -58,9 +62,6 @@ SRC_URI = "gitsm://github.com/tianocore/edk2.git;protocol=https;branch=master;de
            file://0102-RedfishConfigHandler-quiesce-the-Redfish-stack-after.patch \
            file://0103-UefiBootManagerLib-do-not-enumerate-USB-NICs-as-boot.patch \
            file://0104-JsonLib-fix-RELEASE-build-of-lex_unget_unsave.patch \
-           file://RpiBmcPkg \
-           file://RpiRedfishPkg \
-           file://RpiFmpPkg \
            file://secureboot-keys \
            file://usbnet-dsc-snippet.inc \
            file://usbnet-fdf-snippet.fdf.inc \
@@ -169,16 +170,11 @@ do_compile[depends] += "${@bb.utils.contains('RPI5_IPXE', '1', 'ipxe-efi:do_depl
 # a USB dongle from iPXE's driver table). Set to "1" to embed it for those.
 RPI5_IPXE ??= "0"
 
-# Board-integration driver set (local RpiBmcPkg): power button, active
-# cooler, BootloaderConfig provenance variables. (The I2C EEPROM sync
-# drivers that used to live behind this knob were replaced by the Redfish
-# host interface -- see RPI5_REDFISH.)
-RPI5_BMC ??= "1"
-
 # Wire edk2's own USB CDC-ECM/NCM/RNDIS class drivers (present in the
 # pinned tree, not in RPi5.dsc) into the build, so a USB Ethernet gadget on
 # an RP1 port becomes an SNP interface. The BMC's host-interface link rides
-# the ncm.usb0 function of this -- required by RPI5_REDFISH.
+# the ncm.usb0 function of this -- the Redfish host interface has no link
+# without it.
 RPI5_USBNET ??= "1"
 
 # Boot-time profiling: adds ShellPkg's Dp ("dump performance") dynamic
@@ -194,20 +190,9 @@ RPI5_USBNET ??= "1"
 # which is the macro the profiling-*-snippet files gate on.
 PROFILING_ENABLED ??= "0"
 
-# Redfish Host Interface (DSP0270) over the BMC's USB CDC-NCM gadget: the
-# JetKVM method from ../nuc-bios-build, NCM instead of ECM. Replaces the
-# old I2C shared-EEPROM sync as the BMC data path (local RpiRedfishPkg;
-# wire contract in its README.md). Needs RPI5_USBNET=1 for the NIC driver.
-RPI5_REDFISH ??= "1"
-
-# edk2-redfish-client (RedfishClientPkg) on top of the host interface: the
-# standard feature layer, with the FV set taken verbatim from the client's
-# own RedfishClient.fdf.inc (REDFISH_CLIENT=TRUE is passed to the build
-# when this knob is on; RpiRedfishPkg/RpiRedfishClient.dsc.inc builds the
-# matching components -- see that file's header). Requires RPI5_REDFISH.
-RPI5_REDFISH_CLIENT ??= "1"
-
-# The wire contract with the BMC, rendered into RpiRedfish.dsc.inc's PCDs.
+# The wire contract with the BMC. RPi5.dec carries the documented defaults and
+# RPi5.dsc the rest of the Redfish PCDs; do_compile appends overrides for the
+# three below.
 # RPI5_REDFISH_MAC is the gadget's host_addr (the MAC the Pi's NCM NIC
 # comes up with) -- the BMC must present exactly this fixed value, or
 # RedfishDiscoverDxe rejects the interface. Colon-separated, lowercase ok.
@@ -226,13 +211,13 @@ RPI5_REDFISH_PASSWORD ??= "admin"
 # !if blocks that default to FALSE upstream. This knob just turns it on.
 #
 # Two things follow from it:
-#   * RpiBmcPkg/SecureBootToggleDxe's checkbox (and therefore the
+#   * SecureBootToggleDxe's checkbox (and therefore the
 #     /Bios/Attributes/SecureBoot Redfish attribute) only does anything with
 #     this on: with AuthVariableLibNull the SecureBootEnable variable is not
 #     interpreted by anyone.
 #   * RedfishClientPkg's SecureBootDxe feature driver, which serves
 #     Systems/1/SecureBoot, links SecureBootVariableLib either way --
-#     RpiRedfishClient.dsc.inc maps it itself when this is FALSE.
+#     RPi5.dsc maps it itself when this is FALSE.
 #
 # Size: enabling this pulls OpensslLib/BaseCryptLib into VariableRuntimeDxe
 # and SecurityStubDxe. Check FVMAIN_COMPACT headroom in RPI_EFI.report.txt
@@ -266,24 +251,24 @@ RPI5_BUILD_TARGET ??= "RELEASE"
 # "Firmware Version" info and by `dmidecode`/`fwupdmgr` on the running OS.
 RPI5_FW_VERSION ??= "${PV}"
 
-# Firmware Management Protocol + ESRT + capsule application. Without this the
-# firmware can only be updated by rewriting the card by hand; with it, a signed
-# capsule applied through UpdateCapsule() replaces the image in place, and the
-# running version shows up in ESRT and in the BMC's Redfish SoftwareInventory.
+# Firmware Management Protocol + ESRT + capsule application: a signed capsule
+# applied through UpdateCapsule() replaces the image in place, and the running
+# version shows up in ESRT and in the BMC's Redfish SoftwareInventory. FmpDxe
+# and EsrtFmpDxe are listed in RPi5.dsc/.fdf like every other driver, so the
+# feature is always built; the knobs below only configure it.
 #
-# OFF by default. Turning it on needs no other configuration: with neither
-# RPI5_FMP_CERT nor RPI5_FMP_KEY set, do_compile generates a self-signed
-# capsule signing keypair under RPI5_FMP_KEYDIR and do_deploy emits a signed
-# RPi5Firmware.cap alongside the firmware. Read the RPI5_FMP_KEYDIR comment
-# before shipping anything built that way -- a generated key is convenient,
-# not managed. See files/RpiFmpPkg/README.md.
+# It needs no configuration to work: with neither RPI5_FMP_CERT nor
+# RPI5_FMP_KEY set, do_compile generates a self-signed capsule signing keypair
+# under RPI5_FMP_KEYDIR and do_deploy emits a signed RPi5Firmware.cap alongside
+# the firmware. Read the RPI5_FMP_KEYDIR comment before shipping anything built
+# that way -- a generated key is convenient, not managed. See the README beside
+# Rpi5FmpDeviceLib in the edk2-platforms recipe.
 #
-# What is NOT invented on your behalf is a certificate whose private key
-# nobody holds: that would look like a working update path and be nothing of
-# the sort, since FmpDxe authenticates every payload against the certificates
-# in PcdFmpDevicePkcs7CertBufferXdr and applies nothing when the loop over
+# What is NOT invented on your behalf is a certificate whose private key nobody
+# holds: that would look like a working update path and be nothing of the sort,
+# since FmpDxe authenticates every payload against the certificates in
+# PcdFmpDevicePkcs7CertBufferXdr and applies nothing when the loop over
 # candidate keys has no candidates.
-RPI5_FMP ??= "0"
 
 # The integer version ESRT publishes and FmpDxe compares for anti-rollback --
 # distinct from RPI5_FW_VERSION, which is the human-readable string. Derived
@@ -471,7 +456,7 @@ do_compile() {
     # edk2-platforms arrives from its own recipe, read-only and shared, in the
     # sysroot. The feature wiring further down rewrites RPi5.dsc/.fdf in place,
     # so build from a private copy instead. Rebuilt from scratch every run,
-    # which is also what makes turning a knob back off (RPI5_BMC=0, say)
+    # which is also what makes turning a knob back off (RPI5_USBNET=0, say)
     # actually take effect rather than leaving yesterday's !include lines
     # behind in a persisted checkout.
     rm -rf "${EDK2_PLATFORMS_PATH}"
@@ -495,19 +480,11 @@ do_compile() {
     # layout (WORKSPACE=repo root, with edk2/edk2-platforms as direct siblings
     # under it). edk2-non-osi and edk2-redfish-client need none of that: they
     # go on PACKAGES_PATH as absolute sysroot paths, which EDK2 resolves from
-    # anywhere -- exactly as it already does for ${local_pkgs} below.
-    # Local out-of-tree EDK2 packages, staged into a dedicated PACKAGES_PATH
-    # root so EDK2's path resolution sees exactly those package dirs and
-    # nothing else from WORKDIR. Rp1GemDxe is NOT among them -- it ships inside
-    # the edk2-platforms tree, so it resolves off that PACKAGES_PATH entry.
-    local_pkgs="${B}/edk2-local-pkgs"
-    rm -rf "${local_pkgs}"
-    mkdir -p "${local_pkgs}"
-    cp -r "${WORKDIR}/RpiBmcPkg" "${WORKDIR}/RpiRedfishPkg" \
-        "${WORKDIR}/RpiFmpPkg" "${local_pkgs}/"
-
+    # anywhere. There is no fifth "local packages" root any more: every driver
+    # and library this project wrote ships inside the edk2-platforms tree and
+    # resolves off that entry.
     export WORKSPACE="${WORKDIR}"
-    export PACKAGES_PATH="${S}:${EDK2_PLATFORMS_PATH}:${EDK2_NON_OSI_PATH}:${EDK2_REDFISH_CLIENT_PATH}:${local_pkgs}"
+    export PACKAGES_PATH="${S}:${EDK2_PLATFORMS_PATH}:${EDK2_NON_OSI_PATH}:${EDK2_REDFISH_CLIENT_PATH}"
     export EDK_TOOLS_PATH="${S}/BaseTools"
     export CONF_PATH="${WORKDIR}/Conf"
     export PYTHON_COMMAND="python3"
@@ -538,19 +515,15 @@ do_compile() {
     grep -qF "${fdf_marker}" "${fdf}" || \
         bbfatal "RPi5.fdf: '${fdf_marker}' not found -- edk2-platforms layout changed, update this recipe"
 
-    # BMC-integration driver set (local RpiBmcPkg source package).
-    # Every insertion below stays grep-guarded even though the copy above is
-    # pristine: it costs nothing, and it keeps a hand-edited or half-applied
-    # tree from ever producing duplicate includes -- which mean duplicate FFS
-    # files and a GenFv failure.
-    if [ "${RPI5_BMC}" = "1" ]; then
-        printf '%s\n' '!include RpiBmcPkg/RpiBmc.dsc.inc' > "${B}/rpibmc-dsc-line.inc"
-        printf '%s\n' '!include RpiBmcPkg/RpiBmc.fdf.inc' > "${B}/rpibmc-fdf-line.inc"
-        grep -qF 'RpiBmcPkg/RpiBmc.dsc.inc' "${dsc}" || \
-            sed -i "\|${dsc_marker}|r ${B}/rpibmc-dsc-line.inc" "${dsc}"
-        grep -qF 'RpiBmcPkg/RpiBmc.fdf.inc' "${fdf}" || \
-            sed -i "\|${fdf_marker}|r ${B}/rpibmc-fdf-line.inc" "${fdf}"
-    fi
+    # The board's own drivers -- power button, Active Cooler, fan policy page,
+    # bootloader-config provenance, the Secure Boot toggle, the Redfish stack
+    # and FMP -- need nothing inserted here: RPi5.dsc/.fdf list them directly,
+    # the way upstream lists RPi4's. Only edk2-tree modules (below) still get
+    # sed-inserted, because their sources are not in edk2-platforms at all.
+    #
+    # Insertions that remain are grep-guarded: it costs nothing, and it keeps a
+    # hand-edited or half-applied tree from ever producing duplicate includes,
+    # which mean duplicate FFS files and a GenFv failure.
 
     # edk2's own USB CDC-ECM/NCM/RNDIS drivers (in-tree, unwired upstream).
     if [ "${RPI5_USBNET}" = "1" ]; then
@@ -576,56 +549,38 @@ do_compile() {
         profiling_define="-D PROFILING_ENABLED=FALSE"
     fi
 
-    # Redfish Host Interface stack over the BMC's CDC-NCM gadget (RedfishPkg
-    # core drivers + local RpiRedfishPkg; the usbnet snippet above supplies
-    # the NIC driver). The wire-contract knobs are rendered into the
-    # local_pkgs COPY of RpiRedfish.dsc.inc (the pristine WORKDIR original
-    # keeps its placeholders; local_pkgs is rebuilt from it on every
-    # do_compile, so the render is idempotent). The dsc include opens its
-    # own [LibraryClasses]/[PcdsFixedAtBuild] sections and reopens
-    # [Components.common] at its end -- and this insertion runs LAST so that
-    # block sits closest to the marker, leaving every earlier-inserted
-    # component line after it, back inside [Components.common].
-    redfish_client_define=""
-    if [ "${RPI5_REDFISH}" = "1" ]; then
-        [ "${RPI5_USBNET}" = "1" ] || \
-            bbwarn "RPI5_REDFISH=1 without RPI5_USBNET=1: no NIC driver for the BMC link"
-        mac_plain=$(printf '%s' "${RPI5_REDFISH_MAC}" | tr -d ':' | tr 'abcdef' 'ABCDEF')
-        [ "$(printf '%s' "${mac_plain}" | wc -c)" = "12" ] || \
-            bbfatal "RPI5_REDFISH_MAC '${RPI5_REDFISH_MAC}' is not a 6-octet MAC"
-        mac_bytes=$(printf '%s' "${mac_plain}" | sed 's/../0x&, /g; s/, $//')
-        sed -i \
-            -e "s|@RPI5_REDFISH_MAC_PLAIN@|${mac_plain}|g" \
-            -e "s|@RPI5_REDFISH_MAC_BYTES@|${mac_bytes}|g" \
-            -e "s|@RPI5_REDFISH_USER@|${RPI5_REDFISH_USER}|g" \
-            -e "s|@RPI5_REDFISH_PASSWORD@|${RPI5_REDFISH_PASSWORD}|g" \
-            "${local_pkgs}/RpiRedfishPkg/RpiRedfish.dsc.inc"
-        printf '%s\n' '!include RpiRedfishPkg/RpiRedfish.dsc.inc' > "${B}/rpiredfish-dsc-line.inc"
-        printf '%s\n' '!include RpiRedfishPkg/RpiRedfish.fdf.inc' > "${B}/rpiredfish-fdf-line.inc"
-        grep -qF 'RpiRedfishPkg/RpiRedfish.dsc.inc' "${dsc}" || \
-            sed -i "\|${dsc_marker}|r ${B}/rpiredfish-dsc-line.inc" "${dsc}"
-        grep -qF 'RpiRedfishPkg/RpiRedfish.fdf.inc' "${fdf}" || \
-            sed -i "\|${fdf_marker}|r ${B}/rpiredfish-fdf-line.inc" "${fdf}"
+    # --- Redfish host-interface wire contract ----------------------------
+    # RPi5.dsc builds the whole Redfish stack (host interface + the
+    # edk2-redfish-client feature layer) unconditionally, and RPi5.dec carries
+    # the contract's documented defaults. What the recipe still owns is the
+    # three values an operator may need to change per deployment -- the NCM
+    # gadget's MAC and the HTTP Basic credentials -- plus the RestEx device
+    # path that has to match that MAC.
+    #
+    # They are appended as a fresh [PcdsFixedAtBuild.common] section at the END
+    # of the DSC, the same way the FMP certificate below is appended and for
+    # the same reason: a PCD section opened anywhere inside [Components.common]
+    # would swallow every component after it.
+    [ "${RPI5_USBNET}" = "1" ] || \
+        bbwarn "RPI5_USBNET=0: the Redfish stack is built but has no NIC driver for the BMC link"
 
-        # edk2-redfish-client feature layer on top of the host interface.
-        # Same include mechanics. The FV list comes from the client's own
-        # RedfishClient.fdf.inc (via RpiRedfishClient.fdf.inc), which is
-        # gated on REDFISH_CLIENT -- defined on the build command line
-        # below. Its nested RedfishJsonStructureDxe.fdf.inc gates every
-        # entry on per-schema macros left undefined here; those evaluate
-        # false (with "Suspicious expression" parser warnings, which are
-        # expected and harmless). The dsc-side component/library lists stay
-        # explicit in RpiRedfishClient.dsc.inc -- see its header.
-        if [ "${RPI5_REDFISH_CLIENT}" = "1" ]; then
-            redfish_client_define="-D REDFISH_CLIENT=TRUE"
-            printf '%s\n' '!include RpiRedfishPkg/RpiRedfishClient.dsc.inc' > "${B}/rpiredfishclient-dsc-line.inc"
-            printf '%s\n' '!include RpiRedfishPkg/RpiRedfishClient.fdf.inc' > "${B}/rpiredfishclient-fdf-line.inc"
-            grep -qF 'RpiRedfishPkg/RpiRedfishClient.dsc.inc' "${dsc}" || \
-                sed -i "\|${dsc_marker}|r ${B}/rpiredfishclient-dsc-line.inc" "${dsc}"
-            grep -qF 'RpiRedfishPkg/RpiRedfishClient.fdf.inc' "${fdf}" || \
-                sed -i "\|${fdf_marker}|r ${B}/rpiredfishclient-fdf-line.inc" "${fdf}"
-        fi
-    fi
+    mac_plain=$(printf '%s' "${RPI5_REDFISH_MAC}" | tr -d ':' | tr 'abcdef' 'ABCDEF')
+    [ "$(printf '%s' "${mac_plain}" | wc -c)" = "12" ] || \
+        bbfatal "RPI5_REDFISH_MAC '${RPI5_REDFISH_MAC}' is not a 6-octet MAC"
+    mac_bytes=$(printf '%s' "${mac_plain}" | sed 's/../0x&, /g; s/, $//')
+
+    redfish_marker='# Redfish wire contract, appended by the edk2-rpi5-firmware recipe.'
+    grep -qF "${redfish_marker}" "${dsc}" || {
+        printf '\n#\n%s\n#\n[PcdsFixedAtBuild.common]\n' "${redfish_marker}" >> "${dsc}"
+        printf '  gRpiRedfishTokenSpaceGuid.PcdRpiRedfishGadgetMac|{%s}\n' "${mac_bytes}" >> "${dsc}"
+        printf '  gRpiRedfishTokenSpaceGuid.PcdRpiRedfishUser|"%s"\n' "${RPI5_REDFISH_USER}" >> "${dsc}"
+        printf '  gRpiRedfishTokenSpaceGuid.PcdRpiRedfishPassword|"%s"\n' "${RPI5_REDFISH_PASSWORD}" >> "${dsc}"
+        printf '  gEfiRedfishPkgTokenSpaceGuid.PcdRedfishRestExServiceDevicePath.DevicePath|{DEVICE_PATH("MAC(%s,0x1)")}\n' "${mac_plain}" >> "${dsc}"
+    }
+
+    # RedfishClientPkg's own includes gate on this macro; the client is always
+    # built here, so it is always TRUE.
+    redfish_client_define="-D REDFISH_CLIENT=TRUE"
 
     # --- FMP capsule update ---------------------------------------------
     # FmpDxe + EsrtFmpDxe, plus the certificate their capsule authentication
@@ -635,54 +590,46 @@ do_compile() {
     # succeed. Hence rpi5_fmp_resolve_keys, which always yields a certificate
     # -- generating a keypair if the operator configured none -- or stops the
     # build. The matching capsule is built in do_deploy.
-    if [ "${RPI5_FMP}" = "1" ]; then
-        # Sets $fmp_cert (and $fmp_signer, which only do_deploy needs),
-        # generating a keypair under RPI5_FMP_KEYDIR if none was configured.
-        rpi5_fmp_resolve_keys
+    #
+    # FmpDxe/EsrtFmpDxe themselves are listed in RPi5.dsc/.fdf like every other
+    # driver; all that is left here is the certificate they authenticate
+    # against, which cannot live in the tree.
+    # Sets $fmp_cert (and $fmp_signer, which only do_deploy needs),
+    # generating a keypair under RPI5_FMP_KEYDIR if none was configured.
+    rpi5_fmp_resolve_keys
 
-        # BinToPcd renders the DER certificate as the XDR-encoded VOID* PCD
-        # FmpDevicePkg expects. Passing it through --pcd is not an option: it is
-        # a multi-hundred-byte binary blob.
-        cert_pcd="${B}/fmp-capsule-cert.pcd"
-        python3 "${S}/BaseTools/Scripts/BinToPcd.py" \
-            -i "$fmp_cert" -x -o "${cert_pcd}" \
-            -p gFmpDevicePkgTokenSpaceGuid.PcdFmpDevicePkcs7CertBufferXdr
+    # BinToPcd renders the DER certificate as the XDR-encoded VOID* PCD
+    # FmpDevicePkg expects. Passing it through --pcd is not an option: it is
+    # a multi-hundred-byte binary blob.
+    cert_pcd="${B}/fmp-capsule-cert.pcd"
+    python3 "${S}/BaseTools/Scripts/BinToPcd.py" \
+        -i "$fmp_cert" -x -o "${cert_pcd}" \
+        -p gFmpDevicePkgTokenSpaceGuid.PcdFmpDevicePkcs7CertBufferXdr
 
-        printf '%s\n' '!include RpiFmpPkg/RpiFmp.dsc.inc' > "${B}/rpifmp-dsc-line.inc"
-        printf '%s\n' '!include RpiFmpPkg/RpiFmp.fdf.inc' > "${B}/rpifmp-fdf-line.inc"
+    # The certificate PCD goes at the END of the DSC, not at the marker the
+    # other snippets use. BinToPcd emits a bare PCD assignment with no
+    # section header, and the marker sits inside [Components.common] -- an
+    # opened [PcdsFixedAtBuild] there would swallow every component after
+    # it. Appending a fresh section at end of file cannot do that.
+    #
+    # The re-run guard matches THIS marker line, not the PCD name: patch
+    # 0018 names PcdFmpDevicePkcs7CertBufferXdr in a comment it adds to
+    # RPi5.dsc, so a grep for the PCD name matches that comment on a clean
+    # tree and skips the append entirely -- producing firmware whose
+    # certificate buffer is empty, which is to say firmware that accepts
+    # no capsule ever, with nothing said about it at build time.
+    cert_marker='# Capsule signing certificate, appended by the edk2-rpi5-firmware recipe.'
+    grep -qF "${cert_marker}" "${dsc}" || {
+        printf '\n#\n%s\n# FmpDxe authenticates every capsule payload against it.\n#\n[PcdsFixedAtBuild.common]\n' "${cert_marker}" >> "${dsc}"
+        cat "${cert_pcd}" >> "${dsc}"
+    }
 
-        grep -qF 'RpiFmpPkg/RpiFmp.dsc.inc' "${dsc}" || \
-            sed -i "\|${dsc_marker}|r ${B}/rpifmp-dsc-line.inc" "${dsc}"
-        grep -qF 'RpiFmpPkg/RpiFmp.fdf.inc' "${fdf}" || \
-            sed -i "\|${fdf_marker}|r ${B}/rpifmp-fdf-line.inc" "${fdf}"
+    # Belt and braces, because the failure above is invisible from the
+    # board: the assignment must be in the DSC and must carry bytes.
+    grep -q 'PcdFmpDevicePkcs7CertBufferXdr|{0x' "${dsc}" || \
+        bbfatal "the capsule signing certificate did not reach ${dsc}. Without it FmpDxe has no key to authenticate against and no capsule can ever be applied."
 
-        # The certificate PCD goes at the END of the DSC, not at the marker the
-        # other snippets use. BinToPcd emits a bare PCD assignment with no
-        # section header, and the marker sits inside [Components.common] -- an
-        # opened [PcdsFixedAtBuild] there would swallow every component after
-        # it. Appending a fresh section at end of file cannot do that.
-        #
-        # The re-run guard matches THIS marker line, not the PCD name: patch
-        # 0018 names PcdFmpDevicePkcs7CertBufferXdr in a comment it adds to
-        # RPi5.dsc, so a grep for the PCD name matches that comment on a clean
-        # tree and skips the append entirely -- producing firmware whose
-        # certificate buffer is empty, which is to say firmware that accepts
-        # no capsule ever, with nothing said about it at build time.
-        cert_marker='# Capsule signing certificate, appended by the edk2-rpi5-firmware recipe.'
-        grep -qF "${cert_marker}" "${dsc}" || {
-            printf '\n#\n%s\n# FmpDxe authenticates every capsule payload against it.\n#\n[PcdsFixedAtBuild.common]\n' "${cert_marker}" >> "${dsc}"
-            cat "${cert_pcd}" >> "${dsc}"
-        }
-
-        # Belt and braces, because the failure above is invisible from the
-        # board: the assignment must be in the DSC and must carry bytes.
-        grep -q 'PcdFmpDevicePkcs7CertBufferXdr|{0x' "${dsc}" || \
-            bbfatal "the capsule signing certificate did not reach ${dsc}. Without it FmpDxe has no key to authenticate against and no capsule can ever be applied."
-
-        fmp_pcds="--pcd gRpiFmpTokenSpaceGuid.PcdRpi5FirmwareVersion=${RPI5_FMP_VERSION}"
-    else
-        fmp_pcds=""
-    fi
+    fmp_pcds="--pcd gRpiFmpTokenSpaceGuid.PcdRpi5FirmwareVersion=${RPI5_FMP_VERSION}"
 
     # --- embed the iPXE UNDI/SNP driver, if built -----------------------
     # ipxe-efi's do_deploy publishes bin-arm64-efi/ipxe.efidrv to
@@ -722,9 +669,8 @@ do_compile() {
             # tree entirely); Microsoft's CAs are fetched by the bitbake
             # fetcher into secureboot-certs/, checksum-pinned in SRC_URI.
             #
-            # ${WORKDIR}, not ${UNPACKDIR}: this recipe already locates its
-            # other file:// directories that way (see the RpiBmcPkg copy
-            # above), so keep the one convention.
+            # ${WORKDIR}, not ${UNPACKDIR}: this recipe locates all of its
+            # other file:// entries that way, so keep the one convention.
             pkdir="${WORKDIR}/secureboot-keys"
             certdir="${WORKDIR}/secureboot-certs"
 
@@ -783,10 +729,8 @@ do_compile() {
     # nothing on the board will ever tell anyone. Same reasoning as the
     # "PK Default"/"KEK Default" note in the Secure Boot block above, except
     # this one is cheap enough to check rather than leave to a human.
-    if [ "${RPI5_FMP}" = "1" ]; then
-        if grep -q 'PcdFmpDevicePkcs7CertBufferXdr.*= {0x0}' "${B}/RPI_EFI.report.txt"; then
-            bbfatal "the build resolved PcdFmpDevicePkcs7CertBufferXdr to an empty buffer, so FmpDxe would have no certificate to authenticate capsules against and nothing could ever be applied. See ${B}/RPI_EFI.report.txt."
-        fi
+    if grep -q 'PcdFmpDevicePkcs7CertBufferXdr.*= {0x0}' "${B}/RPI_EFI.report.txt"; then
+        bbfatal "the build resolved PcdFmpDevicePkcs7CertBufferXdr to an empty buffer, so FmpDxe would have no certificate to authenticate capsules against and nothing could ever be applied. See ${B}/RPI_EFI.report.txt."
     fi
 }
 
@@ -816,71 +760,70 @@ do_deploy() {
     # produce capsules that differ in those few bytes. Nothing downstream
     # cares -- the capsule is not packaged, and FmpAuthenticationLibPkcs7
     # ignores signingTime -- but a diff of two DEPLOYDIRs will show it.
-    if [ "${RPI5_FMP}" = "1" ]; then
-        rpi5_fmp_resolve_keys
+    rpi5_fmp_resolve_keys
 
-        if [ -z "$fmp_signer" ]; then
-            bbwarn "RPI5_FMP_CERT is set but RPI5_FMP_KEY is not, so no capsule was built -- the private key is not available to this build. Sign one offline against ${DEPLOYDIR}/RPI_EFI.fd with edk2's BaseTools/Source/Python/Capsule/GenerateCapsule.py; see files/RpiFmpPkg/README.md for the arguments, which must match this build's --fw-version ${RPI5_FMP_VERSION} and --lsv ${RPI5_FMP_LSV}."
-        else
-            # One source of truth for the image type GUID: read it back out of
-            # the DSC snippet that put it in the firmware. Duplicating the
-            # literal here is exactly the drift the snippet warns about -- a
-            # capsule built under a different GUID names a device that is not
-            # this one, and is refused with nothing to say why.
-            fmp_guid=$(sed -n 's/.*PcdFmpDeviceImageTypeIdGuid[[:space:]]*|[[:space:]]*{GUID("\([0-9A-Fa-f-]\{36\}\)").*/\1/p' \
-                "${WORKDIR}/RpiFmpPkg/RpiFmp.dsc.inc")
-            if [ -z "$fmp_guid" ]; then
-                bbfatal "could not read PcdFmpDeviceImageTypeIdGuid out of ${WORKDIR}/RpiFmpPkg/RpiFmp.dsc.inc -- if the PCD line was reformatted, fix this sed rather than hardcoding the GUID."
-            fi
-
-            # The signer's certificate must be the one the firmware trusts.
-            # Two files that were never a pair produce a capsule that builds,
-            # deploys and installs perfectly, then fails authentication on the
-            # board with an error nobody is watching for.
-            fmp_cert_pub=$(openssl x509 -inform DER -in "$fmp_cert" -noout -pubkey) \
-                || bbfatal "'$fmp_cert' is not a DER X.509 certificate."
-            fmp_signer_pub=$(openssl x509 -in "$fmp_signer" -noout -pubkey) \
-                || bbfatal "RPI5_FMP_KEY '$fmp_signer' holds no certificate. It must contain the signing certificate as well as the private key -- concatenate them, key first."
-            if [ "$fmp_cert_pub" != "$fmp_signer_pub" ]; then
-                bbfatal "RPI5_FMP_KEY '$fmp_signer' does not hold the certificate in '$fmp_cert'. Capsules signed with that key would be rejected by this firmware."
-            fi
-            # -passin pass: turns an encrypted key into a failure here rather
-            # than a prompt inside GenerateCapsule, which has no way to answer
-            # one and would sit waiting on a terminal bitbake does not give it.
-            openssl pkey -in "$fmp_signer" -passin pass: -noout >/dev/null 2>&1 \
-                || bbfatal "RPI5_FMP_KEY '$fmp_signer' holds no usable private key -- either it has only the certificate, or the key is passphrase-encrypted, which openssl smime -sign cannot be given a passphrase for from here. Decrypt it into a build-local copy, or sign offline and set RPI5_FMP_CERT alone."
-
-            # GenerateCapsule wants PEM for --other-public-cert and
-            # --trusted-public-cert, and both are mandatory even for a
-            # self-signed certificate that is its own chain and its own
-            # anchor. Derive them from the DER the firmware embeds, so what
-            # signs is checked against what verifies.
-            fmp_cert_pem="${B}/fmp-capsule-cert.pem"
-            openssl x509 -inform DER -in "$fmp_cert" -out "$fmp_cert_pem" \
-                || bbfatal "could not convert '$fmp_cert' to PEM"
-
-            # Run the script directly rather than through the BinWrappers
-            # PosixLike wrapper: the wrapper is what sets PYTHONPATH, and it
-            # is not on PATH here the way it is inside do_compile's build env.
-            # --signing-tool-path pins openssl to the native sysroot's, the
-            # one every check above used, instead of whatever is on PATH.
-            PYTHONPATH="${S}/BaseTools/Source/Python" python3 \
-                "${S}/BaseTools/Source/Python/Capsule/GenerateCapsule.py" -e \
-                --guid "$fmp_guid" \
-                --fw-version ${RPI5_FMP_VERSION} \
-                --lsv ${RPI5_FMP_LSV} \
-                ${RPI5_FMP_CAPSULE_FLAGS} \
-                --signer-private-cert "$fmp_signer" \
-                --other-public-cert "$fmp_cert_pem" \
-                --trusted-public-cert "$fmp_cert_pem" \
-                --signing-tool-path "${STAGING_BINDIR_NATIVE}" \
-                -o "${DEPLOYDIR}/RPi5Firmware.cap" \
-                "${WORKDIR}/Build/RPi5/${RPI5_BUILD_TARGET}_GCC/FV/RPI_EFI.fd" \
-                || bbfatal "GenerateCapsule failed to build ${DEPLOYDIR}/RPi5Firmware.cap"
-
-            chmod 0644 "${DEPLOYDIR}/RPi5Firmware.cap"
-            bbnote "Built ${DEPLOYDIR}/RPi5Firmware.cap: image type $fmp_guid, version ${RPI5_FMP_VERSION}, lsv ${RPI5_FMP_LSV}."
+    if [ -z "$fmp_signer" ]; then
+        bbwarn "RPI5_FMP_CERT is set but RPI5_FMP_KEY is not, so no capsule was built -- the private key is not available to this build. Sign one offline against ${DEPLOYDIR}/RPI_EFI.fd with edk2's BaseTools/Source/Python/Capsule/GenerateCapsule.py; see the README beside Rpi5FmpDeviceLib in the edk2-platforms recipe for the arguments, which must match this build's --fw-version ${RPI5_FMP_VERSION} and --lsv ${RPI5_FMP_LSV}."
+    else
+        # One source of truth for the image type GUID: read it back out of
+        # the FmpDxe component block in RPi5.dsc that put it in the
+        # firmware. Duplicating the literal here is exactly the drift that
+        # block warns about -- a capsule built under a different GUID names
+        # a device that is not this one, and is refused with nothing to say
+        # why.
+        fmp_guid=$(sed -n 's/.*PcdFmpDeviceImageTypeIdGuid[[:space:]]*|[[:space:]]*{GUID("\([0-9A-Fa-f-]\{36\}\)").*/\1/p' \
+            "${EDK2_PLATFORMS_PATH}/Platform/RaspberryPi/RPi5/RPi5.dsc")
+        if [ -z "$fmp_guid" ]; then
+            bbfatal "could not read PcdFmpDeviceImageTypeIdGuid out of RPi5.dsc -- if the PCD line was reformatted, fix this sed rather than hardcoding the GUID."
         fi
+
+        # The signer's certificate must be the one the firmware trusts.
+        # Two files that were never a pair produce a capsule that builds,
+        # deploys and installs perfectly, then fails authentication on the
+        # board with an error nobody is watching for.
+        fmp_cert_pub=$(openssl x509 -inform DER -in "$fmp_cert" -noout -pubkey) \
+            || bbfatal "'$fmp_cert' is not a DER X.509 certificate."
+        fmp_signer_pub=$(openssl x509 -in "$fmp_signer" -noout -pubkey) \
+            || bbfatal "RPI5_FMP_KEY '$fmp_signer' holds no certificate. It must contain the signing certificate as well as the private key -- concatenate them, key first."
+        if [ "$fmp_cert_pub" != "$fmp_signer_pub" ]; then
+            bbfatal "RPI5_FMP_KEY '$fmp_signer' does not hold the certificate in '$fmp_cert'. Capsules signed with that key would be rejected by this firmware."
+        fi
+        # -passin pass: turns an encrypted key into a failure here rather
+        # than a prompt inside GenerateCapsule, which has no way to answer
+        # one and would sit waiting on a terminal bitbake does not give it.
+        openssl pkey -in "$fmp_signer" -passin pass: -noout >/dev/null 2>&1 \
+            || bbfatal "RPI5_FMP_KEY '$fmp_signer' holds no usable private key -- either it has only the certificate, or the key is passphrase-encrypted, which openssl smime -sign cannot be given a passphrase for from here. Decrypt it into a build-local copy, or sign offline and set RPI5_FMP_CERT alone."
+
+        # GenerateCapsule wants PEM for --other-public-cert and
+        # --trusted-public-cert, and both are mandatory even for a
+        # self-signed certificate that is its own chain and its own
+        # anchor. Derive them from the DER the firmware embeds, so what
+        # signs is checked against what verifies.
+        fmp_cert_pem="${B}/fmp-capsule-cert.pem"
+        openssl x509 -inform DER -in "$fmp_cert" -out "$fmp_cert_pem" \
+            || bbfatal "could not convert '$fmp_cert' to PEM"
+
+        # Run the script directly rather than through the BinWrappers
+        # PosixLike wrapper: the wrapper is what sets PYTHONPATH, and it
+        # is not on PATH here the way it is inside do_compile's build env.
+        # --signing-tool-path pins openssl to the native sysroot's, the
+        # one every check above used, instead of whatever is on PATH.
+        PYTHONPATH="${S}/BaseTools/Source/Python" python3 \
+            "${S}/BaseTools/Source/Python/Capsule/GenerateCapsule.py" -e \
+            --guid "$fmp_guid" \
+            --fw-version ${RPI5_FMP_VERSION} \
+            --lsv ${RPI5_FMP_LSV} \
+            ${RPI5_FMP_CAPSULE_FLAGS} \
+            --signer-private-cert "$fmp_signer" \
+            --other-public-cert "$fmp_cert_pem" \
+            --trusted-public-cert "$fmp_cert_pem" \
+            --signing-tool-path "${STAGING_BINDIR_NATIVE}" \
+            -o "${DEPLOYDIR}/RPi5Firmware.cap" \
+            "${WORKDIR}/Build/RPi5/${RPI5_BUILD_TARGET}_GCC/FV/RPI_EFI.fd" \
+            || bbfatal "GenerateCapsule failed to build ${DEPLOYDIR}/RPi5Firmware.cap"
+
+        chmod 0644 "${DEPLOYDIR}/RPi5Firmware.cap"
+        bbnote "Built ${DEPLOYDIR}/RPi5Firmware.cap: image type $fmp_guid, version ${RPI5_FMP_VERSION}, lsv ${RPI5_FMP_LSV}."
     fi
 }
 

@@ -372,6 +372,70 @@
   FileExplorerLib|MdeModulePkg/Library/FileExplorerLib/FileExplorerLib.inf
   AcpiLib|EmbeddedPkg/Library/AcpiLib/AcpiLib.inf
 
+  #
+  # RP1 GPIO/PWM block. Two consumers -- Rp1GemDxe's PHY reset line and
+  # ActiveCoolerDxe's fan PWM -- so it is mapped once here rather than
+  # overridden in each component.
+  #
+  Rp1GpioLib|Silicon/RaspberryPi/RpiSiliconPkg/Library/Rp1GpioLib/Rp1GpioLib.inf
+
+  #
+  # Setup theme for the HII browser -- colours and layout for this board
+  # family's pages. Overrides MdeModulePkg's stock CustomizedDisplayLib.
+  #
+  CustomizedDisplayLib|Platform/RaspberryPi/Library/PlatformThemeLib/PlatformThemeLib.inf
+
+  #
+  # Redfish host interface (DSP0270) over the BMC's USB CDC-NCM gadget.
+  # RedfishPkg's own .dsc.inc files are deliberately not used: they are gated
+  # on $(REDFISH_ENABLE), and RedfishLibs.dsc.inc resolves
+  # RedfishPlatformCredentialLib to an IPMI-driven instance this board (which
+  # has no IPMI transport) could never satisfy. The two platform libraries at
+  # the end of this block are this board's own.
+  #
+  RestExLib|RedfishPkg/Library/DxeRestExLib/DxeRestExLib.inf
+  Ucs2Utf8Lib|RedfishPkg/Library/BaseUcs2Utf8Lib/BaseUcs2Utf8Lib.inf
+  RedfishCrtLib|RedfishPkg/PrivateLibrary/RedfishCrtLib/RedfishCrtLib.inf
+  JsonLib|RedfishPkg/Library/JsonLib/JsonLib.inf
+  RedfishLib|RedfishPkg/PrivateLibrary/RedfishLib/RedfishLib.inf
+  RedfishDebugLib|RedfishPkg/Library/RedfishDebugLib/RedfishDebugLib.inf
+  RedfishHttpLib|RedfishPkg/Library/RedfishHttpLib/RedfishHttpLib.inf
+  RedfishPlatformWantedDeviceLib|RedfishPkg/Library/RedfishPlatformWantedDeviceLibNull/RedfishPlatformWantedDeviceLibNull.inf
+  RedfishContentCodingLib|RedfishPkg/Library/RedfishContentCodingLibNull/RedfishContentCodingLibNull.inf
+  RedfishPlatformCredentialLib|Platform/RaspberryPi/RPi5/Library/RpiRedfishCredentialLib/RpiRedfishCredentialLib.inf
+  RedfishPlatformHostInterfaceLib|Platform/RaspberryPi/RPi5/Library/RpiRedfishHostInterfaceLib/RpiRedfishHostInterfaceLib.inf
+
+  #
+  # edk2-redfish-client (RedfishClientPkg): the feature layer above the host
+  # interface -- HII-to-Redfish feature drivers and their schema converters.
+  #
+  RedfishPlatformConfigLib|RedfishPkg/Library/RedfishPlatformConfigLib/RedfishPlatformConfigLib.inf
+  HiiUtilityLib|RedfishPkg/Library/HiiUtilityLib/HiiUtilityLib.inf
+  RedfishFeatureUtilityLib|RedfishClientPkg/Library/RedfishFeatureUtilityLib/RedfishFeatureUtilityLib.inf
+  ConverterCommonLib|RedfishClientPkg/ConverterLib/edk2library/ConverterCommonLib/ConverterCommonLib.inf
+  RedfishResourceIdentifyLib|RedfishClientPkg/Library/RedfishResourceIdentifyLibNull/RedfishResourceIdentifyLibNull.inf
+  EdkIIRedfishResourceConfigLib|RedfishClientPkg/Library/EdkIIRedfishResourceConfigLib/EdkIIRedfishResourceConfigLib.inf
+  RedfishEventLib|RedfishClientPkg/Library/RedfishEventLib/RedfishEventLib.inf
+  RedfishVersionLib|RedfishClientPkg/Library/RedfishVersionLib/RedfishVersionLib.inf
+  RedfishAddendumLib|RedfishClientPkg/Library/RedfishAddendumLib/RedfishAddendumLib.inf
+  ComputerSystemV1_5_0Lib|RedfishClientPkg/ConverterLib/edk2library/ComputerSystem/v1_5_0/Lib.inf
+  ComputerSystemCollectionLib|RedfishClientPkg/ConverterLib/edk2library/ComputerSystemCollection/Lib.inf
+  BiosV1_0_9Lib|RedfishClientPkg/ConverterLib/edk2library/Bios/v1_0_9/Lib.inf
+  AttributeRegistryV1_3_6Lib|RedfishClientPkg/ConverterLib/edk2library/AttributeRegistry/v1_3_6/Lib.inf
+  BootOptionCollectionLib|RedfishClientPkg/ConverterLib/edk2library/BootOptionCollection/Lib.inf
+  BootOptionV1_0_4Lib|RedfishClientPkg/ConverterLib/edk2library/BootOption/v1_0_4/Lib.inf
+  MemoryV1_7_1Lib|RedfishClientPkg/ConverterLib/edk2library/Memory/v1_7_1/Lib.inf
+  MemoryCollectionLib|RedfishClientPkg/ConverterLib/edk2library/MemoryCollection/Lib.inf
+  SecureBootV1_1_0Lib|RedfishClientPkg/ConverterLib/edk2library/SecureBoot/v1_1_0/Lib.inf
+!if $(SECURE_BOOT_ENABLE) == FALSE
+  #
+  # RedfishClientPkg's SecureBootDxe feature driver links these either way; with
+  # SECURE_BOOT_ENABLE the platform maps them itself further up.
+  #
+  SecureBootVariableLib|SecurityPkg/Library/SecureBootVariableLib/SecureBootVariableLib.inf
+  PlatformPKProtectionLib|SecurityPkg/Library/PlatformPKProtectionLibVarPolicy/PlatformPKProtectionLibVarPolicy.inf
+!endif
+
 [LibraryClasses.common.UEFI_DRIVER]
   UefiScsiLib|MdePkg/Library/UefiScsiLib/UefiScsiLib.inf
 
@@ -451,6 +515,34 @@
   gEfiMdeModulePkgTokenSpaceGuid.PcdFirmwareVendor|L"EDK2"
   gEfiMdeModulePkgTokenSpaceGuid.PcdSetNxForStack|TRUE
 
+  #
+  # Setup browser colours, paired with PlatformThemeLib above.
+  #
+  gEfiMdeModulePkgTokenSpaceGuid.PcdBrowserFieldTextColor|0x07                 # lightgray fields
+  gEfiMdeModulePkgTokenSpaceGuid.PcdBrowserSubtitleTextColor|0x0F              # white subtitles
+  gEfiMdeModulePkgTokenSpaceGuid.PcdBrowserFieldTextHighlightColor|0x0F        # white text ...
+  gEfiMdeModulePkgTokenSpaceGuid.PcdBrowserFieldBackgroundHighlightColor|0x00  # ... on black highlight
+
+  #
+  # Redfish host interface. The gadget MAC and the HTTP Basic credentials
+  # default to the wire contract's documented values in RPi5.dec; the
+  # edk2-rpi5-firmware recipe appends overrides for them, and for the matching
+  # RestEx device path, from its own knobs.
+  #
+  gEfiRedfishPkgTokenSpaceGuid.PcdRedfishServicePort|80
+  gEfiRedfishPkgTokenSpaceGuid.PcdRedfishDisableBootstrapCredentialService|TRUE
+  gEfiRedfishPkgTokenSpaceGuid.PcdRedfishRestExServiceDevicePath.DevicePathMatchMode|DEVICE_PATH_MATCH_MAC_NODE
+  gEfiRedfishPkgTokenSpaceGuid.PcdRedfishRestExServiceDevicePath.DevicePathNum|1
+  gEfiRedfishPkgTokenSpaceGuid.PcdHttpGetRetry|3
+  gEfiRedfishPkgTokenSpaceGuid.PcdHttpPutRetry|3
+  gEfiRedfishPkgTokenSpaceGuid.PcdHttpPatchRetry|3
+  gEfiRedfishPkgTokenSpaceGuid.PcdHttpPostRetry|3
+  gEfiRedfishPkgTokenSpaceGuid.PcdHttpDeleteRetry|3
+  gEfiRedfishPkgTokenSpaceGuid.PcdHttpRetryWaitInSecond|1
+
+  # RedfishClientPkg: publish HII questions as Redfish attributes.
+  gEfiRedfishPkgTokenSpaceGuid.PcdRedfishPlatformConfigFeatureProperty|0x03
+
 [PcdsDynamicHii.common.DEFAULT]
   #
   # Display-related.
@@ -491,6 +583,10 @@
   gEfiMdeModulePkgTokenSpaceGuid.PcdConOutRow|L"Rows"|gRaspberryPiTokenSpaceGuid|0x0|25
   gEfiMdeModulePkgTokenSpaceGuid.PcdBootDiscoveryPolicy|L"BootDiscoveryPolicy"|gBootDiscoveryPolicyMgrFormsetGuid|0
 
+  gRaspberryPiTokenSpaceGuid.PcdDisplayEnableScaledVModes|L"DisplayEnableScaledVModes"|gConfigDxeFormSetGuid|0x0|0x21
+  gEfiMdeModulePkgTokenSpaceGuid.PcdSetupConOutColumn|L"Columns"|gRaspberryPiTokenSpaceGuid|0x0|100
+  gEfiMdeModulePkgTokenSpaceGuid.PcdSetupConOutRow|L"Rows"|gRaspberryPiTokenSpaceGuid|0x0|31
+
 [PcdsDynamicDefault.common]
   #
   # Set video resolution for boot options and for text setup.
@@ -508,6 +604,14 @@
 # Components Section - list of all EDK II Modules needed by this Platform
 #
 ################################################################################
+
+  gEfiMdeModulePkgTokenSpaceGuid.PcdSetupVideoHorizontalResolution|800
+  gEfiMdeModulePkgTokenSpaceGuid.PcdSetupVideoVerticalResolution|600
+
+[PcdsDynamicExDefault.common]
+  # RedfishDiscoverDxe's IPv6 leg is patched out (see 0101); keep the HTTP
+  # stack from advertising IPv6 support it will never use.
+  gEfiNetworkPkgTokenSpaceGuid.PcdIPv6HttpSupport|FALSE
 [Components.common]
   #
   # PEI Phase modules
@@ -683,13 +787,10 @@
   # already NonCoherentDmaLib globally.
   #
   # Unconditional, as GENET is for RPi4: this is the board's only onboard NIC,
-  # and a platform that cannot reach the network is no use here. Rp1GpioLib
-  # comes from RpiBmcPkg (Phy.c drives the PHY reset line); that package is a
-  # PACKAGES_PATH root the firmware recipe supplies.
+  # and a platform that cannot reach the network is no use here. Phy.c drives
+  # the PHY reset line through Rp1GpioLib, mapped globally above.
   #
   Silicon/Broadcom/Drivers/Net/Rp1GemDxe/Rp1GemDxe.inf {
-    <LibraryClasses>
-      Rp1GpioLib|RpiBmcPkg/Library/Rp1GpioLib/Rp1GpioLib.inf
     <PcdsFixedAtBuild>
       gEmbeddedTokenSpaceGuid.PcdDmaDeviceOffset|0x0
       gEmbeddedTokenSpaceGuid.PcdDmaDeviceLimit|0xBFFFFFFF
@@ -779,3 +880,91 @@
       UnitTestPersistenceLib|UnitTestFrameworkPkg/Library/UnitTestPersistenceLibNull/UnitTestPersistenceLibNull.inf
       UnitTestResultReportLib|UnitTestFrameworkPkg/Library/UnitTestResultReportLib/UnitTestResultReportLibConOut.inf
   }
+
+  #
+  # Board integration: the Pi 5's power button, its Active Cooler fan and the
+  # Setup page that sets the fan policy, and the bootloader-EEPROM provenance
+  # variables published for the BMC.
+  #
+  Platform/RaspberryPi/RPi5/Drivers/BootloaderConfigDxe/BootloaderConfigDxe.inf
+  Platform/RaspberryPi/RPi5/Drivers/PowerButtonDxe/PowerButtonDxe.inf
+  Platform/RaspberryPi/RPi5/Drivers/ActiveCoolerDxe/ActiveCoolerDxe.inf
+  Platform/RaspberryPi/RPi5/Drivers/FanConfigDxe/FanConfigDxe.inf
+!if $(SECURE_BOOT_ENABLE) == TRUE
+  #
+  # The Setup checkbox (and therefore the /Bios/Attributes/SecureBoot Redfish
+  # attribute) only means anything with real AuthVariableLib behind it.
+  #
+  Platform/RaspberryPi/Drivers/SecureBootToggleDxe/SecureBootToggleDxe.inf
+!endif
+
+  #
+  # Redfish host interface core, plus this board's inventory/firmware sync.
+  #
+  RedfishPkg/RedfishHostInterfaceDxe/RedfishHostInterfaceDxe.inf
+  RedfishPkg/RedfishRestExDxe/RedfishRestExDxe.inf {
+    <LibraryClasses>
+      SortLib|MdeModulePkg/Library/BaseSortLib/BaseSortLib.inf
+  }
+  RedfishPkg/RedfishCredentialDxe/RedfishCredentialDxe.inf
+  RedfishPkg/RedfishDiscoverDxe/RedfishDiscoverDxe.inf {
+    <LibraryClasses>
+      SortLib|MdeModulePkg/Library/BaseSortLib/BaseSortLib.inf
+  }
+  RedfishPkg/RedfishConfigHandler/RedfishConfigHandlerDriver.inf
+  RedfishPkg/RedfishHttpDxe/RedfishHttpDxe.inf
+  Platform/RaspberryPi/RPi5/Drivers/RpiRedfishSyncDxe/RpiRedfishSyncDxe.inf
+
+  #
+  # edk2-redfish-client feature drivers and schema converters.
+  #
+  RedfishPkg/RestJsonStructureDxe/RestJsonStructureDxe.inf
+  RedfishPkg/RedfishPlatformConfigDxe/RedfishPlatformConfigDxe.inf
+  MdeModulePkg/Universal/RegularExpressionDxe/RegularExpressionDxe.inf
+  RedfishClientPkg/RedfishFeatureCoreDxe/RedfishFeatureCoreDxe.inf
+  RedfishClientPkg/RedfishETagDxe/RedfishETagDxe.inf
+  RedfishClientPkg/RedfishConfigLangMapDxe/RedfishConfigLangMapDxe.inf
+  RedfishClientPkg/HiiToRedfishBootDxe/HiiToRedfishBootDxe.inf
+  RedfishClientPkg/HiiToRedfishBiosDxe/HiiToRedfishBiosDxe.inf
+  RedfishClientPkg/HiiToRedfishMemoryDxe/HiiToRedfishMemoryDxe.inf
+  RedfishClientPkg/Features/ComputerSystem/v1_5_0/Dxe/ComputerSystemDxe.inf
+  RedfishClientPkg/Features/ComputerSystemCollectionDxe/ComputerSystemCollectionDxe.inf
+  RedfishClientPkg/Features/Bios/v1_0_9/Dxe/BiosDxe.inf
+  RedfishClientPkg/Features/BiosAttributeRegistry/v1_3_6/BiosAttributeRegistryDxe.inf
+  RedfishClientPkg/Features/BootOptionCollection/BootOptionCollectionDxe.inf
+  RedfishClientPkg/Features/BootOption/v1_0_4/Dxe/BootOptionDxe.inf
+  RedfishClientPkg/Features/SecureBoot/v1_1_0/Dxe/SecureBootDxe.inf
+  RedfishClientPkg/Features/Memory/V1_7_1/Dxe/MemoryDxe.inf
+  RedfishClientPkg/Features/MemoryCollectionDxe/MemoryCollectionDxe.inf
+  RedfishClientPkg/Converter/ComputerSystem/v1_5_0/RedfishComputerSystem_V1_5_0_Dxe.inf
+  RedfishClientPkg/Converter/ComputerSystemCollection/RedfishComputerSystemCollection_Dxe.inf
+  RedfishClientPkg/Converter/Bios/v1_0_9/RedfishBios_V1_0_9_Dxe.inf
+  RedfishClientPkg/Converter/AttributeRegistry/v1_3_6/RedfishAttributeRegistry_V1_3_6_Dxe.inf
+  RedfishClientPkg/Converter/BootOptionCollection/RedfishBootOptionCollection_Dxe.inf
+  RedfishClientPkg/Converter/BootOption/v1_0_4/RedfishBootOption_V1_0_4_Dxe.inf
+  RedfishClientPkg/Converter/Memory/v1_7_1/RedfishMemory_V1_7_1_Dxe.inf
+  RedfishClientPkg/Converter/MemoryCollection/RedfishMemoryCollection_Dxe.inf
+  RedfishClientPkg/Converter/SecureBoot/v1_1_0/RedfishSecureBoot_V1_1_0_Dxe.inf
+
+  #
+  # Firmware Management Protocol + ESRT: a signed capsule through
+  # UpdateCapsule() replaces the image in place. FmpDxe authenticates every
+  # payload against PcdFmpDevicePkcs7CertBufferXdr, which the
+  # edk2-rpi5-firmware recipe appends to the end of this file from its
+  # capsule signing certificate.
+  #
+  FmpDevicePkg/FmpDxe/FmpDxe.inf {
+    <LibraryClasses>
+      FmpDeviceLib|Platform/RaspberryPi/RPi5/Library/Rpi5FmpDeviceLib/Rpi5FmpDeviceLib.inf
+      FmpPayloadHeaderLib|FmpDevicePkg/Library/FmpPayloadHeaderLibV1/FmpPayloadHeaderLibV1.inf
+      CapsuleUpdatePolicyLib|FmpDevicePkg/Library/CapsuleUpdatePolicyLibNull/CapsuleUpdatePolicyLibNull.inf
+      FmpDependencyLib|FmpDevicePkg/Library/FmpDependencyLib/FmpDependencyLib.inf
+      FmpDependencyCheckLib|FmpDevicePkg/Library/FmpDependencyCheckLibNull/FmpDependencyCheckLibNull.inf
+      FmpDependencyDeviceLib|FmpDevicePkg/Library/FmpDependencyDeviceLibNull/FmpDependencyDeviceLibNull.inf
+    <PcdsFixedAtBuild>
+      gFmpDevicePkgTokenSpaceGuid.PcdFmpDeviceImageTypeIdGuid|{GUID("a3f8e2d1-5c47-4b96-8f0a-6d21b7e4c358")}
+      gFmpDevicePkgTokenSpaceGuid.PcdFmpDeviceImageIdName|L"Raspberry Pi 5 UEFI Firmware"
+      gFmpDevicePkgTokenSpaceGuid.PcdFmpDeviceBuildTimeLowestSupportedVersion|0
+      gFmpDevicePkgTokenSpaceGuid.PcdFmpDeviceProgressWatchdogTimeInSeconds|0
+  }
+  MdeModulePkg/Universal/EsrtFmpDxe/EsrtFmpDxe.inf
