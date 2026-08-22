@@ -42,7 +42,19 @@ refused even then).
 | --- | --- | --- |
 | `meta-rpi5-uefi/recipes-bsp/arm-trusted-firmware/arm-trusted-firmware_git.bb` | `ARM-software/arm-trusted-firmware`, pinned commit (see caveat below) | `bl31.bin` |
 | `meta-rpi5-uefi/recipes-bsp/ipxe/ipxe-efi_git.bb` | `ipxe/ipxe` master | `ipxe.efidrv`, `ipxe.efi` |
-| `meta-rpi5-uefi/recipes-bsp/edk2/edk2-rpi5-firmware_git.bb` | `NumberOneGit/edk2`, `edk2-platforms`, `edk2-non-osi`, all `master` | `RPI_EFI.fd`, `config.txt` |
+| `meta-rpi5-uefi/recipes-bsp/edk2-platforms/edk2-platforms_git.bb` | `tianocore/edk2-platforms` `master`, pinned + this layer's RPi5 port | patched source tree, staged into the sysroot |
+| `meta-rpi5-uefi/recipes-bsp/edk2-non-osi/edk2-non-osi_git.bb` | `tianocore/edk2-non-osi` `master`, pinned | source tree, staged into the sysroot |
+| `meta-rpi5-uefi/recipes-bsp/edk2-redfish-client/edk2-redfish-client_git.bb` | `tianocore/edk2-redfish-client` `main`, pinned | source tree, staged into the sysroot |
+| `meta-rpi5-uefi/recipes-bsp/edk2/edk2-rpi5-firmware_git.bb` | `tianocore/edk2` `master`, pinned, plus the three trees above | `RPI_EFI.fd`, `config.txt` |
+
+One recipe per upstream repository: `edk2-rpi5-firmware` owns the `edk2` tree
+and the out-of-tree packages under its own `files/`, and `DEPENDS` on the other
+three, which fetch and patch their trees and stage them under
+`${STAGING_DATADIR}/edk2`. The RPi5 port and its patch series therefore live in
+`recipes-bsp/edk2-platforms/`, not in the firmware recipe. `do_compile` copies
+`edk2-platforms` out of the sysroot before building, because wiring the optional
+feature sets in rewrites `RPi5.dsc`/`.fdf`; `edk2-non-osi` and
+`edk2-redfish-client` are read from the sysroot in place.
 
 The `edk2-rpi5-firmware` recipe builds
 `edk2-platforms/Platform/RaspberryPi/RPi5/RPi5.dsc`/`.fdf`, with
@@ -94,7 +106,8 @@ add-on NICs.
 ## Local driver packages (pi-bmc port)
 
 Beyond the upstream build, `meta-rpi5-uefi/recipes-bsp/edk2/files/` carries
-two out-of-tree EDK2 source packages plus one small patch, porting the
+the out-of-tree EDK2 source packages, and
+`meta-rpi5-uefi/recipes-bsp/edk2-platforms/files/` the one small patch, porting the
 `../u-boot` RPi 5 driver set to EDK2 (all fresh BSD-2-Clause-Patent code;
 the GPL u-boot drivers were behavioral/wire-format reference only):
 
@@ -108,8 +121,9 @@ the GPL u-boot drivers were behavioral/wire-format reference only):
   `SmbiosEepromMirrorDxe` (SM3 blob at 0x6000), `BlkInfoMirrorDxe`
   (BLK1+JSON at 0x6800), `BootloaderConfigDxe` (blconfig -> UEFI variable,
   timestamp-gated), plus `Rp1GpioLib`/`BmcEepromLib`.
-- **`0001-Rp1BusDxe-...patch`** -- extends upstream `Rp1BusDxe` to register
-  the GEM and I2C1 blocks as vendor NonDiscoverable children (the xHCI
+- **`0001-Rp1BusDxe-...patch`** (in `recipes-bsp/edk2-platforms/files/`, with
+  the rest of the `edk2-platforms` series) -- extends upstream `Rp1BusDxe` to
+  register the GEM and I2C1 blocks as vendor NonDiscoverable children (the xHCI
   pattern); the only upstream file change the set needs.
 - **`RPI5_USBNET`** -- wires edk2's own (present-but-unwired) USB
   CDC-ECM/NCM/RNDIS class drivers into the platform, so the BMC's

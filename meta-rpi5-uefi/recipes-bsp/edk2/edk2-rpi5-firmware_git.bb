@@ -1,26 +1,29 @@
 SUMMARY = "EDK2 UEFI firmware (RPI_EFI.fd) for the Raspberry Pi 5"
 DESCRIPTION = "Builds Platform/RaspberryPi/RPi5/RPi5.dsc against UPSTREAM \
-               tianocore trees. The former NumberOneGit forks are fully decomposed into \
-               this layer: their edk2 delta is one commit (0001-EDK2-Sd-Mmc-v4.patch on \
-               the fork's exact master merge-base), and their edk2-platforms RPi5 port is \
-               files/edk2-platforms/ (the port's ADDED files, copied in after unpack) \
-               plus 0000-edk2-platforms-RPi5-port.patch (its changes to files that exist \
-               upstream) -- reconstructed byte-identical to the fork within every package \
-               tree this build compiles. TF-A's bl31.bin (see the arm-trusted-firmware \
-               recipe) is embedded as the FD.RPI_EFI region-0 payload, and, if RPI5_IPXE \
-               is enabled, an iPXE UNDI/SNP driver (see the ipxe-efi recipe) rides along \
-               as a prebuilt DXE driver."
+               tianocore trees. This recipe owns the edk2 tree itself -- the former \
+               NumberOneGit fork's edk2 delta is one commit (0001-EDK2-Sd-Mmc-v4.patch \
+               on the fork's exact master merge-base) -- plus the out-of-tree EDK2 \
+               source packages under files/. The other three trees are recipes of \
+               their own, named after their repositories and staged into this recipe's \
+               sysroot: edk2-platforms (which carries the RPi5 port and its patch \
+               series), edk2-non-osi and edk2-redfish-client. TF-A's bl31.bin (see the \
+               arm-trusted-firmware recipe) is embedded as the FD.RPI_EFI region-0 \
+               payload, and, if RPI5_IPXE is enabled, an iPXE UNDI/SNP driver (see the \
+               ipxe-efi recipe) rides along as a prebuilt DXE driver."
 HOMEPAGE = "https://github.com/tianocore/edk2"
 
-# edk2 + edk2-platforms are both BSD-2-Clause-Patent (identical License.txt).
-# edk2-non-osi carries no single root license file -- it's a grab-bag of
-# silicon-vendor binaries/sources, each under its own BSD-2-Clause-Patent-
-# family license text embedded in the relevant .inf/source comments, so
-# there's nothing meaningful to point LIC_FILES_CHKSUM at there.
+# edk2's own License.txt. Each of the three sibling source-tree recipes
+# declares its own LICENSE/LIC_FILES_CHKSUM -- including edk2-non-osi, which
+# has no root license file at all (see that recipe for why).
 LICENSE = "BSD-2-Clause-Patent"
 LIC_FILES_CHKSUM = "file://License.txt;md5=2b415520383f7964e96700ae12b4570a"
 
-DEPENDS = "acpica-native arm-trusted-firmware util-linux-native"
+# The three source trees this build needs beside edk2 itself. Each is fetched
+# and patched by its own recipe and staged under ${STAGING_DATADIR}/edk2 -- see
+# the EDK2_*_PATH block below, and recipes-bsp/edk2-platforms,
+# recipes-bsp/edk2-non-osi, recipes-bsp/edk2-redfish-client.
+DEPENDS = "edk2-platforms edk2-non-osi edk2-redfish-client"
+DEPENDS += "acpica-native arm-trusted-firmware util-linux-native"
 DEPENDS += "${@bb.utils.contains('RPI5_IPXE', '1', 'ipxe-efi', '', d)}"
 # do_compile validates the Secure Boot key files are DER X.509 before
 # handing them to the FDF -- see the RPI5_SECURE_BOOT_DEFAULT_KEYS block.
@@ -32,105 +35,22 @@ DEPENDS += "${@bb.utils.contains('RPI5_FMP', '1', 'openssl-native', '', d)}"
 
 PV = "202602+git${SRCPV}"
 
-# Patch order matters and follows SRC_URI order:
-#   edk2 tree:            0001-EDK2-Sd-Mmc-v4 (the former fork's only commit),
-#                         then 0100 (UsbNetwork point-to-point media),
-#                         0101 (skip IPv6 discovery leg), 0102 (quiesce the
-#                         Redfish stack after provisioning -- the in-Setup
-#                         gadget-detach use-after-free; NOT at ReadyToBoot,
-#                         which races the client feature core and kills
-#                         provisioning outright), 0103 (keep USB NICs
-#                         out of BDS boot-option enumeration).
-#   edk2-platforms tree:  file://edk2-platforms (the RPi5 port's ADDED files)
-#                         merges INTO the git checkout at
-#                         ${UNPACKDIR}/edk2-platforms during do_unpack, then
-#                         0000 (the former fork's changed files), then this
-#                         layer's own 0001..0007, 0010, the ACPI pair
-#                         0011/0012, and 0013..0017 -- which edit files the
-#                         merged tree adds. 0011 (an RP1 I2C1 device) and 0012 (an
-#                         RP1 GEM Ethernet device) both append to Rp1.asi, so
-#                         they must stay in that order relative to each other.
-#                         0013 teaches VarBlockServiceDxe that this layer
-#                         deploys the FD as armstub8-2712.bin, not RPI_EFI.fd
-#                         -- without it the driver finds no file to write
-#                         back to and NOTHING set in Setup survives a reboot.
-#                         It is therefore coupled to the mcopy target name in
-#                         recipes-bsp/images/rpi5-uefi-sdimg.bb: change one
-#                         and you change the other.
-#                         0014 flips the SystemTableMode default from ACPI to
-#                         Device Tree, in both the PcdsDynamicHii default and
-#                         the VFR's F9 "Restore Defaults" value -- the onboard
-#                         NIC has no working driver path under ACPI (see the
-#                         comment 0014 adds to RPi5.dsc), and a node that
-#                         cannot reach the network is no use to the BMC.
-#                         0015 makes FdtDxe publish EFI_DT_FIXUP_PROTOCOL, so
-#                         systemd-boot can hand us the device tree out of the
-#                         Talos UKI -- matched to the kernel in the same image
-#                         -- and we write the board-specific values into IT,
-#                         rather than shipping a tree of our own and hoping it
-#                         fits a kernel we do not ship. Same split u-boot runs
-#                         (its EFI_DT_APPLY_FIXUPS path calls ft_board_setup).
-#                         The firmware's own tree stays installed as a fallback
-#                         for anything that brings none. Paired with 0014: in
-#                         ACPI mode FdtDxe never runs at all.
-#                         0017 completes that: at ReadyToBoot, FdtDxe looks for
-#                         \dtb\bcm2712-rpi-5-b.dtb on any attached filesystem
-#                         and hands THAT to the OS. The device tree then lives
-#                         with the OS install rather than on the firmware's
-#                         card, so one firmware image boots any kernel and
-#                         changing OS never means reflashing the board. The
-#                         SD-card tree (see talos-boot-dtbs) stays as the
-#                         fallback for an OS that ships none.
-#                         0016 clears the RP1 MSIX_CFG routing 0001 arms for
-#                         the two xHCIs, at ExitBootServices. Linux's
-#                         drivers/misc/rp1/rp1_pci.c owns those same registers
-#                         but only ever clears ENABLE per-IRQ as its own IRQ
-#                         domain tears one down -- it never zeroes the block on
-#                         probe -- so anything left armed stays armed behind
-#                         the OS's back. Depends on 0001, which is where the
-#                         arming lives.
+# Patch order matters and follows SRC_URI order. Every patch listed here
+# applies to the edk2 tree: 0001-EDK2-Sd-Mmc-v4 (the former fork's only
+# commit), then 0100 (UsbNetwork point-to-point media), 0101 (skip the IPv6
+# discovery leg), 0102 (quiesce the Redfish stack after provisioning -- the
+# in-Setup gadget-detach use-after-free; NOT at ReadyToBoot, which races the
+# client feature core and kills provisioning outright), 0103 (keep USB NICs out
+# of BDS boot-option enumeration) and 0104 (RELEASE-build JsonLib fix).
 #
-#                         The DWC2 OTG host on the USB-C data port is 0006
-#                         (put the driver on the BCM2712 core: 64-bit base
-#                         PCD, forced host mode),
-#                         0007 (make an absent core cheap to discover) and
-#                         0010 (fix the reset ordering and the mode-switch
-#                         wait); they must stay in that order. Numbering is
-#                         sparse: 0008/0009 were a SET_DOMAIN_STATE mailbox
-#                         experiment that no longer exists -- Linux powers
-#                         USB through the OLD SET_POWER_STATE tag with
-#                         device id 3, which is the call 0006 already makes.
-#
-# ORDERING IS LOAD-BEARING: do_unpack processes SRC_URI entries in listing
-# order, and the git fetcher PRUNES its destsuffix dir before checkout --
-# the file://edk2-platforms entry must therefore stay AFTER the git entry
-# of the same name, or the checkout wipes the port's added files (the
-# patch series then fails loudly at 0000/0001).
-SRC_URI = "gitsm://github.com/tianocore/edk2.git;protocol=https;branch=master;name=edk2;destsuffix=git \
-           git://github.com/tianocore/edk2-platforms.git;protocol=https;branch=master;name=platforms;destsuffix=edk2-platforms \
-           git://github.com/tianocore/edk2-non-osi.git;protocol=https;branch=master;name=nonosi;destsuffix=edk2-non-osi \
-           git://github.com/tianocore/edk2-redfish-client.git;protocol=https;branch=main;name=redfishclient;destsuffix=edk2-redfish-client \
+# The edk2-platforms series -- the RPi5 port's added files and its 0000, plus
+# this layer's 0001..0018 -- moved to recipes-bsp/edk2-platforms/, where that
+# tree is ${S} and the patches need no patchdir= override. Its recipe header
+# carries the ordering notes for it.
+SRC_URI = "gitsm://github.com/tianocore/edk2.git;protocol=https;branch=master;destsuffix=git \
            file://config.txt \
            file://ipxe-fdf-snippet.fdf.inc \
-           file://edk2-platforms \
            file://0001-EDK2-Sd-Mmc-v4.patch \
-           file://0000-edk2-platforms-RPi5-port.patch;patchdir=../edk2-platforms \
-           file://0001-Rp1BusDxe-register-GEM-and-I2C1-vendor-devices.patch;patchdir=../edk2-platforms \
-           file://0002-PlatformSmbiosDxe-deterministic-UUID-and-Type45.patch;patchdir=../edk2-platforms \
-           file://0003-RPi5-AcpiTables-add-SsdtThermal.patch;patchdir=../edk2-platforms \
-           file://0004-PlatformBm-return-boot-option-number-not-list-index.patch;patchdir=../edk2-platforms \
-           file://0005-PlatformBm-prune-USB-NIC-network-boot-options.patch;patchdir=../edk2-platforms \
-           file://0006-DwUsbHostDxe-support-the-BCM2712-DWC2-OTG-Pi-5-USB-C.patch;patchdir=../edk2-platforms \
-           file://0007-DwUsbHostDxe-fail-fast-when-the-DWC2-core-is-absent.patch;patchdir=../edk2-platforms \
-           file://0010-DwUsbHostDxe-fix-the-BCM2712-core-reset-and-mode-swit.patch;patchdir=../edk2-platforms \
-           file://0011-Silicon-RP1-add-an-ACPI-I2C1-device.patch;patchdir=../edk2-platforms \
-           file://0012-Silicon-RP1-add-an-ACPI-GEM-Ethernet-device.patch;patchdir=../edk2-platforms \
-           file://0013-VarBlockServiceDxe-find-the-variable-store-under-eith.patch;patchdir=../edk2-platforms \
-           file://0014-RPi5-default-SystemTableMode-to-Device-Tree.patch;patchdir=../edk2-platforms \
-           file://0015-FdtDxe-publish-EFI_DT_FIXUP_PROTOCOL.patch;patchdir=../edk2-platforms \
-           file://0016-Rp1BusDxe-disarm-RP1-interrupt-routing-at-handoff.patch;patchdir=../edk2-platforms \
-           file://0017-FdtDxe-load-the-OS-provided-device-tree-from-its-own-.patch;patchdir=../edk2-platforms \
-           file://0018-RPi5-enable-FMP-capsule-processing.patch;patchdir=../edk2-platforms \
            file://0100-UsbNetwork-assume-media-on-a-point-to-point-gadget.patch \
            file://0101-RedfishDiscoverDxe-skip-the-IPv6-discovery-leg.patch \
            file://0102-RedfishConfigHandler-quiesce-the-Redfish-stack-after.patch \
@@ -203,47 +123,35 @@ SRC_URI[msdbwin2011.sha256sum] = "e8e95f0733a55e8bad7be0a1413ee23c51fcea64b3c8fa
 SRC_URI[msdbuefi2011.sha256sum] = "48e99b991f57fc52f76149599bff0a58c47154229b9f8d603ac40d3500248507"
 SRC_URI[msdbwin2023.sha256sum] = "076f1fea90ac29155ebf77c17682f75f1fdd1be196da302dc8461e350a9ae330"
 SRC_URI[msdbuefi2023.sha256sum] = "f6124e34125bee3fe6d79a574eaa7b91c0e7bd9d929c1a321178efd611dad901"
-# Upstream pins chosen for byte-parity with the retired NumberOneGit forks
-# (audited 2026-08-17 with git merge-base + reconstruction diffs):
-#   edk2:      the fork was upstream master @ this exact commit plus ONE
-#              commit -- the SD fixup now carried as 0001-EDK2-Sd-Mmc-v4.patch.
-#   platforms: the fork's merge-base with upstream master (2024-03-12); the
-#              fork's 32-commit RPi5 port on top of it is decomposed into
-#              files/edk2-platforms/ (75 added files) + the 0000 patch
-#              (43 changed/deleted files). The fork's bulk-sync churn in
-#              other vendors' trees (187 files never referenced by
-#              RPi5.dsc/.fdf) is deliberately dropped.
-#   non-osi:   the fork was upstream @ this commit plus only an RPi5
-#              TrustedFirmware bl31.bin -- dead weight here, because this
-#              recipe always passes -D TFA_BUILD_ARTIFACTS pointing at our
-#              own arm-trusted-firmware deploy.
-SRCREV_edk2 = "c4d29cb62187060493a1f595083ddfb6dd346f39"
-SRCREV_platforms = "80ee8b861edb6a8b02a100f63bbb435499f8741a"
-SRCREV_nonosi = "94d048981116e2e3eda52dad1a89958ee404098d"
-# edk2-redfish-client tracks edk2 MASTER, and the pinned NumberOneGit edk2
-# is master-based too -- its RedfishPkg carries commits through 2026-02-03,
-# despite the fork's "202405" branding. That dates the compatibility
-# window precisely (audited 2026-08-17):
-#   >= 73a1eaa41 (2026-01-17): RedfishPlatformConfigSetValue grew a
-#     by-pointer value argument in edk2 and the client the same day; an
-#     older client passes by value and fails to compile against this fork.
-#   <  b8ffa6e45 (2026-05-05): the client's RedfishEventLib starts needing
-#     gEdkIIRedfisEventRedfishInterfaceDisconnectionGuid, which this fork's
-#     RedfishPkg.dec predates (the GUID nuc-bios-build moved to edk2 master
-#     for -- see edk2-uefipayload_2605.bb).
-# This pin is the last commit before that boundary; every external GUID it
-# references is declared by the pinned edk2's .dec files.
-SRCREV_redfishclient = "a75f45cd69c74121fbf58900b9d92735d9a3373c"
-SRCREV_FORMAT = "edk2_platforms_nonosi_redfishclient"
+# Upstream pin chosen for byte-parity with the retired NumberOneGit fork
+# (audited 2026-08-17 with git merge-base + reconstruction diffs): the fork was
+# upstream master @ this exact commit plus ONE commit -- the SD fixup now
+# carried as 0001-EDK2-Sd-Mmc-v4.patch.
+#
+# It is also one half of a compatibility pair with edk2-redfish-client's
+# SRCREV: that recipe's header documents the window this edk2's RedfishPkg
+# defines, so bump the two together or not at all.
+SRCREV = "c4d29cb62187060493a1f595083ddfb6dd346f39"
 
 # UNPACKDIR only exists from styhead (Yocto 5.1) on; scarthgap unpacks
 # straight into WORKDIR. Without this shim, S = "${UNPACKDIR}/git" never
 # expands and do_unpack fails its unexpanded-variable QA check.
 UNPACKDIR ?= "${WORKDIR}"
 
-EDK2_PLATFORMS_PATH = "${UNPACKDIR}/edk2-platforms"
-EDK2_NON_OSI_PATH = "${UNPACKDIR}/edk2-non-osi"
-EDK2_REDFISH_CLIENT_PATH = "${UNPACKDIR}/edk2-redfish-client"
+# Where the three sibling recipes stage their trees; must match the
+# EDK2_SOURCE_ROOT they install into.
+EDK2_SOURCE_ROOT = "${STAGING_DATADIR}/edk2"
+
+# Read straight out of the sysroot: the build never writes into either.
+EDK2_NON_OSI_PATH = "${EDK2_SOURCE_ROOT}/edk2-non-osi"
+EDK2_REDFISH_CLIENT_PATH = "${EDK2_SOURCE_ROOT}/edk2-redfish-client"
+
+# edk2-platforms cannot be, because do_compile rewrites RPi5.dsc/.fdf in place
+# to wire in the optional feature sets. do_compile therefore copies the staged
+# tree to EDK2_PLATFORMS_PATH first -- under ${WORKDIR}, so it stays a sibling
+# of ${S} beneath WORKSPACE; see the WORKSPACE note in do_compile.
+EDK2_PLATFORMS_SRC = "${EDK2_SOURCE_ROOT}/edk2-platforms"
+EDK2_PLATFORMS_PATH = "${WORKDIR}/edk2-platforms"
 
 COMPATIBLE_MACHINE = "raspberrypi5-uefi"
 
@@ -564,6 +472,16 @@ rpi5_fmp_resolve_keys() {
 }
 
 do_compile() {
+    # edk2-platforms arrives from its own recipe, read-only and shared, in the
+    # sysroot. The feature wiring further down rewrites RPi5.dsc/.fdf in place,
+    # so build from a private copy instead. Rebuilt from scratch every run,
+    # which is also what makes turning a knob back off (RPI5_BMC=0, say)
+    # actually take effect rather than leaving yesterday's !include lines
+    # behind in a persisted checkout.
+    rm -rf "${EDK2_PLATFORMS_PATH}"
+    mkdir -p "${EDK2_PLATFORMS_PATH}"
+    cp -a "${EDK2_PLATFORMS_SRC}/." "${EDK2_PLATFORMS_PATH}/"
+
     cd ${S}
 
     # BaseTools are host-native; keep bitbake's cross toolchain env out of
@@ -573,14 +491,15 @@ do_compile() {
     oe_runmake -C BaseTools CC=gcc CXX=g++
 
     # WORKSPACE is the parent of both ${S} (this edk2 checkout, at
-    # "${WORKSPACE}/git") and EDK2_PLATFORMS_PATH/EDK2_NON_OSI_PATH (fetched
-    # as WORKDIR siblings, at "${WORKSPACE}/edk2-platforms" and
-    # "${WORKSPACE}/edk2-non-osi") -- i.e. ${WORKDIR}, NOT ${S}. This matters:
-    # RPi5.dsc/.fdf live in edk2-platforms, not in edk2 itself, so "-p
-    # edk2-platforms/Platform/..." below only resolves if WORKSPACE is their
-    # common parent, exactly mirroring upstream rpi5-uefi/build.sh's own
-    # layout (WORKSPACE=repo root, with edk2/edk2-platforms/edk2-non-osi as
-    # direct siblings under it).
+    # "${WORKSPACE}/git") and EDK2_PLATFORMS_PATH (the copy made above, at
+    # "${WORKSPACE}/edk2-platforms") -- i.e. ${WORKDIR}, NOT ${S}. This
+    # matters: RPi5.dsc/.fdf live in edk2-platforms, not in edk2 itself, so
+    # "-p edk2-platforms/Platform/..." below only resolves if WORKSPACE is
+    # their common parent, exactly mirroring upstream rpi5-uefi/build.sh's own
+    # layout (WORKSPACE=repo root, with edk2/edk2-platforms as direct siblings
+    # under it). edk2-non-osi and edk2-redfish-client need none of that: they
+    # go on PACKAGES_PATH as absolute sysroot paths, which EDK2 resolves from
+    # anywhere -- exactly as it already does for ${local_pkgs} below.
     # Local out-of-tree EDK2 packages (RpiBmcPkg, Rp1GemPkg), staged into a
     # dedicated PACKAGES_PATH root so EDK2's path resolution sees exactly the
     # two package dirs and nothing else from WORKDIR.
@@ -623,9 +542,10 @@ do_compile() {
         bbfatal "RPi5.fdf: '${fdf_marker}' not found -- edk2-platforms layout changed, update this recipe"
 
     # BMC-integration driver set (local RpiBmcPkg source package).
-    # Every insertion below is grep-guarded so a re-run of do_compile against
-    # the persisted WORKDIR checkout stays idempotent -- duplicate includes
-    # mean duplicate FFS files and a GenFv failure.
+    # Every insertion below stays grep-guarded even though the copy above is
+    # pristine: it costs nothing, and it keeps a hand-edited or half-applied
+    # tree from ever producing duplicate includes -- which mean duplicate FFS
+    # files and a GenFv failure.
     if [ "${RPI5_BMC}" = "1" ]; then
         printf '%s\n' '!include RpiBmcPkg/RpiBmc.dsc.inc' > "${B}/rpibmc-dsc-line.inc"
         printf '%s\n' '!include RpiBmcPkg/RpiBmc.fdf.inc' > "${B}/rpibmc-fdf-line.inc"
@@ -656,9 +576,7 @@ do_compile() {
     # ShellPkg's Dp profiling command. Unlike every other snippet here these
     # lines go in UNCONDITIONALLY -- they carry their own
     # "!if $(PROFILING_ENABLED) == TRUE" gate, and the macro below is what
-    # actually turns Dp on or off. Inserting conditionally would be a one-way
-    # door against the persisted WORKDIR checkout: nothing removes the lines
-    # again when the knob goes back to 0.
+    # actually turns Dp on or off, without the line set having to change.
     grep -qF 'DpDynamicCommand/DpDynamicCommand.inf' "${dsc}" || \
         sed -i "\|${dsc_marker}|r ${WORKDIR}/profiling-dsc-snippet.inc" "${dsc}"
     grep -qF 'INF ShellPkg/DynamicCommand/DpDynamicCommand/DpDynamicCommand.inf' "${fdf}" || \
