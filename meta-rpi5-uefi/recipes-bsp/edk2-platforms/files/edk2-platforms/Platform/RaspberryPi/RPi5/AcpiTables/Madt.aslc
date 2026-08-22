@@ -12,6 +12,11 @@
 
 #include <IndustryStandard/Acpi.h>
 #include <Library/AcpiLib.h>
+//
+// edk2-stable202608 consolidated the ACPI helper macros (GAS, GIC structure
+// initialisers) into MdeModulePkg/Include/AcpiHelperMacros.h.
+//
+#include <AcpiHelperMacros.h>
 #include <Library/ArmLib.h>
 #include <Library/PcdLib.h>
 

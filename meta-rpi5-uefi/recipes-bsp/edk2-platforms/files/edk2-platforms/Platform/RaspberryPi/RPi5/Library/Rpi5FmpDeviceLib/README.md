@@ -1,4 +1,4 @@
-# RpiFmpPkg — capsule updates for the Pi 5's own firmware
+# Rpi5FmpDeviceLib — capsule updates for the Pi 5's own firmware
 
 Firmware Management Protocol, ESRT, and capsule application for this platform's
 UEFI firmware, so the board can be updated without anyone touching the SD card,

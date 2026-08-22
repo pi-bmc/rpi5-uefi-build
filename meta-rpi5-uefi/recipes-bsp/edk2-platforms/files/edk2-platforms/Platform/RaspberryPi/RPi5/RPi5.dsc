@@ -122,8 +122,16 @@
 
   # ARM Architectural Libraries
   CacheMaintenanceLib|ArmPkg/Library/ArmCacheMaintenanceLib/ArmCacheMaintenanceLib.inf
-  DefaultExceptionHandlerLib|ArmPkg/Library/DefaultExceptionHandlerLib/DefaultExceptionHandlerLib.inf
-  CpuExceptionHandlerLib|ArmPkg/Library/ArmExceptionLib/ArmExceptionLib.inf
+  #
+  # edk2-stable202608 retired ArmPkg's own exception path: ArmExceptionLib and
+  # DefaultExceptionHandlerLib are gone, and AArch64 is served by the generic
+  # CpuExceptionHandlerLib class out of UefiCpuPkg -- which is what upstream
+  # ArmPkg.dsc now maps, and which CpuDxe.inf now lists in [LibraryClasses].
+  # The DefaultExceptionHandlerLib mapping goes with them; nothing declares
+  # that class any more. (ArmMmuLib below made the same ArmPkg -> UefiCpuPkg
+  # move in an earlier release.)
+  #
+  CpuExceptionHandlerLib|UefiCpuPkg/Library/CpuExceptionHandlerLib/DxeCpuExceptionHandlerLib.inf
   DmaLib|EmbeddedPkg/Library/NonCoherentDmaLib/NonCoherentDmaLib.inf
   TimeBaseLib|EmbeddedPkg/Library/TimeBaseLib/TimeBaseLib.inf
   ArmSmcLib|MdePkg/Library/ArmSmcLib/ArmSmcLib.inf
@@ -360,7 +368,11 @@
   gEfiMdePkgTokenSpaceGuid.PcdUefiVariableDefaultPlatformLangCodes|"en-US"
 
 [LibraryClasses.common]
-  ArmLib|ArmPkg/Library/ArmLib/ArmBaseLib.inf
+  # ArmLib moved ArmPkg -> MdePkg in edk2-stable202608.
+  ArmLib|MdePkg/Library/ArmLib/ArmBaseLib.inf
+  # PartitionDxe grew a GptLib dependency in edk2-stable202608; the GPT parsing
+  # it used to do inline now lives in this library.
+  GptLib|MdeModulePkg/Library/GptLib/GptLib.inf
   ArmMmuLib|UefiCpuPkg/Library/ArmMmuLib/ArmMmuBaseLib.inf
   ArmPlatformLib|Platform/RaspberryPi/RPi5/Library/PlatformLib/PlatformLib.inf
   TimerLib|ArmPkg/Library/ArmArchTimerLib/ArmArchTimerLib.inf
@@ -526,7 +538,7 @@
   #
   # Redfish host interface. The gadget MAC and the HTTP Basic credentials
   # default to the wire contract's documented values in RPi5.dec; the
-  # edk2-rpi5-firmware recipe appends overrides for them, and for the matching
+  # edk2 recipe appends overrides for them, and for the matching
   # RestEx device path, from its own knobs.
   #
   gEfiRedfishPkgTokenSpaceGuid.PcdRedfishServicePort|80
@@ -609,8 +621,15 @@
   gEfiMdeModulePkgTokenSpaceGuid.PcdSetupVideoVerticalResolution|600
 
 [PcdsDynamicExDefault.common]
-  # RedfishDiscoverDxe's IPv6 leg is patched out (see 0101); keep the HTTP
-  # stack from advertising IPv6 support it will never use.
+  # Suppresses RedfishDiscoverDxe's IPv6 discovery leg, which it gates on this
+  # PCD (IsRedfishRequiredProtocolIndexActive). The Redfish host interface is a
+  # point-to-point IPv4-static link -- the SMBIOS type 42 record carries static
+  # v4 addresses -- so a second discovery pass over Tcp6 on the same NIC only
+  # duplicates instances and REST EX children nothing consumes. That pass was
+  # also in flight during a use-after-free crash on a "BiosSetup" boot override
+  # (2026-08-17). This layer carried a patch to skip it until edk2-stable202608,
+  # where upstream implemented the same skip behind this PCD. It equally keeps
+  # HttpBootDxe from advertising IPv6 support the board will never use.
   gEfiNetworkPkgTokenSpaceGuid.PcdIPv6HttpSupport|FALSE
 [Components.common]
   #
@@ -950,7 +969,7 @@
   # Firmware Management Protocol + ESRT: a signed capsule through
   # UpdateCapsule() replaces the image in place. FmpDxe authenticates every
   # payload against PcdFmpDevicePkcs7CertBufferXdr, which the
-  # edk2-rpi5-firmware recipe appends to the end of this file from its
+  # edk2 recipe appends to the end of this file from its
   # capsule signing certificate.
   #
   FmpDevicePkg/FmpDxe/FmpDxe.inf {

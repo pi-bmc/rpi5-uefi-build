@@ -41,12 +41,12 @@ refused even then).
 | Recipe | Upstream | Produces |
 | --- | --- | --- |
 | `meta-rpi5-uefi/recipes-bsp/arm-trusted-firmware/arm-trusted-firmware_git.bb` | `ARM-software/arm-trusted-firmware`, pinned commit (see caveat below) | `bl31.bin` |
-| `meta-rpi5-uefi/recipes-bsp/edk2-platforms/edk2-platforms_git.bb` | `tianocore/edk2-platforms` `master`, pinned + this layer's RPi5 port | patched source tree, staged into the sysroot |
+| `meta-rpi5-uefi/recipes-bsp/edk2-platforms/edk2-platforms_git.bb` | `tianocore/edk2-platforms` `master` @ `9ef9bcef` (2026-08-21), plus this layer's RPi5 port | patched source tree, staged into the sysroot |
 | `meta-rpi5-uefi/recipes-bsp/edk2-non-osi/edk2-non-osi_git.bb` | `tianocore/edk2-non-osi` `master`, pinned | source tree, staged into the sysroot |
 | `meta-rpi5-uefi/recipes-bsp/edk2-redfish-client/edk2-redfish-client_git.bb` | `tianocore/edk2-redfish-client` `main`, pinned | source tree, staged into the sysroot |
-| `meta-rpi5-uefi/recipes-bsp/edk2/edk2-rpi5-firmware_git.bb` | `tianocore/edk2` `master`, pinned, plus the three trees above | `RPI_EFI.fd`, `config.txt` |
+| `meta-rpi5-uefi/recipes-bsp/edk2/edk2_git.bb` | `tianocore/edk2` @ tag `edk2-stable202608`, plus the three trees above | `RPI_EFI.fd`, `config.txt`, `RPi5Firmware.cap` |
 
-One recipe per upstream repository: `edk2-rpi5-firmware` owns the `edk2` tree
+One recipe per upstream repository: `edk2` owns the `edk2` tree
 and the out-of-tree packages under its own `files/`, and `DEPENDS` on the other
 three, which fetch and patch their trees and stage them under
 `${STAGING_DATADIR}/edk2`. The RPi5 port and its patch series therefore live in
@@ -55,15 +55,27 @@ three, which fetch and patch their trees and stage them under
 feature sets in rewrites `RPi5.dsc`/`.fdf`; `edk2-non-osi` and
 `edk2-redfish-client` are read from the sysroot in place.
 
-The `edk2-rpi5-firmware` recipe builds
+The `edk2` recipe builds
 `edk2-platforms/Platform/RaspberryPi/RPi5/RPi5.dsc`/`.fdf`, with
 `arm-trusted-firmware`'s `bl31.bin` embedded as the FD's region-0 payload
 (via `-D TFA_BUILD_ARTIFACTS=...`, the same mechanism
 `worproject`/`NumberOneGit`'s own `build.sh` uses).
 
-All `SRCREV`s are pinned to the exact commits `NumberOneGit/rpi5-uefi`'s own
-git tree points at, i.e. what that project's own published images are built
-from.
+All `SRCREV`s are pinned. They were originally the commits
+`NumberOneGit/rpi5-uefi`'s own git tree pointed at; that fork is retired, and
+the pins now track upstream directly -- `edk2` at the `edk2-stable202608`
+release tag, `edk2-platforms` at the master commit contemporary with it.
+
+Upstream `edk2-platforms` has never carried an RPi5 platform, so the RPi5 port
+is entirely this layer's: the added files live in the recipe's
+`files/edk2-platforms/` overlay and the changes to upstream files in
+`0000-edk2-platforms-RPi5-port.patch`. Moving both pins forward together is
+what keeps that workable -- the shared `Platform/RaspberryPi` family code
+(`ConfigDxe`, `FdtDxe`, `MmcDxe`, `RpiFirmwareDxe`, `PlatformBootManagerLib`,
+the common `AcpiTables`) comes maintained against current edk2, and `RPi4.dsc`
+serves as a worked reference for the next bump. When the two pins moved to
+2026-08, the rebase shrank `0000` from 43 changed files to 24: upstream has
+independently absorbed most of what the fork once changed.
 
 ## Three things worth flagging up front
 

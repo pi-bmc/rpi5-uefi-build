@@ -1,11 +1,11 @@
 SUMMARY = "tianocore edk2-platforms with this layer's Raspberry Pi 5 port applied"
-DESCRIPTION = "The edk2-platforms source tree that edk2-rpi5-firmware builds \
+DESCRIPTION = "The edk2-platforms source tree that edk2 builds \
                Platform/RaspberryPi/RPi5/RPi5.dsc out of. Nothing is compiled here: \
                this recipe owns the fetch, the RPi5 port, the port's fixes and this \
                layer's own RP1 GEM Ethernet driver, and \
                stages the resulting tree into ${datadir}/edk2/edk2-platforms for the \
                firmware recipe to consume out of its sysroot. Split out of \
-               edk2-rpi5-firmware so a 96 MB fetch and a 17-patch series are \
+               edk2 so a 96 MB fetch and a 17-patch series are \
                sstate-cached on their own, instead of being redone every time the \
                EDK2 build itself is cleaned."
 HOMEPAGE = "https://github.com/tianocore/edk2-platforms"
@@ -14,7 +14,7 @@ HOMEPAGE = "https://github.com/tianocore/edk2-platforms"
 LICENSE = "BSD-2-Clause-Patent"
 LIC_FILES_CHKSUM = "file://License.txt;md5=2b415520383f7964e96700ae12b4570a"
 
-PV = "202403+git${SRCPV}"
+PV = "202608+git${SRCPV}"
 
 # The former NumberOneGit fork's edk2-platforms RPi5 port is decomposed into
 # two pieces here: files/edk2-platforms/ (the port's ADDED files, 75 of them,
@@ -55,10 +55,9 @@ PV = "202403+git${SRCPV}"
 # the retired packages carried was folded into RpiSiliconPkg.dec and RPi5.dec.
 # The firmware recipe therefore inserts nothing for any of them.
 #
-# Rp1GpioLib (Phy.c's PHY-reset line) still resolves out of RpiBmcPkg, which
-# the firmware recipe supplies as its own PACKAGES_PATH root -- so this driver
-# does depend on one package it does not ship with. Moving that library into
-# RpiSiliconPkg would point the dependency the right way round; not done yet.
+# Rp1GpioLib has both its consumers inside this tree -- Rp1GemDxe's PHY-reset
+# line and ActiveCoolerDxe's fan PWM -- so RPi5.dsc maps it once globally
+# rather than overriding it per component.
 #
 # Patch order matters and follows SRC_URI order: 0000 (the fork's changed
 # files) first, then this layer's own 0001..0007, 0010, the ACPI pair
@@ -143,10 +142,20 @@ SRC_URI = "git://github.com/tianocore/edk2-platforms.git;protocol=https;branch=m
            file://0019-RaspberryPi-declare-the-Secure-Boot-toggle-formset-GU.patch \
            "
 
-# The fork's merge-base with upstream master (2024-03-13); its 32-commit RPi5
-# port on top of it is what files/edk2-platforms/ + 0000 reconstruct. Audited
-# 2026-08-17 with git merge-base + reconstruction diffs.
-SRCREV = "80ee8b861edb6a8b02a100f63bbb435499f8741a"
+# Upstream master, 2026-08-21. Moved here from the retired NumberOneGit fork's
+# merge-base (80ee8b861, 2024-03-13) when the edk2 recipe took
+# edk2-stable202608: a 2024 platform tree cannot build against a 2026 edk2, and
+# upstream had already made the adaptations by hand -- RPi4.dsc carries the
+# same ArmLib/CpuExceptionHandlerLib/GptLib mappings and the same
+# ACPI_NULL_GAS rename this layer needed for RPi5.
+#
+# Upstream has never carried an RPi5 platform (not at either pin), so the RPi5
+# port stays entirely this layer's, in files/edk2-platforms/ + 0000. What the
+# move buys is the SHARED Platform/RaspberryPi family code -- ConfigDxe,
+# FdtDxe, MmcDxe, RpiFirmwareDxe, PlatformBootManagerLib, the common
+# AcpiTables -- maintained against current edk2 by people who test it, and
+# RPi3/RPi4 as a worked reference for the next edk2 bump.
+SRCREV = "9ef9bcef5090effeb569f61c8585795fdb41d41d"
 
 # UNPACKDIR only exists from styhead (Yocto 5.1) on; scarthgap unpacks
 # straight into WORKDIR. Without this shim, S never expands and do_unpack
@@ -159,10 +168,10 @@ UNPACKDIR ?= "${WORKDIR}"
 S = "${UNPACKDIR}/edk2-platforms"
 
 # Source only: nothing is compiled and nothing is packaged, but the tree still
-# has to reach edk2-rpi5-firmware's sysroot, so do_populate_sysroot runs.
+# has to reach edk2's sysroot, so do_populate_sysroot runs.
 inherit allarch nopackages
 
-# Where the tree lands in the sysroot. edk2-rpi5-firmware reads exactly this
+# Where the tree lands in the sysroot. edk2 reads exactly this
 # path under ${STAGING_DATADIR} -- keep the two in step.
 EDK2_SOURCE_ROOT = "${datadir}/edk2"
 

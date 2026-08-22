@@ -1,6 +1,6 @@
 SUMMARY = "tianocore edk2-non-osi source tree"
 DESCRIPTION = "The edk2-non-osi tree, staged into ${datadir}/edk2/edk2-non-osi as \
-               one of edk2-rpi5-firmware's PACKAGES_PATH roots. Unpatched: this \
+               one of edk2's PACKAGES_PATH roots. Unpatched: this \
                layer changes nothing in it, and the RPi5 build reaches into it for \
                nothing either -- RPi5.dsc's default TFA_BUILD_BL31 points at \
                Platform/RaspberryPi/RPi5/TrustedFirmware/bl31.bin here, but the \
@@ -35,10 +35,10 @@ UNPACKDIR ?= "${WORKDIR}"
 S = "${UNPACKDIR}/edk2-non-osi"
 
 # Source only: nothing is compiled and nothing is packaged, but the tree still
-# has to reach edk2-rpi5-firmware's sysroot, so do_populate_sysroot runs.
+# has to reach edk2's sysroot, so do_populate_sysroot runs.
 inherit allarch nopackages
 
-# Where the tree lands in the sysroot. edk2-rpi5-firmware reads exactly this
+# Where the tree lands in the sysroot. edk2 reads exactly this
 # path under ${STAGING_DATADIR} -- keep the two in step.
 EDK2_SOURCE_ROOT = "${datadir}/edk2"
 

@@ -1,5 +1,5 @@
 # Dp ("dump performance") shell command, sed-included into RPi5.dsc's
-# [Components.common] by the edk2-rpi5-firmware recipe (anchored on the
+# [Components.common] by the edk2 recipe (anchored on the
 # NetworkPkg dsc include).
 #
 # Gated on the PROFILING_ENABLED build macro rather than on whether the

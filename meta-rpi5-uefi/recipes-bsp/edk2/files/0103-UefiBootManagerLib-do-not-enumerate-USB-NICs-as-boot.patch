@@ -20,15 +20,12 @@ older firmware.
 Upstream-Status: Inappropriate [platform policy]
 Signed-off-by: appkins <nbatkins@gmail.com>
 ---
-diff --git a/MdeModulePkg/Library/UefiBootManagerLib/BmBoot.c b/MdeModulePkg/Library/UefiBootManagerLib/BmBoot.c
-index e3d34af..724cf5e 100644
 --- a/MdeModulePkg/Library/UefiBootManagerLib/BmBoot.c
 +++ b/MdeModulePkg/Library/UefiBootManagerLib/BmBoot.c
-@@ -2225,6 +2225,48 @@ BmMatchPartitionDevicePathNode (
-   return FALSE;
+@@ -2269,6 +2269,48 @@
  }
  
-+/**
+ /**
 +  Check whether the device path is a network interface carried over USB.
 +
 +  A USB NIC's device path contains both a USB node and a MAC node. USB mass
@@ -70,10 +67,11 @@ index e3d34af..724cf5e 100644
 +  return (BOOLEAN)(HasMac && OverUsb);
 +}
 +
- /**
++/**
    Emuerate all possible bootable medias in the following order:
    1. Removable BlockIo            - The boot option only points to the removable media
-@@ -2401,6 +2443,17 @@ BmEnumerateBootOptions (
+                                     device, like USB key, DVD, Floppy etc.
+@@ -2460,6 +2502,17 @@
        continue;
      }
  
@@ -89,5 +87,5 @@ index e3d34af..724cf5e 100644
 +    }
 +
      Description = BmGetBootDescription (Handles[Index]);
-     BootOptions = ReallocatePool (
-                     sizeof (EFI_BOOT_MANAGER_LOAD_OPTION) * (*BootOptionCount),
+     if (Description == NULL) {
+       continue;

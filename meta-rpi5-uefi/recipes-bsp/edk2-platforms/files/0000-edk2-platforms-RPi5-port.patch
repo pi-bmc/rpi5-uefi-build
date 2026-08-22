@@ -2,116 +2,52 @@ From: NumberOneGit rpi5-uefi contributors
 Date: Sun, 17 Aug 2026 13:00:00 -0500
 Subject: [PATCH] Platform/RaspberryPi, Silicon/Broadcom: RPi5 port (changed files)
 
-The NumberOneGit/edk2-platforms fork's RPi5 port, reduced to its
-modifications and deletions of files that exist upstream at the fork's
-merge-base (80ee8b861, 2024-03-12). The fork's ADDED files ship separately
-as meta-rpi5-uefi/.../files/edk2-platforms-rpi5/, copied into the tree by
-the recipe's do_patch:prepend BEFORE this and the later patches apply.
+The RPi5 port's modifications and deletions of files that exist upstream.
+The port's ADDED files ship separately as this recipe's files/edk2-platforms/
+overlay, copied into the tree during do_unpack BEFORE this and the later
+patches apply.
 
 Scope is limited to the package trees this build actually compiles
-(Platform/RaspberryPi, Silicon/Broadcom, Silicon/RaspberryPi). The fork's
-one bulk-sync commit ("Nov 29 update") also touched 187 files in other
-vendors' platform trees to chase newer-edk2 API churn; none of those are
-referenced by RPi5.dsc/.fdf and they are deliberately dropped.
+(Platform/RaspberryPi, Silicon/Broadcom, Silicon/RaspberryPi).
 
-Includes the fork's deletion of Platform/RaspberryPi/Library/ResetLib
-(replaced by PSCI reset paths).
+ORIGIN AND REBASE HISTORY
+  Originally extracted from the retired NumberOneGit/edk2-platforms fork at
+  4e426104a, as its delta against that fork's merge-base with upstream
+  (80ee8b861, 2024-03-12), and carried against that 2024 base.
 
-Generated from NumberOneGit/edk2-platforms 4e426104a with:
-  git diff --diff-filter=MD 80ee8b861 4e426104a -- \
-    Platform/RaspberryPi Silicon/Broadcom Silicon/RaspberryPi
+  Rebased onto upstream master 9ef9bcef5 (2026-08-21) when the edk2 recipe
+  moved to edk2-stable202608, which the 2024 base could not build against.
+  The rebase shrank the patch from 43 changed files to 24: upstream has since
+  absorbed, independently, most of what the fork had changed. Five files
+  conflicted and were resolved as follows.
+
+    MmcDebug.c                  kept the port's "#if !defined(MDEPKG_NDEBUG)"
+                                guard around mStrUnit/mStrValue. Upstream
+                                leaves them unguarded, but they are referenced
+                                only inside DEBUG(), which compiles away under
+                                MDEPKG_NDEBUG -- so a RELEASE build without the
+                                guard trips -Werror=unused-variable.
+    PlatformBootManagerLib.inf  dropped the port's empty [FeaturePcd] section.
+    PlatformBm.c                dropped a whitespace-only change.
+    FdtDxe.c                    kept the port's switch from
+                                PcdGet32 (PcdFdtBaseAddress) to
+                                FdtPlatformGetBase () plus the BoardInfoLib
+                                revision lookup -- the RPi5 port's whole reason
+                                for touching this driver.
+    RpiFirmwareDxe.c            kept all ten of the port's hunks: the runtime
+                                mMboxBaseAddress in place of the hardcoded
+                                BCM2836_MBOX_BASE_ADDRESS, the RTC tag structs,
+                                the EfiAtRuntime cache maintenance around the
+                                DMA buffer, the GCD mapping of the mailbox page,
+                                and the deletion of the five model-name/family
+                                helpers (they moved to BoardRevisionHelperLib,
+                                which the overlay supplies; nothing in the tree
+                                still references them).
 
 Upstream-Status: Inappropriate [platform port carried out-of-tree]
 ---
-diff --git a/Platform/RaspberryPi/Drivers/ArasanMmcHostDxe/ArasanMmcHostDxe.c b/Platform/RaspberryPi/Drivers/ArasanMmcHostDxe/ArasanMmcHostDxe.c
-index 6d1c5e1d2..1a4fe258c 100644
---- a/Platform/RaspberryPi/Drivers/ArasanMmcHostDxe/ArasanMmcHostDxe.c
-+++ b/Platform/RaspberryPi/Drivers/ArasanMmcHostDxe/ArasanMmcHostDxe.c
-@@ -375,7 +375,7 @@ MMCSendCommand (
-   if (PollRegisterWithMask (MMCHS_PRES_STATE,
-     CmdSendOKMask, 0) == EFI_TIMEOUT) {
-     DEBUG ((DEBUG_ERROR, "%a(%u): not ready for MMC_CMD%u PresState 0x%x MmcStatus 0x%x\n",
--      __FUNCTION__, __LINE__, MMC_CMD_NUM (MmcCmd),
-+      __func__, __LINE__, MMC_CMD_NUM (MmcCmd),
-       MmioRead32 (MMCHS_PRES_STATE), MmioRead32 (MMCHS_INT_STAT)));
-     Status = EFI_TIMEOUT;
-     goto Exit;
-@@ -418,7 +418,7 @@ MMCSendCommand (
-       //
-       if (MmcCmd != CMD_IO_SEND_OP_COND) {
-         DEBUG ((DEBUG_ERROR, "%a(%u): MMC_CMD%u ERRI MmcStatus 0x%x\n",
--          __FUNCTION__, __LINE__, MMC_CMD_NUM (MmcCmd), MmcStatus));
-+          __func__, __LINE__, MMC_CMD_NUM (MmcCmd), MmcStatus));
-       }
- 
-       SoftReset (SRC);
-@@ -441,7 +441,7 @@ MMCSendCommand (
- 
-   if (RetryCount == MAX_RETRY_COUNT) {
-     DEBUG ((DEBUG_ERROR, "%a(%u): MMC_CMD%u completion TIMEOUT PresState 0x%x MmcStatus 0x%x\n",
--      __FUNCTION__, __LINE__, MMC_CMD_NUM (MmcCmd),
-+      __func__, __LINE__, MMC_CMD_NUM (MmcCmd),
-       MmioRead32 (MMCHS_PRES_STATE), MmcStatus));
-     Status = EFI_TIMEOUT;
-     goto Exit;
-@@ -691,15 +691,15 @@ MMCReadBlockData (
-   UINTN Count;
- 
-   DEBUG ((DEBUG_VERBOSE, "%a(%u): LBA: 0x%x, Length: 0x%x, Buffer: 0x%x)\n",
--    __FUNCTION__, __LINE__, Lba, Length, Buffer));
-+    __func__, __LINE__, Lba, Length, Buffer));
- 
-   if (Buffer == NULL) {
--    DEBUG ((DEBUG_ERROR, "%a(%u): NULL Buffer\n", __FUNCTION__, __LINE__));
-+    DEBUG ((DEBUG_ERROR, "%a(%u): NULL Buffer\n", __func__, __LINE__));
-     return EFI_INVALID_PARAMETER;
-   }
- 
-   if (Length % sizeof (UINT32) != 0) {
--    DEBUG ((DEBUG_ERROR, "%a(%u): bad Length %u\n", __FUNCTION__, __LINE__, Length));
-+    DEBUG ((DEBUG_ERROR, "%a(%u): bad Length %u\n", __func__, __LINE__, Length));
-     return EFI_INVALID_PARAMETER;
-   }
- 
-@@ -730,7 +730,7 @@ MMCReadBlockData (
- 
-     if (RetryCount == MAX_RETRY_COUNT) {
-       DEBUG ((DEBUG_ERROR, "%a(%u): %lu/%lu MMCHS_INT_STAT: %08x\n",
--        __FUNCTION__, __LINE__, Length - RemLength, Length, MmcStatus));
-+        __func__, __LINE__, Length - RemLength, Length, MmcStatus));
-       return EFI_TIMEOUT;
-     }
- 
-@@ -755,15 +755,15 @@ MMCWriteBlockData (
-   UINTN Count;
- 
-   DEBUG ((DEBUG_VERBOSE, "%a(%u): LBA: 0x%x, Length: 0x%x, Buffer: 0x%x)\n",
--    __FUNCTION__, __LINE__, Lba, Length, Buffer));
-+    __func__, __LINE__, Lba, Length, Buffer));
- 
-   if (Buffer == NULL) {
--    DEBUG ((DEBUG_ERROR, "%a(%u): NULL Buffer\n", __FUNCTION__, __LINE__));
-+    DEBUG ((DEBUG_ERROR, "%a(%u): NULL Buffer\n", __func__, __LINE__));
-     return EFI_INVALID_PARAMETER;
-   }
- 
-   if (Length % sizeof (UINT32) != 0) {
--    DEBUG ((DEBUG_ERROR, "%a(%u): bad Length %u\n", __FUNCTION__, __LINE__, Length));
-+    DEBUG ((DEBUG_ERROR, "%a(%u): bad Length %u\n", __func__, __LINE__, Length));
-     return EFI_INVALID_PARAMETER;
-   }
- 
-@@ -794,7 +794,7 @@ MMCWriteBlockData (
- 
-     if (RetryCount == MAX_RETRY_COUNT) {
-       DEBUG ((DEBUG_ERROR, "%a(%u): %lu/%lu MMCHS_INT_STAT: %08x\n",
--        __FUNCTION__, __LINE__, Length - RemLength, Length, MmcStatus));
-+        __func__, __LINE__, Length - RemLength, Length, MmcStatus));
-       return EFI_TIMEOUT;
-     }
- 
 diff --git a/Platform/RaspberryPi/Drivers/ConfigDxe/ConfigDxe.c b/Platform/RaspberryPi/Drivers/ConfigDxe/ConfigDxe.c
-index 248478798..6980cc317 100644
+index 6e26d178d..6980cc317 100644
 --- a/Platform/RaspberryPi/Drivers/ConfigDxe/ConfigDxe.c
 +++ b/Platform/RaspberryPi/Drivers/ConfigDxe/ConfigDxe.c
 @@ -28,6 +28,8 @@
@@ -123,15 +59,6 @@ index 248478798..6980cc317 100644
  #include <Protocol/AcpiTable.h>
  #include <Protocol/BcmGenetPlatformDevice.h>
  #include <Protocol/RpiFirmware.h>
-@@ -428,7 +430,7 @@ SetupVariables (
-     //
-     Status = mFwProtocol->GetMacAddress (mMacAddress.Addr);
-     if (EFI_ERROR (Status)) {
--      DEBUG ((DEBUG_WARN, "%a: failed to retrieve MAC address\n", __FUNCTION__));
-+      DEBUG ((DEBUG_WARN, "%a: failed to retrieve MAC address\n", __func__));
-     }
-   }
- 
 @@ -935,26 +937,22 @@ ConfigInitialize (
      return Status;
    }
@@ -182,28 +109,6 @@ index 475e64553..412b21e47 100644
  
  [Guids]
    gConfigDxeFormSetGuid
-diff --git a/Platform/RaspberryPi/Drivers/ConfigDxe/XhciQuirk.c b/Platform/RaspberryPi/Drivers/ConfigDxe/XhciQuirk.c
-index 94c6f80c9..e637930e6 100644
---- a/Platform/RaspberryPi/Drivers/ConfigDxe/XhciQuirk.c
-+++ b/Platform/RaspberryPi/Drivers/ConfigDxe/XhciQuirk.c
-@@ -70,7 +70,7 @@ PciIoNotificationEvent (
-                                &DeviceNumber, &FunctionNumber);
-   if (EFI_ERROR (Status)) {
-     DEBUG ((DEBUG_WARN, "%a: failed to get SBDF for xHCI controller: %r\n",
--            __FUNCTION__, Status));
-+            __func__, Status));
-     return;
-   }
- 
-@@ -81,7 +81,7 @@ PciIoNotificationEvent (
-   Status = FwProtocol->NotifyXhciReset(BusNumber, DeviceNumber, FunctionNumber);
-   if (EFI_ERROR (Status)) {
-     DEBUG ((DEBUG_WARN, "%a: couldn't signal xHCI firmware load: %r\n",
--            __FUNCTION__, Status));
-+            __func__, Status));
-   }
- }
- 
 diff --git a/Platform/RaspberryPi/Drivers/DisplayDxe/DisplayDxe.c b/Platform/RaspberryPi/Drivers/DisplayDxe/DisplayDxe.c
 index 3eba98e5a..800f7a908 100644
 --- a/Platform/RaspberryPi/Drivers/DisplayDxe/DisplayDxe.c
@@ -239,78 +144,28 @@ index 3eba98e5a..800f7a908 100644
        VidBuf = POS_TO_FB (DestinationX, DestinationY + i);
        BltBuf = (UINT8*)((UINTN)BltBuffer + (SourceY + i) * Delta +
          SourceX * PI3_BYTES_PER_PIXEL);
-diff --git a/Platform/RaspberryPi/Drivers/DisplayDxe/Screenshot.c b/Platform/RaspberryPi/Drivers/DisplayDxe/Screenshot.c
-index 5f31c64bb..68e96da0f 100644
---- a/Platform/RaspberryPi/Drivers/DisplayDxe/Screenshot.c
-+++ b/Platform/RaspberryPi/Drivers/DisplayDxe/Screenshot.c
-@@ -122,7 +122,7 @@ FindWritableFs (
- 
-     Status = SimpleFs->OpenVolume (SimpleFs, &Fs);
-     if (EFI_ERROR (Status)) {
--      DEBUG ((DEBUG_ERROR, "%a OpenVolume[%u] returned %r\n", __FUNCTION__, Index, Status));
-+      DEBUG ((DEBUG_ERROR, "%a OpenVolume[%u] returned %r\n", __func__, Index, Status));
-       continue;
-     }
- 
-@@ -130,7 +130,7 @@ FindWritableFs (
-                    EFI_FILE_MODE_CREATE | EFI_FILE_MODE_READ |
-                    EFI_FILE_MODE_WRITE, 0);
-     if (EFI_ERROR (Status)) {
--      DEBUG ((DEBUG_ERROR, "%a Open[%u] returned %r\n", __FUNCTION__, Index, Status));
-+      DEBUG ((DEBUG_ERROR, "%a Open[%u] returned %r\n", __func__, Index, Status));
-       continue;
-     }
- 
-@@ -285,7 +285,7 @@ ProcessScreenshotHandler (
-                              &Handle
-                            );
-   if (EFI_ERROR (Status)) {
--    DEBUG ((DEBUG_ERROR, "%a: couldn't register key notification: %r\n", __FUNCTION__, Status));
-+    DEBUG ((DEBUG_ERROR, "%a: couldn't register key notification: %r\n", __func__, Status));
-     return Status;
-   }
- 
-@@ -355,7 +355,7 @@ RegisterScreenshotHandlers (
-                   OnTextInExInstall, NULL,
-                   &TextInExInstallEvent);
-   if (EFI_ERROR (Status)) {
--    DEBUG ((DEBUG_ERROR, "%a: couldn't create protocol install event: %r\n", __FUNCTION__, Status));
-+    DEBUG ((DEBUG_ERROR, "%a: couldn't create protocol install event: %r\n", __func__, Status));
-     return;
-   }
- 
-@@ -363,7 +363,7 @@ RegisterScreenshotHandlers (
-                   TextInExInstallEvent,
-                   &TextInExInstallRegistration);
-   if (EFI_ERROR (Status)) {
--    DEBUG ((DEBUG_ERROR, "%a: couldn't register protocol install notify: %r\n", __FUNCTION__, Status));
-+    DEBUG ((DEBUG_ERROR, "%a: couldn't register protocol install notify: %r\n", __func__, Status));
-     return;
-   }
- }
 diff --git a/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.c b/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.c
-index fadf262fa..7b7b56767 100644
+index 7d7fe7b88..7b7b56767 100644
 --- a/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.c
 +++ b/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.c
-@@ -9,12 +9,16 @@
- #include <PiDxe.h>
+@@ -10,12 +10,15 @@
  
  #include <Library/BaseLib.h>
-+#include <Library/BaseMemoryLib.h>
+ #include <Library/BaseMemoryLib.h>
 +#include <Library/BoardInfoLib.h>
 +#include <Library/BoardRevisionHelperLib.h>
  #include <Library/DebugLib.h>
  #include <Library/DxeServicesLib.h>
+-#include <Library/FdtLib.h>
 +#include <Library/FdtPlatformLib.h>
  #include <Library/MemoryAllocationLib.h>
  #include <Library/UefiBootServicesTableLib.h>
  #include <Library/UefiLib.h>
--#include <libfdt.h>
 +#include <Library/FdtLib.h>
  #include <Protocol/RpiFirmware.h>
  #include <Guid/Fdt.h>
  #include <ConfigVars.h>
-@@ -22,6 +26,7 @@
+@@ -23,6 +26,7 @@
  STATIC VOID                             *mFdtImage;
  
  STATIC RASPBERRY_PI_FIRMWARE_PROTOCOL   *mFwProtocol;
@@ -318,374 +173,12 @@ index fadf262fa..7b7b56767 100644
  
  STATIC
  EFI_STATUS
-@@ -41,26 +46,26 @@ FixEthernetAliases (
-   //
-   // Look up the 'ethernet[0]' aliases
-   //
--  Aliases = fdt_path_offset (mFdtImage, "/aliases");
-+  Aliases = FdtPathOffset (mFdtImage, "/aliases");
-   if (Aliases < 0) {
--    DEBUG ((DEBUG_ERROR, "%a: failed to locate '/aliases'\n", __FUNCTION__));
-+    DEBUG ((DEBUG_ERROR, "%a: failed to locate '/aliases'\n", __func__));
-     return EFI_NOT_FOUND;
-   }
--  Ethernet = fdt_getprop (mFdtImage, Aliases, "ethernet", NULL);
--  Ethernet0 = fdt_getprop (mFdtImage, Aliases, "ethernet0", NULL);
-+  Ethernet = FdtGetProp (mFdtImage, Aliases, "ethernet", NULL);
-+  Ethernet0 = FdtGetProp (mFdtImage, Aliases, "ethernet0", NULL);
-   Alias = Ethernet ? Ethernet : Ethernet0;
-   if (!Alias) {
--    DEBUG ((DEBUG_ERROR, "%a: failed to locate 'ethernet[0]' alias\n", __FUNCTION__));
-+    DEBUG ((DEBUG_ERROR, "%a: failed to locate 'ethernet[0]' alias\n", __func__));
-     return EFI_NOT_FOUND;
-   }
- 
-   //
--  // Create copy for fdt_setprop
-+  // Create copy for FdtSetProp
-   //
-   CopySize = AsciiStrSize (Alias);
-   Copy = AllocateCopyPool (CopySize, Alias);
-   if (!Copy) {
--    DEBUG ((DEBUG_ERROR, "%a: failed to copy '%a'\n", __FUNCTION__, Alias));
-+    DEBUG ((DEBUG_ERROR, "%a: failed to copy '%a'\n", __func__, Alias));
-     return EFI_OUT_OF_RESOURCES;
-   }
- 
-@@ -69,22 +74,22 @@ FixEthernetAliases (
-   //
-   Status = EFI_SUCCESS;
-   if (!Ethernet) {
--    Retval = fdt_setprop (mFdtImage, Aliases, "ethernet", Copy, CopySize);
-+    Retval = FdtSetProp (mFdtImage, Aliases, "ethernet", Copy, CopySize);
-     if (Retval != 0) {
-       Status = EFI_NOT_FOUND;
-       DEBUG ((DEBUG_ERROR, "%a: failed to create 'ethernet' alias (%d)\n",
--        __FUNCTION__, Retval));
-+        __func__, Retval));
-     }
--    DEBUG ((DEBUG_INFO, "%a: created 'ethernet' alias '%a'\n", __FUNCTION__, Copy));
-+    DEBUG ((DEBUG_INFO, "%a: created 'ethernet' alias '%a'\n", __func__, Copy));
-   }
-   if (!Ethernet0) {
--    Retval = fdt_setprop (mFdtImage, Aliases, "ethernet0", Copy, CopySize);
-+    Retval = FdtSetProp (mFdtImage, Aliases, "ethernet0", Copy, CopySize);
-     if (Retval != 0) {
-       Status = EFI_NOT_FOUND;
-       DEBUG ((DEBUG_ERROR, "%a: failed to create 'ethernet0' alias (%d)\n",
--        __FUNCTION__, Retval));
-+        __func__, Retval));
-     }
--    DEBUG ((DEBUG_INFO, "%a: created 'ethernet0' alias '%a'\n", __FUNCTION__, Copy));
-+    DEBUG ((DEBUG_INFO, "%a: created 'ethernet0' alias '%a'\n", __func__, Copy));
-   }
- 
-   FreePool (Copy);
-@@ -105,9 +110,9 @@ UpdateMacAddress (
-   //
-   // Locate the node that the 'ethernet' alias refers to
-   //
--  Node = fdt_path_offset (mFdtImage, "ethernet");
-+  Node = FdtPathOffset (mFdtImage, "ethernet");
-   if (Node < 0) {
--    DEBUG ((DEBUG_ERROR, "%a: failed to locate 'ethernet' alias\n", __FUNCTION__));
-+    DEBUG ((DEBUG_ERROR, "%a: failed to locate 'ethernet' alias\n", __func__));
-     return EFI_NOT_FOUND;
-   }
- 
-@@ -116,20 +121,20 @@ UpdateMacAddress (
-   //
-   Status = mFwProtocol->GetMacAddress (MacAddress);
-   if (EFI_ERROR (Status)) {
--    DEBUG ((DEBUG_ERROR, "%a: failed to retrieve MAC address\n", __FUNCTION__));
-+    DEBUG ((DEBUG_ERROR, "%a: failed to retrieve MAC address\n", __func__));
-     return Status;
-   }
- 
--  Retval = fdt_setprop (mFdtImage, Node, "mac-address", MacAddress,
-+  Retval = FdtSetProp (mFdtImage, Node, "mac-address", MacAddress,
-     sizeof MacAddress);
-   if (Retval != 0) {
-     DEBUG ((DEBUG_ERROR, "%a: failed to create 'mac-address' property (%d)\n",
--      __FUNCTION__, Retval));
-+      __func__, Retval));
-     return EFI_NOT_FOUND;
-   }
- 
-   DEBUG ((DEBUG_INFO, "%a: setting MAC address to %02x:%02x:%02x:%02x:%02x:%02x\n",
--    __FUNCTION__, MacAddress[0], MacAddress[1], MacAddress[2], MacAddress[3],
-+    __func__, MacAddress[0], MacAddress[1], MacAddress[2], MacAddress[3],
-     MacAddress[4], MacAddress[5]));
-   return EFI_SUCCESS;
- }
-@@ -153,51 +158,51 @@ AddUsbCompatibleProperty (
-   INTN          Retval;
- 
-   // Locate the node that the 'usb' alias refers to
--  Node = fdt_path_offset (mFdtImage, "usb");
-+  Node = FdtPathOffset (mFdtImage, "usb");
-   if (Node < 0) {
--    DEBUG ((DEBUG_ERROR, "%a: failed to locate 'usb' alias\n", __FUNCTION__));
-+    DEBUG ((DEBUG_ERROR, "%a: failed to locate 'usb' alias\n", __func__));
-     return EFI_NOT_FOUND;
-   }
- 
-   // Get the property list. This is a list of NUL terminated strings.
--  List = fdt_getprop (mFdtImage, Node, "compatible", &ListSize);
-+  List = FdtGetProp (mFdtImage, Node, "compatible", &ListSize);
-   if (List == NULL) {
--    DEBUG ((DEBUG_ERROR, "%a: failed to locate properties\n", __FUNCTION__));
-+    DEBUG ((DEBUG_ERROR, "%a: failed to locate properties\n", __func__));
-     return EFI_NOT_FOUND;
-   }
- 
-   // Check if the compatible value we plan to add is already present
--  if (fdt_stringlist_contains (List, ListSize, NewProp)) {
-+  if (FdtStringListContains (List, ListSize, NewProp)) {
-     DEBUG ((DEBUG_INFO, "%a: property '%a' is already set.\n",
--      __FUNCTION__, NewProp));
-+      __func__, NewProp));
-     return EFI_SUCCESS;
-   }
- 
-   // Make sure the compatible device is what we expect
--  if (!fdt_stringlist_contains (List, ListSize, Prop)) {
-+  if (!FdtStringListContains (List, ListSize, Prop)) {
-     DEBUG ((DEBUG_ERROR, "%a: property '%a' is missing!\n",
--      __FUNCTION__, Prop));
-+      __func__, Prop));
-     return EFI_NOT_FOUND;
-   }
- 
-   // Add the new NUL terminated entry to our list
-   DEBUG ((DEBUG_INFO, "%a: adding '%a' to the properties\n",
--    __FUNCTION__, NewProp));
-+    __func__, NewProp));
- 
-   NewList = AllocatePool (ListSize + sizeof (NewProp));
-   if (NewList == NULL) {
--    DEBUG ((DEBUG_ERROR, "%a: failed to allocate memory\n", __FUNCTION__));
-+    DEBUG ((DEBUG_ERROR, "%a: failed to allocate memory\n", __func__));
-     return EFI_OUT_OF_RESOURCES;;
-   }
-   CopyMem (NewList, List, ListSize);
-   CopyMem (&NewList[ListSize], NewProp, sizeof (NewProp));
- 
--  Retval = fdt_setprop (mFdtImage, Node, "compatible", NewList,
-+  Retval = FdtSetProp (mFdtImage, Node, "compatible", NewList,
-              ListSize + sizeof (NewProp));
-   FreePool (NewList);
-   if (Retval != 0) {
-     DEBUG ((DEBUG_ERROR, "%a: failed to update properties (%d)\n",
--      __FUNCTION__, Retval));
-+      __func__, Retval));
-     return EFI_NOT_FOUND;
-   }
- 
-@@ -213,7 +218,7 @@ CleanMemoryNodes (
-   INTN Node;
-   INT32 Retval;
- 
--  Node = fdt_path_offset (mFdtImage, "/memory");
-+  Node = FdtPathOffset (mFdtImage, "/memory");
-   if (Node < 0) {
-     return EFI_SUCCESS;
-   }
-@@ -223,7 +228,7 @@ CleanMemoryNodes (
-    * OS go crazy and ignore the UEFI map.
-    */
-   DEBUG ((DEBUG_INFO, "Removing bogus /memory\n"));
--  Retval = fdt_del_node (mFdtImage, Node);
-+  Retval = FdtDelNode (mFdtImage, Node);
-   if (Retval != 0) {
-     DEBUG ((DEBUG_ERROR, "Failed to remove /memory\n"));
-     return EFI_NOT_FOUND;
-@@ -242,15 +247,15 @@ SanitizePSCI (
-   INTN Root;
-   INT32 Retval;
- 
--  Root = fdt_path_offset (mFdtImage, "/");
-+  Root = FdtPathOffset (mFdtImage, "/");
-   ASSERT (Root >= 0);
-   if (Root < 0) {
-     return EFI_NOT_FOUND;
-   }
- 
--  Node = fdt_path_offset (mFdtImage, "/psci");
-+  Node = FdtPathOffset (mFdtImage, "/psci");
-   if (Node < 0) {
--    Node = fdt_add_subnode (mFdtImage, Root, "psci");
-+    Node = FdtAddSubnode (mFdtImage, Root, "psci");
-   }
- 
-   ASSERT (Node >= 0);
-@@ -259,33 +264,33 @@ SanitizePSCI (
-     return EFI_NOT_FOUND;
-   }
- 
--  Retval = fdt_setprop_string (mFdtImage, Node, "compatible", "arm,psci-1.0");
-+  Retval = FdtSetPropString (mFdtImage, Node, "compatible", "arm,psci-1.0");
-   if (Retval != 0) {
-     DEBUG ((DEBUG_ERROR, "Couldn't set /psci compatible property\n"));
-     return EFI_NOT_FOUND;
-   }
- 
--  Retval = fdt_setprop_string (mFdtImage, Node, "method", "smc");
-+  Retval = FdtSetPropString (mFdtImage, Node, "method", "smc");
-   if (Retval != 0) {
-     DEBUG ((DEBUG_ERROR, "Couldn't set /psci method property\n"));
-     return EFI_NOT_FOUND;
-   }
- 
--  Root = fdt_path_offset (mFdtImage, "/cpus");
-+  Root = FdtPathOffset (mFdtImage, "/cpus");
-   if (Root < 0) {
-     DEBUG ((DEBUG_ERROR, "No CPUs to update with PSCI enable-method?\n"));
-     return EFI_NOT_FOUND;
-   }
- 
--  Node = fdt_first_subnode (mFdtImage, Root);
-+  Node = FdtFirstSubnode (mFdtImage, Root);
-   while (Node >= 0) {
--    if (fdt_setprop_string (mFdtImage, Node, "enable-method", "psci") != 0) {
-+    if (FdtSetPropString (mFdtImage, Node, "enable-method", "psci") != 0) {
-       DEBUG ((DEBUG_ERROR, "Failed to update enable-method for a CPU\n"));
-       return EFI_NOT_FOUND;
-     }
- 
--    fdt_delprop (mFdtImage, Node, "cpu-release-addr");
--    Node = fdt_next_subnode (mFdtImage, Node);
-+    FdtDelProp (mFdtImage, Node, "cpu-release-addr");
-+    Node = FdtNextSubnode (mFdtImage, Node);
-   }
-   return EFI_SUCCESS;
- }
-@@ -303,7 +308,7 @@ CleanSimpleFramebuffer (
-    * Should look for nodes by kind and remove aliases
-    * by matching against device.
-    */
--  Node = fdt_path_offset (mFdtImage, "display0");
-+  Node = FdtPathOffset (mFdtImage, "display0");
-   if (Node < 0) {
-     return EFI_SUCCESS;
-   }
-@@ -313,19 +318,19 @@ CleanSimpleFramebuffer (
-    * doesn't reflect the framebuffer built by UEFI.
-    */
-   DEBUG ((DEBUG_INFO, "Removing bogus display0\n"));
--  Retval = fdt_del_node (mFdtImage, Node);
-+  Retval = FdtDelNode (mFdtImage, Node);
-   if (Retval != 0) {
-     DEBUG ((DEBUG_ERROR, "Failed to remove display0\n"));
-     return EFI_NOT_FOUND;
-   }
- 
--  Node = fdt_path_offset (mFdtImage, "/aliases");
-+  Node = FdtPathOffset (mFdtImage, "/aliases");
-   if (Node < 0) {
-     DEBUG ((DEBUG_ERROR, "Couldn't find /aliases to remove display0\n"));
-     return EFI_NOT_FOUND;
-   }
- 
--  Retval = fdt_delprop (mFdtImage, Node, "display0");
-+  Retval = FdtDelProp (mFdtImage, Node, "display0");
-   if (Retval != 0) {
-     DEBUG ((DEBUG_ERROR, "Failed to remove display0 alias\n"));
-     return EFI_NOT_FOUND;
-@@ -345,51 +350,51 @@ SyncPcie (
-   INTN          Retval;
-   UINT32        DmaRanges[7];
- 
--  Node = fdt_path_offset (mFdtImage, "pcie0");
-+  Node = FdtPathOffset (mFdtImage, "pcie0");
-   if (Node < 0) {
--    DEBUG ((DEBUG_ERROR, "%a: failed to locate 'pcie0' alias\n", __FUNCTION__));
-+    DEBUG ((DEBUG_ERROR, "%a: failed to locate 'pcie0' alias\n", __func__));
-     return EFI_NOT_FOUND;
-   }
- 
-   // non translated 32-bit DMA window with a limit of 0xc0000000
--  DmaRanges[0] = cpu_to_fdt32 (0x02000000);
--  DmaRanges[1] = cpu_to_fdt32 (0x00000000);
--  DmaRanges[2] = cpu_to_fdt32 (0x00000000);
--  DmaRanges[3] = cpu_to_fdt32 (0x00000000);
--  DmaRanges[4] = cpu_to_fdt32 (0x00000000);
--  DmaRanges[5] = cpu_to_fdt32 (0x00000000);
--  DmaRanges[6] = cpu_to_fdt32 (0xc0000000);
-+  DmaRanges[0] = CpuToFdt32 (0x02000000);
-+  DmaRanges[1] = CpuToFdt32 (0x00000000);
-+  DmaRanges[2] = CpuToFdt32 (0x00000000);
-+  DmaRanges[3] = CpuToFdt32 (0x00000000);
-+  DmaRanges[4] = CpuToFdt32 (0x00000000);
-+  DmaRanges[5] = CpuToFdt32 (0x00000000);
-+  DmaRanges[6] = CpuToFdt32 (0xc0000000);
- 
--  DEBUG ((DEBUG_INFO, "%a: Updating PCIe dma-ranges\n",  __FUNCTION__));
-+  DEBUG ((DEBUG_INFO, "%a: Updating PCIe dma-ranges\n",  __func__));
- 
-   /*
-    * Match dma-ranges with the EDK2+ACPI setup we are using.  This works
-    * around a failure in Linux and OpenBSD to reset the PCIe/XHCI correctly
-    * when in DT mode.
-    */
--  Retval = fdt_setprop (mFdtImage, Node, "dma-ranges",
-+  Retval = FdtSetProp (mFdtImage, Node, "dma-ranges",
-                         DmaRanges,  sizeof DmaRanges);
-   if (Retval != 0) {
-     DEBUG ((DEBUG_ERROR, "%a: failed to locate PCIe 'dma-ranges' property (%d)\n",
--      __FUNCTION__, Retval));
-+      __func__, Retval));
-     return EFI_NOT_FOUND;
-   }
- 
-   // move the MMIO window too
--  DmaRanges[0] = cpu_to_fdt32 (0x02000000); // non prefetchable 32-bit
--  DmaRanges[1] = cpu_to_fdt32 (FixedPcdGet64 (PcdBcm27xxPciBusMmioAdr) >> 32); // bus addr @ 0x0f8000000
--  DmaRanges[2] = cpu_to_fdt32 (FixedPcdGet64 (PcdBcm27xxPciBusMmioAdr) & MAX_UINT32);
--  DmaRanges[3] = cpu_to_fdt32 (FixedPcdGet64 (PcdBcm27xxPciCpuMmioAdr) >> 32); // cpu addr @ 0x600000000
--  DmaRanges[4] = cpu_to_fdt32 (FixedPcdGet64 (PcdBcm27xxPciCpuMmioAdr) & MAX_UINT32);
--  DmaRanges[5] = cpu_to_fdt32 (0x00000000);
--  DmaRanges[6] = cpu_to_fdt32 (FixedPcdGet32 (PcdBcm27xxPciBusMmioLen) + 1); // len = 0x4000 0000
-+  DmaRanges[0] = CpuToFdt32 (0x02000000); // non prefetchable 32-bit
-+  DmaRanges[1] = CpuToFdt32 (FixedPcdGet64 (PcdBcm27xxPciBusMmioAdr) >> 32); // bus addr @ 0x0f8000000
-+  DmaRanges[2] = CpuToFdt32 (FixedPcdGet64 (PcdBcm27xxPciBusMmioAdr) & MAX_UINT32);
-+  DmaRanges[3] = CpuToFdt32 (FixedPcdGet64 (PcdBcm27xxPciCpuMmioAdr) >> 32); // cpu addr @ 0x600000000
-+  DmaRanges[4] = CpuToFdt32 (FixedPcdGet64 (PcdBcm27xxPciCpuMmioAdr) & MAX_UINT32);
-+  DmaRanges[5] = CpuToFdt32 (0x00000000);
-+  DmaRanges[6] = CpuToFdt32 (FixedPcdGet32 (PcdBcm27xxPciBusMmioLen) + 1); // len = 0x4000 0000
- 
-   DEBUG ((DEBUG_INFO, "%a: Updating PCIe ranges\n",  __func__));
- 
-   /*
-    * Match ranges (BAR/MMIO) with the EDK2+ACPI setup we are using.
-    */
--  Retval = fdt_setprop (mFdtImage, Node, "ranges",
-+  Retval = FdtSetProp (mFdtImage, Node, "ranges",
-                         DmaRanges,  sizeof DmaRanges);
-   if (Retval != 0) {
-     DEBUG ((DEBUG_ERROR, "%a: failed to locate PCIe MMIO 'ranges' property (%d)\n",
-@@ -414,12 +419,12 @@ SyncPcie (
-    * triggering the mailbox by removing the node.
-    */
- 
--  Node = fdt_path_offset (mFdtImage, "/scb/pcie@7d500000/pci");
-+  Node = FdtPathOffset (mFdtImage, "/scb/pcie@7d500000/pci");
-   if (Node < 0) {
-     // This can happen on CM4/etc which doesn't have an onboard XHCI
--    DEBUG ((DEBUG_INFO, "%a: failed to locate /scb/pcie@7d500000/pci\n", __FUNCTION__));
-+    DEBUG ((DEBUG_INFO, "%a: failed to locate /scb/pcie@7d500000/pci\n", __func__));
-   } else {
--    Retval = fdt_del_node (mFdtImage, Node);
-+    Retval = FdtDelNode (mFdtImage, Node);
-     if (Retval != 0) {
-       DEBUG ((DEBUG_ERROR, "Failed to remove /scb/pcie@7d500000/pci\n"));
-       return EFI_NOT_FOUND;
-@@ -461,9 +466,15 @@ FdtDxeInitialize (
+@@ -462,9 +466,15 @@ FdtDxeInitialize (
                    (VOID**)&mFwProtocol);
    ASSERT_EFI_ERROR (Status);
  
 -  FdtImage = (VOID*)(UINTN)PcdGet32 (PcdFdtBaseAddress);
--  Retval = fdt_check_header (FdtImage);
+-  Retval = FdtCheckHeader (FdtImage);
 -  if (Retval != 0) {
 +  Status = BoardInfoGetRevisionCode (&mBoardRevision);
 +  if (EFI_ERROR (Status)) {
@@ -699,28 +192,7 @@ index fadf262fa..7b7b56767 100644
      /*
       * Any one of:
       * - Invalid config.txt device_tree_address (not PcdFdtBaseAddress)
-@@ -473,7 +484,7 @@ FdtDxeInitialize (
-     return EFI_NOT_FOUND;
-   }
- 
--  FdtSize = fdt_totalsize (FdtImage);
-+  FdtSize = FdtTotalSize (FdtImage);
-   DEBUG ((DEBUG_INFO, "Devicetree passed via config.txt (0x%lx bytes)\n", FdtSize));
- 
-   /*
-@@ -487,9 +498,9 @@ FdtDxeInitialize (
-     goto out;
-   }
- 
--  Retval = fdt_open_into (FdtImage, mFdtImage, FdtSize);
-+  Retval = FdtOpenInto (FdtImage, mFdtImage, FdtSize);
-   if (Retval != 0) {
--     DEBUG ((DEBUG_ERROR, "fdt_open_into failed: %d\n", Retval));
-+     DEBUG ((DEBUG_ERROR, "FdtOpenInto failed: %d\n", Retval));
-      goto out;
-   }
- 
-@@ -497,39 +508,41 @@ FdtDxeInitialize (
+@@ -498,39 +508,41 @@ FdtDxeInitialize (
     * These are all best-effort.
     */
  
@@ -810,228 +282,29 @@ index 90e138af7..bcc29318c 100644
  [Pcd]
    gRaspberryPiTokenSpaceGuid.PcdSystemTableMode
    gRaspberryPiTokenSpaceGuid.PcdXhciReload
-diff --git a/Platform/RaspberryPi/Drivers/MmcDxe/MmcBlockIo.c b/Platform/RaspberryPi/Drivers/MmcDxe/MmcBlockIo.c
-index 8a2f7f42a..b508ce806 100644
---- a/Platform/RaspberryPi/Drivers/MmcDxe/MmcBlockIo.c
-+++ b/Platform/RaspberryPi/Drivers/MmcDxe/MmcBlockIo.c
-@@ -54,14 +54,14 @@ ValidateWrittenBlockCount (
-   Status = MmcHost->SendCommand (MmcHost, MMC_CMD55,
-                       MmcHostInstance->CardInfo.RCA << 16);
-   if (EFI_ERROR (Status)) {
--    DEBUG ((DEBUG_ERROR, "%a(%u): error: %r\n", __FUNCTION__, __LINE__, Status));
-+    DEBUG ((DEBUG_ERROR, "%a(%u): error: %r\n", __func__, __LINE__, Status));
-     return Status;
-   }
- 
-   Status = MmcHost->SendCommand (MmcHost, MMC_ACMD22, 0);
-   if (EFI_ERROR (Status)) {
-     DEBUG ((DEBUG_ERROR, "%a(%u): error: %r\n",
--      __FUNCTION__, __LINE__, Status));
-+      __func__, __LINE__, Status));
-     return Status;
-   }
- 
-@@ -75,7 +75,7 @@ ValidateWrittenBlockCount (
-   Status = MmcHost->ReadBlockData (MmcHost, 0, sizeof (Data),
-                       (VOID*)Data);
-   if (EFI_ERROR (Status)) {
--    DEBUG ((DEBUG_ERROR, "%a(%u): error: %r\n", __FUNCTION__, __LINE__, Status));
-+    DEBUG ((DEBUG_ERROR, "%a(%u): error: %r\n", __func__, __LINE__, Status));
-     return Status;
-   }
- 
-@@ -88,7 +88,7 @@ ValidateWrittenBlockCount (
-                   ((UINT32)Data[3] << 0);
-   if (BlocksWritten != Count) {
-     DEBUG ((DEBUG_ERROR, "%a(%u): expected %u != gotten %u\n",
--      __FUNCTION__, __LINE__, Count, BlocksWritten));
-+      __func__, __LINE__, Count, BlocksWritten));
-     if (BlocksWritten == 0) {
-       return EFI_DEVICE_ERROR;
-     }
-@@ -118,7 +118,7 @@ WaitUntilTran (
-     Status = MmcHost->SendCommand (MmcHost, MMC_CMD13,
-                         MmcHostInstance->CardInfo.RCA << 16);
-     if (EFI_ERROR (Status) && Status != EFI_TIMEOUT) {
--      DEBUG ((DEBUG_ERROR, "%a(%u) CMD13 failed: %r\n", __FUNCTION__, __LINE__, Status));
-+      DEBUG ((DEBUG_ERROR, "%a(%u) CMD13 failed: %r\n", __func__, __LINE__, Status));
-       break;
-     }
- 
-@@ -134,7 +134,7 @@ WaitUntilTran (
-   }
- 
-   if (0 == Timeout) {
--    DEBUG ((DEBUG_ERROR, "%a(%u) card is busy\n", __FUNCTION__, __LINE__));
-+    DEBUG ((DEBUG_ERROR, "%a(%u) card is busy\n", __func__, __LINE__));
-     return EFI_NOT_READY;
-   }
- 
 diff --git a/Platform/RaspberryPi/Drivers/MmcDxe/MmcDebug.c b/Platform/RaspberryPi/Drivers/MmcDxe/MmcDebug.c
-index 22209fcac..5f9e1adf6 100644
+index 43a440f58..5f9e1adf6 100644
 --- a/Platform/RaspberryPi/Drivers/MmcDxe/MmcDebug.c
 +++ b/Platform/RaspberryPi/Drivers/MmcDxe/MmcDebug.c
-@@ -9,9 +9,9 @@
+@@ -8,11 +8,13 @@
+ 
  #include "Mmc.h"
  
- #if !defined(MDEPKG_NDEBUG)
--CONST CHAR8* mStrUnit[] = { "100kbit/s", "1Mbit/s", "10Mbit/s", "100MBit/s",
-+STATIC CONST CHAR8* mStrUnit[] = { "100kbit/s", "1Mbit/s", "10Mbit/s", "100MBit/s",
-                             "Unknown", "Unknown", "Unknown", "Unknown" };
--CONST CHAR8* mStrValue[] = { "1.0", "1.2", "1.3", "1.5", "2.0", "2.5",
-+STATIC CONST CHAR8* mStrValue[] = { "1.0", "1.2", "1.3", "1.5", "2.0", "2.5",
-                              "3.0", "3.5", "4.0", "4.5", "5.0", "5.5",
-                              "6.0", "7.0", "8.0" };
- #endif
-diff --git a/Platform/RaspberryPi/Drivers/MmcDxe/MmcIdentification.c b/Platform/RaspberryPi/Drivers/MmcDxe/MmcIdentification.c
-index c24e991b4..82eabbedf 100644
---- a/Platform/RaspberryPi/Drivers/MmcDxe/MmcIdentification.c
-+++ b/Platform/RaspberryPi/Drivers/MmcDxe/MmcIdentification.c
-@@ -356,7 +356,7 @@ SdSelect (
-   Status = MmcHost->SendCommand (MmcHost, MMC_CMD7,
-                       MmcHostInstance->CardInfo.RCA << 16);
-   if (EFI_ERROR (Status)) {
--    DEBUG ((DEBUG_ERROR, "%a: error: %r\n", __FUNCTION__, Status));
-+    DEBUG ((DEBUG_ERROR, "%a: error: %r\n", __func__, Status));
-   }
++#if !defined(MDEPKG_NDEBUG)
+ STATIC CONST CHAR8* mStrUnit[] = { "100kbit/s", "1Mbit/s", "10Mbit/s", "100MBit/s",
+-                                   "Unknown", "Unknown", "Unknown", "Unknown" };
++                            "Unknown", "Unknown", "Unknown", "Unknown" };
+ STATIC CONST CHAR8* mStrValue[] = { "1.0", "1.2", "1.3", "1.5", "2.0", "2.5",
+-                                    "3.0", "3.5", "4.0", "4.5", "5.0", "5.5",
+-                                    "6.0", "7.0", "8.0" };
++                             "3.0", "3.5", "4.0", "4.5", "5.0", "5.5",
++                             "6.0", "7.0", "8.0" };
++#endif
  
-   return Status;
-@@ -376,7 +376,7 @@ SdDeselect (
- 
-   Status = MmcHost->SendCommand (MmcHost, MMC_CMD7, 0);
-   if (EFI_ERROR (Status)) {
--    DEBUG ((DEBUG_ERROR, "%a: error: %r\n", __FUNCTION__, Status));
-+    DEBUG ((DEBUG_ERROR, "%a: error: %r\n", __func__, Status));
-   }
- 
-   return Status;
-@@ -396,13 +396,13 @@ SdGetCsd (
-   Status = MmcHost->SendCommand (MmcHost, MMC_CMD9,
-                       MmcHostInstance->CardInfo.RCA << 16);
-   if (EFI_ERROR (Status)) {
--    DEBUG ((DEBUG_ERROR, "%a(%u): error: %r\n", __FUNCTION__, __LINE__, Status));
-+    DEBUG ((DEBUG_ERROR, "%a(%u): error: %r\n", __func__, __LINE__, Status));
-     return Status;
-   }
- 
-   Status = MmcHost->ReceiveResponse (MmcHost, MMC_RESPONSE_TYPE_CSD, Response);
-   if (EFI_ERROR (Status)) {
--    DEBUG ((DEBUG_ERROR, "%a(%u): error %r\n", __FUNCTION__,
-+    DEBUG ((DEBUG_ERROR, "%a(%u): error %r\n", __func__,
-       __LINE__, Status));
-     return Status;
-   }
-@@ -437,20 +437,20 @@ SdSet4Bit (
-   CmdArg = MmcHostInstance->CardInfo.RCA << 16;
-   Status = MmcHost->SendCommand (MmcHost, MMC_CMD55, CmdArg);
-   if (EFI_ERROR (Status)) {
--    DEBUG ((DEBUG_ERROR, "%a(%u): error: %r\n", __FUNCTION__, __LINE__, Status));
-+    DEBUG ((DEBUG_ERROR, "%a(%u): error: %r\n", __func__, __LINE__, Status));
-     return Status;
-   }
- 
-   /* Width: 4 */
-   Status = MmcHost->SendCommand (MmcHost, MMC_CMD6, 2);
-   if (EFI_ERROR (Status)) {
--    DEBUG ((DEBUG_ERROR, "%a(%u): error %r\n", __FUNCTION__, __LINE__, Status));
-+    DEBUG ((DEBUG_ERROR, "%a(%u): error %r\n", __func__, __LINE__, Status));
-     return Status;
-   }
- 
-   Status = MmcHost->SetIos (MmcHost, 0, BUSWIDTH_4, EMMCBACKWARD);
-   if (EFI_ERROR (Status)) {
--    DEBUG ((DEBUG_ERROR, "%a(%u): error: %r\n", __FUNCTION__, __LINE__, Status));
-+    DEBUG ((DEBUG_ERROR, "%a(%u): error: %r\n", __func__, __LINE__, Status));
-     return Status;
-   }
- 
-@@ -488,7 +488,7 @@ SdSetSpeed (
-    */
-   Status = MmcHost->SetIos (MmcHost, Speed, 0, EMMCBACKWARD);
-   if (EFI_ERROR (Status)) {
--    DEBUG ((DEBUG_ERROR, "%a: error setting speed %u: %r\n", __FUNCTION__, Speed, Status));
-+    DEBUG ((DEBUG_ERROR, "%a: error setting speed %u: %r\n", __func__, Speed, Status));
-     return Status;
-   }
- 
-@@ -506,14 +506,14 @@ SdSetSpeed (
-   Status = MmcHost->SendCommand (MmcHost, MMC_CMD6, CmdArg);
-   if (EFI_ERROR (Status)) {
-     DEBUG ((DEBUG_ERROR, "%a(%u): error: %r\n",
--      __FUNCTION__, __LINE__, Status));
-+      __func__, __LINE__, Status));
-     return Status;
-   } else {
-     Status = MmcHost->ReadBlockData (MmcHost, 0, SWITCH_CMD_DATA_LENGTH,
-       Buffer);
-     if (EFI_ERROR (Status)) {
-       DEBUG ((DEBUG_ERROR, "%a(%u): error: %r\n",
--        __FUNCTION__, __LINE__, Status));
-+        __func__, __LINE__, Status));
-       return Status;
-     }
-   }
-@@ -527,13 +527,13 @@ SdSetSpeed (
-   CmdArg = SdSwitchCmdArgument (1, 0xf, 0xf, 0xf, TRUE);
-   Status = MmcHost->SendCommand (MmcHost, MMC_CMD6, CmdArg);
-   if (EFI_ERROR (Status)) {
--    DEBUG ((DEBUG_ERROR, "%a(%u): error: %r\n", __FUNCTION__, __LINE__, Status));
-+    DEBUG ((DEBUG_ERROR, "%a(%u): error: %r\n", __func__, __LINE__, Status));
-     return Status;
-   } else {
-     Status = MmcHost->ReadBlockData (MmcHost, 0,
-       SWITCH_CMD_DATA_LENGTH, Buffer);
-     if (EFI_ERROR (Status)) {
--      DEBUG ((DEBUG_ERROR, "%a(%u): error: %r\n", __FUNCTION__, __LINE__, Status));
-+      DEBUG ((DEBUG_ERROR, "%a(%u): error: %r\n", __func__, __LINE__, Status));
-       return Status;
-     }
- 
-@@ -561,7 +561,7 @@ SdSetSpeed (
- 
-   Status = MmcHost->SetIos (MmcHost, Speed, 0, EMMCBACKWARD);
-   if (EFI_ERROR (Status)) {
--    DEBUG ((DEBUG_ERROR, "%a: error setting speed %u: %r\n", __FUNCTION__, Speed, Status));
-+    DEBUG ((DEBUG_ERROR, "%a: error setting speed %u: %r\n", __func__, Speed, Status));
-     return Status;
-   }
- 
-@@ -585,13 +585,13 @@ SdExecuteScr (
-                       MmcHostInstance->CardInfo.RCA << 16);
-   if (EFI_ERROR (Status)) {
-     DEBUG ((DEBUG_ERROR, "%a (MMC_CMD55): Error and Status = %r\n",
--      __FUNCTION__, Status));
-+      __func__, Status));
-     return Status;
-   }
-   Status = MmcHost->ReceiveResponse (MmcHost, MMC_RESPONSE_TYPE_R1, Response);
-   if (EFI_ERROR (Status)) {
-     DEBUG ((DEBUG_ERROR, "%a (MMC_CMD55): Error and Status = %r\n",
--      __FUNCTION__, Status));
-+      __func__, Status));
-     return Status;
-   }
-   if ((Response[0] & MMC_STATUS_APP_CMD) == 0) {
-@@ -602,7 +602,7 @@ SdExecuteScr (
-   Status = MmcHost->SendCommand (MmcHost, MMC_ACMD51, 0);
-   if (EFI_ERROR (Status)) {
-     DEBUG ((DEBUG_ERROR, "%a (MMC_ACMD51): Error and Status = %r\n",
--      __FUNCTION__, Status));
-+      __func__, Status));
-     return Status;
-   }
- 
-@@ -610,7 +610,7 @@ SdExecuteScr (
-   if (EFI_ERROR (Status)) {
-     DEBUG ((DEBUG_ERROR,
-       "%a (MMC_ACMD51): ReadBlockData Error and Status = %r\n",
--      __FUNCTION__, Status));
-+      __func__, Status));
-     return Status;
-   }
- 
+ VOID
+ PrintCID (
 diff --git a/Platform/RaspberryPi/Drivers/PlatformSmbiosDxe/PlatformSmbiosDxe.c b/Platform/RaspberryPi/Drivers/PlatformSmbiosDxe/PlatformSmbiosDxe.c
-index 0d0132245..09766c99d 100644
+index debb69891..09766c99d 100644
 --- a/Platform/RaspberryPi/Drivers/PlatformSmbiosDxe/PlatformSmbiosDxe.c
 +++ b/Platform/RaspberryPi/Drivers/PlatformSmbiosDxe/PlatformSmbiosDxe.c
 @@ -51,11 +51,14 @@
@@ -1049,65 +322,7 @@ index 0d0132245..09766c99d 100644
  
  /***********************************************************************
          SMBIOS data definition  TYPE0  BIOS Information
-@@ -244,8 +247,7 @@ SMBIOS_TABLE_TYPE4 mProcessorInfoType4 = {
-   ProcessorFamilyIndicatorFamily2, // ProcessorFamily;        ///< The enumeration value from PROCESSOR_FAMILY2_DATA.
-   2,                               // ProcessorManufacture String;
-   {                                // ProcessorId;
--    { 0x00, 0x00, 0x00, 0x00 },
--    { 0x00, 0x00, 0x00, 0x00 }
-+    0x00, 0x00, 0x00, 0x00
-   },
-   3,                    // ProcessorVersion String;
-   {                     // Voltage;
-@@ -311,11 +313,11 @@ SMBIOS_TABLE_TYPE7 mCacheInfoType7_L1I = {
-        //Operational Mode   :2  (Unknown)
-        //Reserved           :6
- #if (RPI_MODEL == 4)
--  0x0030,                   // Maximum Size (RPi4: 48KB)
--  0x0030,                   // Install Size (RPi4: 48KB)
-+  {0x0030, 0},              // Maximum Size (RPi4: 48KB)
-+  {0x0030, 0},              // Install Size (RPi4: 48KB)
- #else
--  0x0010,                   // Maximum Size (RPi3: 16KB)
--  0x0010,                   // Install Size (RPi3: 16KB)
-+  {0x0010, 0},              // Maximum Size (RPi3: 16KB)
-+  {0x0010, 0},              // Install Size (RPi3: 16KB)
- #endif
-   {                         // Supported SRAM Type
-     0,  //Other             :1
-@@ -359,11 +361,11 @@ SMBIOS_TABLE_TYPE7 mCacheInfoType7_L1D = {
-        //Operational Mode   :2  (WB)
-        //Reserved           :6
- #if (RPI_MODEL == 4)
--  0x0020,                   // Maximum Size (RPi4: 32KB)
--  0x0020,                   // Install Size (RPi4: 32KB)
-+  {0x0020, 0},              // Maximum Size (RPi4: 32KB)
-+  {0x0020, 0},              // Install Size (RPi4: 32KB)
- #else
--  0x0010,                   // Maximum Size (RPi3: 16KB)
--  0x0010,                   // Install Size (RPi3: 16KB)
-+  {0x0010, 0},              // Maximum Size (RPi3: 16KB)
-+  {0x0010, 0},              // Install Size (RPi3: 16KB)
- #endif
-   {                         // Supported SRAM Type
-     0,  //Other             :1
-@@ -411,11 +413,11 @@ SMBIOS_TABLE_TYPE7 mCacheInfoType7_L2 = {
-        //Operational Mode   :2  (WB)
-        //Reserved           :6
- #if (RPI_MODEL == 4)
--  0x0400,                   // Maximum Size (RPi4: 1MB)
--  0x0400,                   // Install Size (RPi4: 1MB)
-+  {0x0400, 0},              // Maximum Size (RPi4: 1MB)
-+  {0x0400, 0},              // Install Size (RPi4: 1MB)
- #else
--  0x0200,                   // Maximum Size (RPi3: 512KB)
--  0x0200,                   // Install Size (RPi3: 512KB)
-+  {0x0200, 0},              // Maximum Size (RPi3: 512KB)
-+  {0x0200, 0},              // Install Size (RPi3: 512KB)
- #endif
-   {                         // Supported SRAM Type
-     0,  //Other             :1
-@@ -860,30 +862,19 @@ SysInfoUpdateSmbiosType1 (
+@@ -859,30 +862,19 @@ SysInfoUpdateSmbiosType1 (
    VOID
    )
  {
@@ -1143,7 +358,7 @@ index 0d0132245..09766c99d 100644
    if (EFI_ERROR (Status)) {
      DEBUG ((DEBUG_ERROR, "Failed to get board serial: %r\n", Status));
    }
-@@ -892,7 +883,7 @@ SysInfoUpdateSmbiosType1 (
+@@ -891,7 +883,7 @@ SysInfoUpdateSmbiosType1 (
  
    DEBUG ((DEBUG_ERROR, "Board Serial Number: %a\n", mSysInfoSerial));
  
@@ -1152,7 +367,7 @@ index 0d0132245..09766c99d 100644
    mSysInfoType1.Uuid.Data2 = 0x0;
    mSysInfoType1.Uuid.Data3 = 0x0;
    // Swap endianness, so that the serial is more user-friendly as a UUID
-@@ -984,7 +975,7 @@ ProcessorInfoUpdateSmbiosType4 (
+@@ -983,7 +975,7 @@ ProcessorInfoUpdateSmbiosType4 (
      DEBUG ((DEBUG_INFO, "Current CPU speed: %uHz\n", Rate));
    }
  
@@ -1161,7 +376,7 @@ index 0d0132245..09766c99d 100644
  
    ProcessorId = (UINT64 *)&(mProcessorInfoType4.ProcessorId);
    *ProcessorId = ArmReadMidr();
-@@ -1044,25 +1035,15 @@ PhyMemArrayInfoUpdateSmbiosType16 (
+@@ -1043,25 +1035,15 @@ PhyMemArrayInfoUpdateSmbiosType16 (
    )
  {
    EFI_SMBIOS_HANDLE MemArraySmbiosHandle;
@@ -1194,7 +409,7 @@ index 0d0132245..09766c99d 100644
  
    mPhyMemArrayInfoType16.MaximumCapacity = mMemDevInfoType17.Size * 1024; // Size in KB
    mMemDevInfoType17.VolatileSize = MultU64x32 (mMemDevInfoType17.Size, 1024 * 1024);  // Size in Bytes
-@@ -1095,26 +1076,17 @@ MemArrMapInfoUpdateSmbiosType19 (
+@@ -1094,26 +1076,17 @@ MemArrMapInfoUpdateSmbiosType19 (
    VOID
    )
  {
@@ -1227,7 +442,7 @@ index 0d0132245..09766c99d 100644
    mMemArrMapInfoType19.EndingAddress -= 1;
  
    LogSmbiosData ((EFI_SMBIOS_TABLE_HEADER*)&mMemArrMapInfoType19, mMemArrMapInfoType19Strings, NULL);
-@@ -1151,6 +1123,13 @@ PlatformSmbiosDriverEntryPoint (
+@@ -1150,6 +1123,13 @@ PlatformSmbiosDriverEntryPoint (
      return Status;
    }
  
@@ -1255,7 +470,7 @@ index 2b24b22c2..74865d795 100644
  [Protocols]
    gEfiSmbiosProtocolGuid           # PROTOCOL SOMETIMES_CONSUMED
 diff --git a/Platform/RaspberryPi/Drivers/RpiFirmwareDxe/RpiFirmwareDxe.c b/Platform/RaspberryPi/Drivers/RpiFirmwareDxe/RpiFirmwareDxe.c
-index 4edec0ad0..977200711 100644
+index 09c15191e..977200711 100644
 --- a/Platform/RaspberryPi/Drivers/RpiFirmwareDxe/RpiFirmwareDxe.c
 +++ b/Platform/RaspberryPi/Drivers/RpiFirmwareDxe/RpiFirmwareDxe.c
 @@ -1,5 +1,6 @@
@@ -1283,233 +498,10 @@ index 4edec0ad0..977200711 100644
  #include <IndustryStandard/RpiMbox.h>
  
  #include <Protocol/RpiFirmware.h>
-@@ -31,7 +35,248 @@
- //
- #define NUM_PAGES   1
- 
-+#pragma pack(1)
-+typedef struct {
-+  UINT32    BufferSize;
-+  UINT32    Response;
-+} RPI_FW_BUFFER_HEAD;
-+
-+typedef struct {
-+  UINT32    TagId;
-+  UINT32    TagSize;
-+  UINT32    TagValueSize;
-+} RPI_FW_TAG_HEAD;
-+
-+typedef struct {
-+  UINT32                    DeviceId;
-+  UINT32                    PowerState;
-+} RPI_FW_POWER_STATE_TAG;
-+
-+typedef struct {
-+  RPI_FW_BUFFER_HEAD        BufferHead;
-+  RPI_FW_TAG_HEAD           TagHead;
-+  RPI_FW_POWER_STATE_TAG    TagBody;
-+  UINT32                    EndTag;
-+} RPI_FW_SET_POWER_STATE_CMD;
-+
-+typedef struct {
-+  UINT32                    Base;
-+  UINT32                    Size;
-+} RPI_FW_ARM_MEMORY_TAG;
-+
-+typedef struct {
-+  RPI_FW_BUFFER_HEAD        BufferHead;
-+  RPI_FW_TAG_HEAD           TagHead;
-+  RPI_FW_ARM_MEMORY_TAG     TagBody;
-+  UINT32                    EndTag;
-+} RPI_FW_GET_ARM_MEMORY_CMD;
-+
-+typedef struct {
-+  UINT8                     MacAddress[6];
-+  UINT32                    Padding;
-+} RPI_FW_MAC_ADDR_TAG;
-+
-+typedef struct {
-+  RPI_FW_BUFFER_HEAD        BufferHead;
-+  RPI_FW_TAG_HEAD           TagHead;
-+  RPI_FW_MAC_ADDR_TAG       TagBody;
-+  UINT32                    EndTag;
-+} RPI_FW_GET_MAC_ADDR_CMD;
-+
-+typedef struct {
-+  UINT64                    Serial;
-+} RPI_FW_SERIAL_TAG;
-+
-+typedef struct {
-+  RPI_FW_BUFFER_HEAD        BufferHead;
-+  RPI_FW_TAG_HEAD           TagHead;
-+  RPI_FW_SERIAL_TAG         TagBody;
-+  UINT32                    EndTag;
-+} RPI_FW_GET_SERIAL_CMD;
-+
-+typedef struct {
-+  UINT32                    Model;
-+} RPI_FW_MODEL_TAG;
-+
-+typedef struct {
-+  RPI_FW_BUFFER_HEAD        BufferHead;
-+  RPI_FW_TAG_HEAD           TagHead;
-+  RPI_FW_MODEL_TAG          TagBody;
-+  UINT32                    EndTag;
-+} RPI_FW_GET_MODEL_CMD;
-+
-+typedef struct {
-+  UINT32                    Revision;
-+} RPI_FW_MODEL_REVISION_TAG;
-+
-+typedef struct {
-+  RPI_FW_BUFFER_HEAD        BufferHead;
-+  RPI_FW_TAG_HEAD           TagHead;
-+  RPI_FW_MODEL_REVISION_TAG TagBody;
-+  UINT32                    EndTag;
-+} RPI_FW_GET_REVISION_CMD;
-+
-+typedef struct {
-+  UINT32 Width;
-+  UINT32 Height;
-+} RPI_FW_FB_SIZE_TAG;
-+
-+typedef struct {
-+  RPI_FW_BUFFER_HEAD        BufferHead;
-+  RPI_FW_TAG_HEAD           TagHead;
-+  RPI_FW_FB_SIZE_TAG        TagBody;
-+  UINT32                    EndTag;
-+} RPI_FW_GET_FB_SIZE_CMD;
-+
-+typedef struct {
-+  UINT32 Depth;
-+} RPI_FW_FB_DEPTH_TAG;
-+
-+typedef struct {
-+  UINT32 Pitch;
-+} RPI_FW_FB_PITCH_TAG;
-+
-+typedef struct {
-+  UINT32 AlignmentBase;
-+  UINT32 Size;
-+} RPI_FW_FB_ALLOC_TAG;
-+
-+typedef struct {
-+  RPI_FW_BUFFER_HEAD        BufferHead;
-+  RPI_FW_TAG_HEAD           FreeFbTag;
-+  UINT32                    EndTag;
-+} RPI_FW_FREE_FB_CMD;
-+
-+typedef struct {
-+  RPI_FW_BUFFER_HEAD        BufferHead;
-+  RPI_FW_TAG_HEAD           PhysSizeTag;
-+  RPI_FW_FB_SIZE_TAG        PhysSize;
-+  RPI_FW_TAG_HEAD           VirtSizeTag;
-+  RPI_FW_FB_SIZE_TAG        VirtSize;
-+  RPI_FW_TAG_HEAD           DepthTag;
-+  RPI_FW_FB_DEPTH_TAG       Depth;
-+  RPI_FW_TAG_HEAD           AllocFbTag;
-+  RPI_FW_FB_ALLOC_TAG       AllocFb;
-+  RPI_FW_TAG_HEAD           PitchTag;
-+  RPI_FW_FB_PITCH_TAG       Pitch;
-+  UINT32                    EndTag;
-+} RPI_FW_INIT_FB_CMD;
-+
-+typedef struct {
-+  RPI_FW_BUFFER_HEAD        BufferHead;
-+  RPI_FW_TAG_HEAD           TagHead;
-+  UINT8                     CommandLine[0];
-+} RPI_FW_GET_COMMAND_LINE_CMD;
-+
-+typedef struct {
-+  UINT32                    ClockId;
-+  UINT32                    ClockRate;
-+  UINT32                    SkipTurbo;
-+} RPI_FW_SET_CLOCK_RATE_TAG;
-+
-+typedef struct {
-+  RPI_FW_BUFFER_HEAD        BufferHead;
-+  RPI_FW_TAG_HEAD           TagHead;
-+  RPI_FW_SET_CLOCK_RATE_TAG TagBody;
-+  UINT32                    EndTag;
-+} RPI_FW_SET_CLOCK_RATE_CMD;
-+
-+typedef struct {
-+  UINT32                    ClockId;
-+  UINT32                    ClockRate;
-+} RPI_FW_CLOCK_RATE_TAG;
-+
-+typedef struct {
-+  RPI_FW_BUFFER_HEAD        BufferHead;
-+  RPI_FW_TAG_HEAD           TagHead;
-+  RPI_FW_CLOCK_RATE_TAG     TagBody;
-+  UINT32                    EndTag;
-+} RPI_FW_GET_CLOCK_RATE_CMD;
-+
-+typedef struct {
-+  UINT32                    ClockId;
-+  UINT32                    ClockState;
-+} RPI_FW_GET_CLOCK_STATE_TAG;
-+
-+typedef struct {
-+  RPI_FW_BUFFER_HEAD         BufferHead;
-+  RPI_FW_TAG_HEAD            TagHead;
-+  RPI_FW_GET_CLOCK_STATE_TAG TagBody;
-+  UINT32                     EndTag;
-+} RPI_FW_SET_CLOCK_STATE_CMD;
-+
-+typedef struct {
-+  UINT32 Pin;
-+  UINT32 State;
-+} RPI_FW_SET_GPIO_TAG;
-+
-+typedef struct {
-+  RPI_FW_BUFFER_HEAD        BufferHead;
-+  RPI_FW_TAG_HEAD           TagHead;
-+  RPI_FW_SET_GPIO_TAG       TagBody;
-+  UINT32                    EndTag;
-+} RPI_FW_SET_GPIO_CMD;
-+
-+typedef struct {
-+  UINT32                       DeviceAddress;
-+} RPI_FW_NOTIFY_XHCI_RESET_TAG;
-+
-+typedef struct {
-+  RPI_FW_BUFFER_HEAD           BufferHead;
-+  RPI_FW_TAG_HEAD              TagHead;
-+  RPI_FW_NOTIFY_XHCI_RESET_TAG TagBody;
-+  UINT32                       EndTag;
-+} RPI_FW_NOTIFY_XHCI_RESET_CMD;
-+
-+typedef struct {
-+  UINT32                       Gpio;
-+  UINT32                       Direction;
-+  UINT32                       Polarity;
-+  UINT32                       TermEn;
-+  UINT32                       TermPullUp;
-+} RPI_FW_GPIO_GET_CFG_TAG;
-+
-+typedef struct {
-+  RPI_FW_BUFFER_HEAD           BufferHead;
-+  RPI_FW_TAG_HEAD              TagHead;
-+  RPI_FW_GPIO_GET_CFG_TAG      TagBody;
-+  UINT32                       EndTag;
-+} RPI_FW_NOTIFY_GPIO_GET_CFG_CMD;
-+
-+typedef struct {
-+  UINT32                       Gpio;
-+  UINT32                       Direction;
-+  UINT32                       Polarity;
-+  UINT32                       TermEn;
-+  UINT32                       TermPullUp;
-+  UINT32                       State;
-+} RPI_FW_GPIO_SET_CFG_TAG;
-+
-+typedef struct {
-+  RPI_FW_BUFFER_HEAD           BufferHead;
-+  RPI_FW_TAG_HEAD              TagHead;
-+  RPI_FW_GPIO_SET_CFG_TAG      TagBody;
-+  UINT32                       EndTag;
-+} RPI_FW_NOTIFY_GPIO_SET_CFG_CMD;
+@@ -254,9 +258,25 @@ typedef struct {
+   RPI_FW_GPIO_SET_CFG_TAG      TagBody;
+   UINT32                       EndTag;
+ } RPI_FW_NOTIFY_GPIO_SET_CFG_CMD;
 +
 +typedef struct {
 +  UINT32                    Register;
@@ -1523,8 +515,8 @@ index 4edec0ad0..977200711 100644
 +  UINT32                    EndTag;
 +} RPI_FW_RTC_CMD;
 +
-+#pragma pack()
-+
+ #pragma pack()
+ 
 +STATIC UINTN mMboxBaseAddress;
 +
  STATIC VOID  *mDmaBuffer;
@@ -1532,7 +524,7 @@ index 4edec0ad0..977200711 100644
  STATIC VOID  *mDmaBufferMapping;
  STATIC UINTN mDmaBufferBusAddress;
  
-@@ -51,12 +296,12 @@ DrainMailbox (
+@@ -276,12 +296,12 @@ DrainMailbox (
    //
    Tries = 0;
    do {
@@ -1547,7 +539,7 @@ index 4edec0ad0..977200711 100644
    } while (++Tries < RPI_MBOX_MAX_TRIES);
  
    return FALSE;
-@@ -76,7 +321,7 @@ MailboxWaitForStatusCleared (
+@@ -301,7 +321,7 @@ MailboxWaitForStatusCleared (
    //
    Tries = 0;
    do {
@@ -1556,21 +548,7 @@ index 4edec0ad0..977200711 100644
      if ((Val & StatusMask) == 0) {
        return TRUE;
      }
-@@ -103,7 +348,7 @@ MailboxTransaction (
-   //
-   if (!DrainMailbox ()) {
-     DEBUG ((DEBUG_ERROR, "%a: timeout waiting for mailbox to drain\n",
--      __FUNCTION__));
-+      __func__));
-     return EFI_TIMEOUT;
-   }
- 
-@@ -112,16 +357,24 @@ MailboxTransaction (
-   //
-   if (!MailboxWaitForStatusCleared (1U << BCM2836_MBOX_STATUS_FULL)) {
-     DEBUG ((DEBUG_ERROR, "%a: timeout waiting for outbox to become empty\n",
--      __FUNCTION__));
-+      __func__));
+@@ -341,12 +361,20 @@ MailboxTransaction (
      return EFI_TIMEOUT;
    }
  
@@ -1592,12 +570,7 @@ index 4edec0ad0..977200711 100644
      (UINT32)((UINTN)mDmaBufferBusAddress | Channel));
  
    ArmDataSynchronizationBarrier ();
-@@ -131,45 +384,24 @@ MailboxTransaction (
-   //
-   if (!MailboxWaitForStatusCleared (1U << BCM2836_MBOX_STATUS_EMPTY)) {
-     DEBUG ((DEBUG_ERROR, "%a: timeout waiting for inbox to become full\n",
--      __FUNCTION__));
-+      __func__));
+@@ -360,11 +388,15 @@ MailboxTransaction (
      return EFI_TIMEOUT;
    }
  
@@ -1614,290 +587,10 @@ index 4edec0ad0..977200711 100644
    ArmDataSynchronizationBarrier ();
  
    return EFI_SUCCESS;
- }
- 
--#pragma pack(1)
--typedef struct {
--  UINT32    BufferSize;
--  UINT32    Response;
--} RPI_FW_BUFFER_HEAD;
--
--typedef struct {
--  UINT32    TagId;
--  UINT32    TagSize;
--  UINT32    TagValueSize;
--} RPI_FW_TAG_HEAD;
--
--typedef struct {
--  UINT32                    DeviceId;
--  UINT32                    PowerState;
--} RPI_FW_POWER_STATE_TAG;
--
--typedef struct {
--  RPI_FW_BUFFER_HEAD        BufferHead;
--  RPI_FW_TAG_HEAD           TagHead;
--  RPI_FW_POWER_STATE_TAG    TagBody;
--  UINT32                    EndTag;
--} RPI_FW_SET_POWER_STATE_CMD;
--#pragma pack()
--
- STATIC
- EFI_STATUS
- EFIAPI
-@@ -184,7 +416,7 @@ RpiFirmwareSetPowerState (
-   UINT32                      Result;
- 
-   if (!AcquireSpinLockOrFail (&mMailboxLock)) {
--    DEBUG ((DEBUG_ERROR, "%a: failed to acquire spinlock\n", __FUNCTION__));
-+    DEBUG ((DEBUG_ERROR, "%a: failed to acquire spinlock\n", __func__));
-     return EFI_DEVICE_ERROR;
-   }
- 
-@@ -208,14 +440,14 @@ RpiFirmwareSetPowerState (
-       Cmd->BufferHead.Response != RPI_MBOX_RESP_SUCCESS) {
-     DEBUG ((DEBUG_ERROR,
-       "%a: mailbox transaction error: Status == %r, Response == 0x%x\n",
--      __FUNCTION__, Status, Cmd->BufferHead.Response));
-+      __func__, Status, Cmd->BufferHead.Response));
-     Status = EFI_DEVICE_ERROR;
-   }
- 
-   if (!EFI_ERROR (Status) &&
-       PowerState ^ (Cmd->TagBody.PowerState & RPI_MBOX_POWER_STATE_ENABLE)) {
-     DEBUG ((DEBUG_ERROR, "%a: failed to %sable power for device %d\n",
--      __FUNCTION__, PowerState ? "en" : "dis", DeviceId));
-+      __func__, PowerState ? "en" : "dis", DeviceId));
-     Status = EFI_DEVICE_ERROR;
-   }
-   ReleaseSpinLock (&mMailboxLock);
-@@ -223,20 +455,6 @@ RpiFirmwareSetPowerState (
-   return Status;
- }
- 
--#pragma pack()
--typedef struct {
--  UINT32                    Base;
--  UINT32                    Size;
--} RPI_FW_ARM_MEMORY_TAG;
--
--typedef struct {
--  RPI_FW_BUFFER_HEAD        BufferHead;
--  RPI_FW_TAG_HEAD           TagHead;
--  RPI_FW_ARM_MEMORY_TAG     TagBody;
--  UINT32                    EndTag;
--} RPI_FW_GET_ARM_MEMORY_CMD;
--#pragma pack()
--
- STATIC
- EFI_STATUS
- EFIAPI
-@@ -250,7 +468,7 @@ RpiFirmwareGetArmMemory (
-   UINT32                      Result;
- 
-   if (!AcquireSpinLockOrFail (&mMailboxLock)) {
--    DEBUG ((DEBUG_ERROR, "%a: failed to acquire spinlock\n", __FUNCTION__));
-+    DEBUG ((DEBUG_ERROR, "%a: failed to acquire spinlock\n", __func__));
-     return EFI_DEVICE_ERROR;
-   }
- 
-@@ -271,7 +489,7 @@ RpiFirmwareGetArmMemory (
-       Cmd->BufferHead.Response != RPI_MBOX_RESP_SUCCESS) {
-     DEBUG ((DEBUG_ERROR,
-       "%a: mailbox transaction error: Status == %r, Response == 0x%x\n",
--      __FUNCTION__, Status, Cmd->BufferHead.Response));
-+      __func__, Status, Cmd->BufferHead.Response));
-     ReleaseSpinLock (&mMailboxLock);
-     return EFI_DEVICE_ERROR;
-   }
-@@ -283,20 +501,6 @@ RpiFirmwareGetArmMemory (
+@@ -691,211 +723,6 @@ RpiFirmwareGetFirmwareRevision (
    return EFI_SUCCESS;
  }
  
--#pragma pack()
--typedef struct {
--  UINT8                     MacAddress[6];
--  UINT32                    Padding;
--} RPI_FW_MAC_ADDR_TAG;
--
--typedef struct {
--  RPI_FW_BUFFER_HEAD        BufferHead;
--  RPI_FW_TAG_HEAD           TagHead;
--  RPI_FW_MAC_ADDR_TAG       TagBody;
--  UINT32                    EndTag;
--} RPI_FW_GET_MAC_ADDR_CMD;
--#pragma pack()
--
- STATIC
- EFI_STATUS
- EFIAPI
-@@ -309,7 +513,7 @@ RpiFirmwareGetMacAddress (
-   UINT32                      Result;
- 
-   if (!AcquireSpinLockOrFail (&mMailboxLock)) {
--    DEBUG ((DEBUG_ERROR, "%a: failed to acquire spinlock\n", __FUNCTION__));
-+    DEBUG ((DEBUG_ERROR, "%a: failed to acquire spinlock\n", __func__));
-     return EFI_DEVICE_ERROR;
-   }
- 
-@@ -329,7 +533,7 @@ RpiFirmwareGetMacAddress (
-       Cmd->BufferHead.Response != RPI_MBOX_RESP_SUCCESS) {
-     DEBUG ((DEBUG_ERROR,
-       "%a: mailbox transaction error: Status == %r, Response == 0x%x\n",
--      __FUNCTION__, Status, Cmd->BufferHead.Response));
-+      __func__, Status, Cmd->BufferHead.Response));
-     ReleaseSpinLock (&mMailboxLock);
-     return EFI_DEVICE_ERROR;
-   }
-@@ -340,19 +544,6 @@ RpiFirmwareGetMacAddress (
-   return EFI_SUCCESS;
- }
- 
--#pragma pack()
--typedef struct {
--  UINT64                    Serial;
--} RPI_FW_SERIAL_TAG;
--
--typedef struct {
--  RPI_FW_BUFFER_HEAD        BufferHead;
--  RPI_FW_TAG_HEAD           TagHead;
--  RPI_FW_SERIAL_TAG         TagBody;
--  UINT32                    EndTag;
--} RPI_FW_GET_SERIAL_CMD;
--#pragma pack()
--
- STATIC
- EFI_STATUS
- EFIAPI
-@@ -365,7 +556,7 @@ RpiFirmwareGetSerial (
-   UINT32                      Result;
- 
-   if (!AcquireSpinLockOrFail (&mMailboxLock)) {
--    DEBUG ((DEBUG_ERROR, "%a: failed to acquire spinlock\n", __FUNCTION__));
-+    DEBUG ((DEBUG_ERROR, "%a: failed to acquire spinlock\n", __func__));
-     return EFI_DEVICE_ERROR;
-   }
- 
-@@ -385,7 +576,7 @@ RpiFirmwareGetSerial (
-       Cmd->BufferHead.Response != RPI_MBOX_RESP_SUCCESS) {
-     DEBUG ((DEBUG_ERROR,
-       "%a: mailbox transaction error: Status == %r, Response == 0x%x\n",
--      __FUNCTION__, Status, Cmd->BufferHead.Response));
-+      __func__, Status, Cmd->BufferHead.Response));
-     ReleaseSpinLock (&mMailboxLock);
-     return EFI_DEVICE_ERROR;
-   }
-@@ -403,19 +594,6 @@ RpiFirmwareGetSerial (
-   return Status;
- }
- 
--#pragma pack()
--typedef struct {
--  UINT32                    Model;
--} RPI_FW_MODEL_TAG;
--
--typedef struct {
--  RPI_FW_BUFFER_HEAD        BufferHead;
--  RPI_FW_TAG_HEAD           TagHead;
--  RPI_FW_MODEL_TAG          TagBody;
--  UINT32                    EndTag;
--} RPI_FW_GET_MODEL_CMD;
--#pragma pack()
--
- STATIC
- EFI_STATUS
- EFIAPI
-@@ -428,7 +606,7 @@ RpiFirmwareGetModel (
-   UINT32                      Result;
- 
-   if (!AcquireSpinLockOrFail (&mMailboxLock)) {
--    DEBUG ((DEBUG_ERROR, "%a: failed to acquire spinlock\n", __FUNCTION__));
-+    DEBUG ((DEBUG_ERROR, "%a: failed to acquire spinlock\n", __func__));
-     return EFI_DEVICE_ERROR;
-   }
- 
-@@ -448,7 +626,7 @@ RpiFirmwareGetModel (
-       Cmd->BufferHead.Response != RPI_MBOX_RESP_SUCCESS) {
-     DEBUG ((DEBUG_ERROR,
-       "%a: mailbox transaction error: Status == %r, Response == 0x%x\n",
--      __FUNCTION__, Status, Cmd->BufferHead.Response));
-+      __func__, Status, Cmd->BufferHead.Response));
-     ReleaseSpinLock (&mMailboxLock);
-     return EFI_DEVICE_ERROR;
-   }
-@@ -459,19 +637,6 @@ RpiFirmwareGetModel (
-   return EFI_SUCCESS;
- }
- 
--#pragma pack()
--typedef struct {
--  UINT32                    Revision;
--} RPI_FW_MODEL_REVISION_TAG;
--
--typedef struct {
--  RPI_FW_BUFFER_HEAD        BufferHead;
--  RPI_FW_TAG_HEAD           TagHead;
--  RPI_FW_MODEL_REVISION_TAG TagBody;
--  UINT32                    EndTag;
--} RPI_FW_GET_REVISION_CMD;
--#pragma pack()
--
- STATIC
- EFI_STATUS
- EFIAPI
-@@ -484,7 +649,7 @@ RpiFirmwareGetModelRevision (
-   UINT32                        Result;
- 
-   if (!AcquireSpinLockOrFail (&mMailboxLock)) {
--    DEBUG ((DEBUG_ERROR, "%a: failed to acquire spinlock\n", __FUNCTION__));
-+    DEBUG ((DEBUG_ERROR, "%a: failed to acquire spinlock\n", __func__));
-     return EFI_DEVICE_ERROR;
-   }
- 
-@@ -504,7 +669,7 @@ RpiFirmwareGetModelRevision (
-       Cmd->BufferHead.Response != RPI_MBOX_RESP_SUCCESS) {
-     DEBUG ((DEBUG_ERROR,
-       "%a: mailbox transaction error: Status == %r, Response == 0x%x\n",
--      __FUNCTION__, Status, Cmd->BufferHead.Response));
-+      __func__, Status, Cmd->BufferHead.Response));
-     ReleaseSpinLock (&mMailboxLock);
-     return EFI_DEVICE_ERROR;
-   }
-@@ -527,286 +692,36 @@ RpiFirmwareGetFirmwareRevision (
-   UINT32                        Result;
- 
-   if (!AcquireSpinLockOrFail (&mMailboxLock)) {
--    DEBUG ((DEBUG_ERROR, "%a: failed to acquire spinlock\n", __FUNCTION__));
-+    DEBUG ((DEBUG_ERROR, "%a: failed to acquire spinlock\n", __func__));
-     return EFI_DEVICE_ERROR;
-   }
- 
-   Cmd = mDmaBuffer;
-   ZeroMem (Cmd, sizeof (*Cmd));
- 
--  Cmd->BufferHead.BufferSize  = sizeof (*Cmd);
--  Cmd->BufferHead.Response    = 0;
--  Cmd->TagHead.TagId          = RPI_MBOX_GET_REVISION;
--  Cmd->TagHead.TagSize        = sizeof (Cmd->TagBody);
--  Cmd->TagHead.TagValueSize   = 0;
--  Cmd->EndTag                 = 0;
--
--  Status = MailboxTransaction (Cmd->BufferHead.BufferSize, RPI_MBOX_VC_CHANNEL, &Result);
--
--  if (EFI_ERROR (Status) ||
--      Cmd->BufferHead.Response != RPI_MBOX_RESP_SUCCESS) {
--    DEBUG ((DEBUG_ERROR,
--      "%a: mailbox transaction error: Status == %r, Response == 0x%x\n",
--      __FUNCTION__, Status, Cmd->BufferHead.Response));
--    ReleaseSpinLock (&mMailboxLock);
--    return EFI_DEVICE_ERROR;
--  }
--
--  *Revision = Cmd->TagBody.Revision;
--  ReleaseSpinLock (&mMailboxLock);
--
--  return EFI_SUCCESS;
--}
--
 -STATIC
 -CHAR8*
 -EFIAPI
@@ -1942,6 +635,8 @@ index 4edec0ad0..977200711 100644
 -    return "Raspberry Pi Compute Module 3+";
 -  case 0x11:
 -    return "Raspberry Pi 4 Model B";
+-  case 0x12:
+-    return "Raspberry Pi Zero 2 W";
 -  case 0x13:
 -    return "Raspberry Pi 400";
 -  case 0x14:
@@ -1964,7 +659,7 @@ index 4edec0ad0..977200711 100644
 -  Status = RpiFirmwareGetModelRevision(&Revision);
 -  if (EFI_ERROR(Status)) {
 -    DEBUG ((DEBUG_ERROR, "%a: Could not get the board revision: Status == %r\n",
--      __FUNCTION__, Status));
+-      __func__, Status));
 -    return EFI_DEVICE_ERROR;
 -  }
 -
@@ -1992,7 +687,7 @@ index 4edec0ad0..977200711 100644
 -  if (EFI_ERROR(Status)) {
 -    DEBUG ((DEBUG_ERROR,
 -      "%a: Could not get the board revision: Status == %r\n",
--      __FUNCTION__, Status));
+-      __func__, Status));
 -    return EFI_DEVICE_ERROR;
 -  } else {
 -    ModelId = (Revision >> 4) & 0xFF;
@@ -2017,6 +712,7 @@ index 4edec0ad0..977200711 100644
 -  case 0x0D:          // Raspberry Pi 3 Model B+
 -  case 0x0E:          // Raspberry Pi 3 Model A+
 -  case 0x10:          // Raspberry Pi Compute Module 3+
+-  case 0x12:          // Raspberry Pi Zero 2 W
 -      *ModelFamily = 3;
 -      break;
 -  case 0x11:          // Raspberry Pi 4 Model B
@@ -2032,7 +728,7 @@ index 4edec0ad0..977200711 100644
 -  if (*ModelFamily == 0) {
 -    DEBUG ((DEBUG_ERROR,
 -      "%a: Unknown Raspberry Pi model family : ModelId == 0x%x\n",
--      __FUNCTION__, ModelId));
+-      __func__, ModelId));
 -    return EFI_UNSUPPORTED;
 -    }
 -
@@ -2100,128 +796,10 @@ index 4edec0ad0..977200711 100644
 -  }
 -}
 -
--#pragma pack()
--typedef struct {
--  UINT32 Width;
--  UINT32 Height;
--} RPI_FW_FB_SIZE_TAG;
--
--typedef struct {
--  RPI_FW_BUFFER_HEAD        BufferHead;
--  RPI_FW_TAG_HEAD           TagHead;
--  RPI_FW_FB_SIZE_TAG        TagBody;
--  UINT32                    EndTag;
--} RPI_FW_GET_FB_SIZE_CMD;
--
--typedef struct {
--  UINT32 Depth;
--} RPI_FW_FB_DEPTH_TAG;
-+  Cmd->BufferHead.BufferSize  = sizeof (*Cmd);
-+  Cmd->BufferHead.Response    = 0;
-+  Cmd->TagHead.TagId          = RPI_MBOX_GET_REVISION;
-+  Cmd->TagHead.TagSize        = sizeof (Cmd->TagBody);
-+  Cmd->TagHead.TagValueSize   = 0;
-+  Cmd->EndTag                 = 0;
- 
--typedef struct {
--  UINT32 Pitch;
--} RPI_FW_FB_PITCH_TAG;
-+  Status = MailboxTransaction (Cmd->BufferHead.BufferSize, RPI_MBOX_VC_CHANNEL, &Result);
- 
--typedef struct {
--  UINT32 AlignmentBase;
--  UINT32 Size;
--} RPI_FW_FB_ALLOC_TAG;
-+  if (EFI_ERROR (Status) ||
-+      Cmd->BufferHead.Response != RPI_MBOX_RESP_SUCCESS) {
-+    DEBUG ((DEBUG_ERROR,
-+      "%a: mailbox transaction error: Status == %r, Response == 0x%x\n",
-+      __func__, Status, Cmd->BufferHead.Response));
-+    ReleaseSpinLock (&mMailboxLock);
-+    return EFI_DEVICE_ERROR;
-+  }
- 
--typedef struct {
--  RPI_FW_BUFFER_HEAD        BufferHead;
--  RPI_FW_TAG_HEAD           FreeFbTag;
--  UINT32                    EndTag;
--} RPI_FW_FREE_FB_CMD;
-+  *Revision = Cmd->TagBody.Revision;
-+  ReleaseSpinLock (&mMailboxLock);
- 
--typedef struct {
--  RPI_FW_BUFFER_HEAD        BufferHead;
--  RPI_FW_TAG_HEAD           PhysSizeTag;
--  RPI_FW_FB_SIZE_TAG        PhysSize;
--  RPI_FW_TAG_HEAD           VirtSizeTag;
--  RPI_FW_FB_SIZE_TAG        VirtSize;
--  RPI_FW_TAG_HEAD           DepthTag;
--  RPI_FW_FB_DEPTH_TAG       Depth;
--  RPI_FW_TAG_HEAD           AllocFbTag;
--  RPI_FW_FB_ALLOC_TAG       AllocFb;
--  RPI_FW_TAG_HEAD           PitchTag;
--  RPI_FW_FB_PITCH_TAG       Pitch;
--  UINT32                    EndTag;
--} RPI_FW_INIT_FB_CMD;
--#pragma pack()
-+  return EFI_SUCCESS;
-+}
- 
  STATIC
  EFI_STATUS
-@@ -821,7 +736,7 @@ RpiFirmwareGetFbSize (
-   UINT32                      Result;
- 
-   if (!AcquireSpinLockOrFail (&mMailboxLock)) {
--    DEBUG ((DEBUG_ERROR, "%a: failed to acquire spinlock\n", __FUNCTION__));
-+    DEBUG ((DEBUG_ERROR, "%a: failed to acquire spinlock\n", __func__));
-     return EFI_DEVICE_ERROR;
-   }
- 
-@@ -841,7 +756,7 @@ RpiFirmwareGetFbSize (
-       Cmd->BufferHead.Response != RPI_MBOX_RESP_SUCCESS) {
-     DEBUG ((DEBUG_ERROR,
-       "%a: mailbox  transaction error: Status == %r, Response == 0x%x\n",
--      __FUNCTION__, Status, Cmd->BufferHead.Response));
-+      __func__, Status, Cmd->BufferHead.Response));
-     ReleaseSpinLock (&mMailboxLock);
-     return EFI_DEVICE_ERROR;
-   }
-@@ -863,7 +778,7 @@ RpiFirmwareFreeFb (VOID)
-   UINT32             Result;
- 
-   if (!AcquireSpinLockOrFail (&mMailboxLock)) {
--    DEBUG ((DEBUG_ERROR, "%a: failed to acquire spinlock\n", __FUNCTION__));
-+    DEBUG ((DEBUG_ERROR, "%a: failed to acquire spinlock\n", __func__));
-     return EFI_DEVICE_ERROR;
-   }
- 
-@@ -884,7 +799,7 @@ RpiFirmwareFreeFb (VOID)
-       Cmd->BufferHead.Response != RPI_MBOX_RESP_SUCCESS) {
-     DEBUG ((DEBUG_ERROR,
-       "%a: mailbox transaction error: Status == %r, Response == 0x%x\n",
--      __FUNCTION__, Status, Cmd->BufferHead.Response));
-+      __func__, Status, Cmd->BufferHead.Response));
-     ReleaseSpinLock (&mMailboxLock);
-     return EFI_DEVICE_ERROR;
-   }
-@@ -914,7 +829,7 @@ RpiFirmwareAllocFb (
-   ASSERT (FbBase != NULL);
- 
-   if (!AcquireSpinLockOrFail (&mMailboxLock)) {
--    DEBUG ((DEBUG_ERROR, "%a: failed to acquire spinlock\n", __FUNCTION__));
-+    DEBUG ((DEBUG_ERROR, "%a: failed to acquire spinlock\n", __func__));
-     return EFI_DEVICE_ERROR;
-   }
- 
-@@ -948,27 +863,19 @@ RpiFirmwareAllocFb (
-       Cmd->BufferHead.Response != RPI_MBOX_RESP_SUCCESS) {
-     DEBUG ((DEBUG_ERROR,
-       "%a: mailbox transaction error: Status == %r, Response == 0x%x\n",
--      __FUNCTION__, Status, Cmd->BufferHead.Response));
-+      __func__, Status, Cmd->BufferHead.Response));
-     ReleaseSpinLock (&mMailboxLock);
-     return EFI_DEVICE_ERROR;
+ EFIAPI
+@@ -1042,7 +869,7 @@ RpiFirmwareAllocFb (
    }
  
    *Pitch = Cmd->Pitch.Pitch;
@@ -2230,368 +808,7 @@ index 4edec0ad0..977200711 100644
    *FbSize = Cmd->AllocFb.Size;
    ReleaseSpinLock (&mMailboxLock);
  
-   return EFI_SUCCESS;
- }
- 
--#pragma pack()
--typedef struct {
--  RPI_FW_BUFFER_HEAD        BufferHead;
--  RPI_FW_TAG_HEAD           TagHead;
--  UINT8                     CommandLine[0];
--} RPI_FW_GET_COMMAND_LINE_CMD;
--#pragma pack()
--
- STATIC
- EFI_STATUS
- EFIAPI
-@@ -983,18 +890,18 @@ RpiFirmwareGetCommmandLine (
- 
-   if ((BufferSize % sizeof (UINT32)) != 0) {
-     DEBUG ((DEBUG_ERROR, "%a: BufferSize must be a multiple of 4\n",
--      __FUNCTION__));
-+      __func__));
-     return EFI_INVALID_PARAMETER;
-   }
- 
-   if (sizeof (*Cmd) + BufferSize > EFI_PAGES_TO_SIZE (NUM_PAGES)) {
-     DEBUG ((DEBUG_ERROR, "%a: BufferSize exceeds size of DMA buffer\n",
--      __FUNCTION__));
-+      __func__));
-     return EFI_OUT_OF_RESOURCES;
-   }
- 
-   if (!AcquireSpinLockOrFail (&mMailboxLock)) {
--    DEBUG ((DEBUG_ERROR, "%a: failed to acquire spinlock\n", __FUNCTION__));
-+    DEBUG ((DEBUG_ERROR, "%a: failed to acquire spinlock\n", __func__));
-     return EFI_DEVICE_ERROR;
-   }
- 
-@@ -1013,7 +920,7 @@ RpiFirmwareGetCommmandLine (
-       Cmd->BufferHead.Response != RPI_MBOX_RESP_SUCCESS) {
-     DEBUG ((DEBUG_ERROR,
-       "%a: mailbox transaction error: Status == %r, Response == 0x%x\n",
--      __FUNCTION__, Status, Cmd->BufferHead.Response));
-+      __func__, Status, Cmd->BufferHead.Response));
-     ReleaseSpinLock (&mMailboxLock);
-     return EFI_DEVICE_ERROR;
-   }
-@@ -1021,7 +928,7 @@ RpiFirmwareGetCommmandLine (
-   Cmd->TagHead.TagValueSize &= ~RPI_MBOX_VALUE_SIZE_RESPONSE_MASK;
-   if (Cmd->TagHead.TagValueSize >= BufferSize &&
-       Cmd->CommandLine[Cmd->TagHead.TagValueSize - 1] != '\0') {
--    DEBUG ((DEBUG_ERROR, "%a: insufficient buffer size\n", __FUNCTION__));
-+    DEBUG ((DEBUG_ERROR, "%a: insufficient buffer size\n", __func__));
-     ReleaseSpinLock (&mMailboxLock);
-     return EFI_OUT_OF_RESOURCES;
-   }
-@@ -1040,21 +947,6 @@ RpiFirmwareGetCommmandLine (
-   return EFI_SUCCESS;
- }
- 
--#pragma pack()
--typedef struct {
--  UINT32                    ClockId;
--  UINT32                    ClockRate;
--  UINT32                    SkipTurbo;
--} RPI_FW_SET_CLOCK_RATE_TAG;
--
--typedef struct {
--  RPI_FW_BUFFER_HEAD        BufferHead;
--  RPI_FW_TAG_HEAD           TagHead;
--  RPI_FW_SET_CLOCK_RATE_TAG TagBody;
--  UINT32                    EndTag;
--} RPI_FW_SET_CLOCK_RATE_CMD;
--#pragma pack()
--
- STATIC
- EFI_STATUS
- EFIAPI
-@@ -1069,7 +961,7 @@ RpiFirmwareSetClockRate (
-   UINT32                      Result;
- 
-   if (!AcquireSpinLockOrFail (&mMailboxLock)) {
--    DEBUG ((DEBUG_ERROR, "%a: failed to acquire spinlock\n", __FUNCTION__));
-+    DEBUG ((DEBUG_ERROR, "%a: failed to acquire spinlock\n", __func__));
-     return EFI_DEVICE_ERROR;
-   }
- 
-@@ -1086,14 +978,14 @@ RpiFirmwareSetClockRate (
-   Cmd->TagBody.SkipTurbo      = SkipTurbo ? 1 : 0;
-   Cmd->EndTag                 = 0;
- 
--  DEBUG ((DEBUG_INFO, "%a: Request clock rate %X = %d\n", __FUNCTION__, ClockId, ClockRate));
-+  DEBUG ((DEBUG_INFO, "%a: Request clock rate %X = %d\n", __func__, ClockId, ClockRate));
-   Status = MailboxTransaction (Cmd->BufferHead.BufferSize, RPI_MBOX_VC_CHANNEL, &Result);
- 
-   if (EFI_ERROR (Status) ||
-       Cmd->BufferHead.Response != RPI_MBOX_RESP_SUCCESS) {
-     DEBUG ((DEBUG_ERROR,
-       "%a: mailbox transaction error: Status == %r, Response == 0x%x\n",
--      __FUNCTION__, Status, Cmd->BufferHead.Response));
-+      __func__, Status, Cmd->BufferHead.Response));
-     ReleaseSpinLock (&mMailboxLock);
-     return EFI_DEVICE_ERROR;
-   }
-@@ -1103,20 +995,6 @@ RpiFirmwareSetClockRate (
-   return EFI_SUCCESS;
- }
- 
--#pragma pack()
--typedef struct {
--  UINT32                    ClockId;
--  UINT32                    ClockRate;
--} RPI_FW_CLOCK_RATE_TAG;
--
--typedef struct {
--  RPI_FW_BUFFER_HEAD        BufferHead;
--  RPI_FW_TAG_HEAD           TagHead;
--  RPI_FW_CLOCK_RATE_TAG     TagBody;
--  UINT32                    EndTag;
--} RPI_FW_GET_CLOCK_RATE_CMD;
--#pragma pack()
--
- STATIC
- EFI_STATUS
- RpiFirmwareGetClockRate (
-@@ -1130,7 +1008,7 @@ RpiFirmwareGetClockRate (
-   UINT32                      Result;
- 
-   if (!AcquireSpinLockOrFail (&mMailboxLock)) {
--    DEBUG ((DEBUG_ERROR, "%a: failed to acquire spinlock\n", __FUNCTION__));
-+    DEBUG ((DEBUG_ERROR, "%a: failed to acquire spinlock\n", __func__));
-     return EFI_DEVICE_ERROR;
-   }
- 
-@@ -1151,7 +1029,7 @@ RpiFirmwareGetClockRate (
-       Cmd->BufferHead.Response != RPI_MBOX_RESP_SUCCESS) {
-     DEBUG ((DEBUG_ERROR,
-       "%a: mailbox transaction error: Status == %r, Response == 0x%x\n",
--      __FUNCTION__, Status, Cmd->BufferHead.Response));
-+      __func__, Status, Cmd->BufferHead.Response));
-     ReleaseSpinLock (&mMailboxLock);
-     return EFI_DEVICE_ERROR;
-   }
-@@ -1159,7 +1037,7 @@ RpiFirmwareGetClockRate (
-   *ClockRate = Cmd->TagBody.ClockRate;
-   ReleaseSpinLock (&mMailboxLock);
- 
--  DEBUG ((DEBUG_INFO, "%a: Get Clock Rate return: ClockRate=%d ClockId=%X\n", __FUNCTION__, *ClockRate, ClockId));
-+  DEBUG ((DEBUG_INFO, "%a: Get Clock Rate return: ClockRate=%d ClockId=%X\n", __func__, *ClockRate, ClockId));
- 
-   return EFI_SUCCESS;
- }
-@@ -1208,20 +1086,6 @@ RpiFirmwareGetMinClockRate (
-   return RpiFirmwareGetClockRate (ClockId, RPI_MBOX_GET_MIN_CLOCK_RATE, ClockRate);
- }
- 
--#pragma pack()
--typedef struct {
--  UINT32                    ClockId;
--  UINT32                    ClockState;
--} RPI_FW_GET_CLOCK_STATE_TAG;
--
--typedef struct {
--  RPI_FW_BUFFER_HEAD         BufferHead;
--  RPI_FW_TAG_HEAD            TagHead;
--  RPI_FW_GET_CLOCK_STATE_TAG TagBody;
--  UINT32                     EndTag;
--} RPI_FW_SET_CLOCK_STATE_CMD;
--#pragma pack()
--
- STATIC
- EFI_STATUS
- RpiFirmwareSetClockState (
-@@ -1234,7 +1098,7 @@ RpiFirmwareSetClockState (
-   UINT32                      Result;
- 
-   if (!AcquireSpinLockOrFail (&mMailboxLock)) {
--    DEBUG ((DEBUG_ERROR, "%a: failed to acquire spinlock\n", __FUNCTION__));
-+    DEBUG ((DEBUG_ERROR, "%a: failed to acquire spinlock\n", __func__));
-     return EFI_DEVICE_ERROR;
-   }
- 
-@@ -1256,7 +1120,7 @@ RpiFirmwareSetClockState (
-       Cmd->BufferHead.Response != RPI_MBOX_RESP_SUCCESS) {
-     DEBUG ((DEBUG_ERROR,
-       "%a: mailbox transaction error: Status == %r, Response == 0x%x\n",
--      __FUNCTION__, Status, Cmd->BufferHead.Response));
-+      __func__, Status, Cmd->BufferHead.Response));
-     ReleaseSpinLock (&mMailboxLock);
-     return EFI_DEVICE_ERROR;
-   }
-@@ -1266,20 +1130,6 @@ RpiFirmwareSetClockState (
-   return EFI_SUCCESS;
- }
- 
--#pragma pack()
--typedef struct {
--  UINT32 Pin;
--  UINT32 State;
--} RPI_FW_SET_GPIO_TAG;
--
--typedef struct {
--  RPI_FW_BUFFER_HEAD        BufferHead;
--  RPI_FW_TAG_HEAD           TagHead;
--  RPI_FW_SET_GPIO_TAG       TagBody;
--  UINT32                    EndTag;
--} RPI_FW_SET_GPIO_CMD;
--#pragma pack()
--
- STATIC
- VOID
- EFIAPI
-@@ -1293,7 +1143,7 @@ RpiFirmwareSetGpio (
-   UINT32              Result;
- 
-   if (!AcquireSpinLockOrFail (&mMailboxLock)) {
--    DEBUG ((DEBUG_ERROR, "%a: failed to acquire spinlock\n", __FUNCTION__));
-+    DEBUG ((DEBUG_ERROR, "%a: failed to acquire spinlock\n", __func__));
-     return;
-   }
- 
-@@ -1318,7 +1168,7 @@ RpiFirmwareSetGpio (
-       Cmd->BufferHead.Response != RPI_MBOX_RESP_SUCCESS) {
-     DEBUG ((DEBUG_ERROR,
-       "%a: mailbox  transaction error: Status == %r, Response == 0x%x\n",
--      __FUNCTION__, Status, Cmd->BufferHead.Response));
-+      __func__, Status, Cmd->BufferHead.Response));
-   }
-   ReleaseSpinLock (&mMailboxLock);
- }
-@@ -1333,19 +1183,6 @@ RpiFirmwareSetLed (
-   RpiFirmwareSetGpio (RPI_EXP_GPIO_LED, On);
- }
- 
--#pragma pack()
--typedef struct {
--  UINT32                       DeviceAddress;
--} RPI_FW_NOTIFY_XHCI_RESET_TAG;
--
--typedef struct {
--  RPI_FW_BUFFER_HEAD           BufferHead;
--  RPI_FW_TAG_HEAD              TagHead;
--  RPI_FW_NOTIFY_XHCI_RESET_TAG TagBody;
--  UINT32                       EndTag;
--} RPI_FW_NOTIFY_XHCI_RESET_CMD;
--#pragma pack()
--
- STATIC
- EFI_STATUS
- EFIAPI
-@@ -1360,7 +1197,7 @@ RpiFirmwareNotifyXhciReset (
-   UINT32                       Result;
- 
-   if (!AcquireSpinLockOrFail (&mMailboxLock)) {
--    DEBUG ((DEBUG_ERROR, "%a: failed to acquire spinlock\n", __FUNCTION__));
-+    DEBUG ((DEBUG_ERROR, "%a: failed to acquire spinlock\n", __func__));
-     return EFI_DEVICE_ERROR;
-   }
- 
-@@ -1381,7 +1218,7 @@ RpiFirmwareNotifyXhciReset (
-       Cmd->BufferHead.Response != RPI_MBOX_RESP_SUCCESS) {
-     DEBUG ((DEBUG_ERROR,
-       "%a: mailbox  transaction error: Status == %r, Response == 0x%x\n",
--      __FUNCTION__, Status, Cmd->BufferHead.Response));
-+      __func__, Status, Cmd->BufferHead.Response));
-   }
- 
-   ReleaseSpinLock (&mMailboxLock);
-@@ -1389,24 +1226,6 @@ RpiFirmwareNotifyXhciReset (
-   return Status;
- }
- 
--#pragma pack()
--typedef struct {
--  UINT32                       Gpio;
--  UINT32                       Direction;
--  UINT32                       Polarity;
--  UINT32                       TermEn;
--  UINT32                       TermPullUp;
--} RPI_FW_GPIO_GET_CFG_TAG;
--
--typedef struct {
--  RPI_FW_BUFFER_HEAD           BufferHead;
--  RPI_FW_TAG_HEAD              TagHead;
--  RPI_FW_GPIO_GET_CFG_TAG      TagBody;
--  UINT32                       EndTag;
--} RPI_FW_NOTIFY_GPIO_GET_CFG_CMD;
--#pragma pack()
--
--
- STATIC
- EFI_STATUS
- EFIAPI
-@@ -1420,7 +1239,7 @@ RpiFirmwareNotifyGpioGetCfg (
-   UINT32                       Result;
- 
-   if (!AcquireSpinLockOrFail (&mMailboxLock)) {
--    DEBUG ((DEBUG_ERROR, "%a: failed to acquire spinlock\n", __FUNCTION__));
-+    DEBUG ((DEBUG_ERROR, "%a: failed to acquire spinlock\n", __func__));
-     return EFI_DEVICE_ERROR;
-   }
- 
-@@ -1444,7 +1263,7 @@ RpiFirmwareNotifyGpioGetCfg (
-       Cmd->BufferHead.Response != RPI_MBOX_RESP_SUCCESS) {
-     DEBUG ((DEBUG_ERROR,
-       "%a: mailbox  transaction error: Status == %r, Response == 0x%x\n",
--      __FUNCTION__, Status, Cmd->BufferHead.Response));
-+      __func__, Status, Cmd->BufferHead.Response));
-   }
- 
-   ReleaseSpinLock (&mMailboxLock);
-@@ -1452,26 +1271,6 @@ RpiFirmwareNotifyGpioGetCfg (
-   return Status;
- }
- 
--
--#pragma pack()
--typedef struct {
--  UINT32                       Gpio;
--  UINT32                       Direction;
--  UINT32                       Polarity;
--  UINT32                       TermEn;
--  UINT32                       TermPullUp;
--  UINT32                       State;
--} RPI_FW_GPIO_SET_CFG_TAG;
--
--typedef struct {
--  RPI_FW_BUFFER_HEAD           BufferHead;
--  RPI_FW_TAG_HEAD              TagHead;
--  RPI_FW_GPIO_SET_CFG_TAG      TagBody;
--  UINT32                       EndTag;
--} RPI_FW_NOTIFY_GPIO_SET_CFG_CMD;
--#pragma pack()
--
--
- STATIC
- EFI_STATUS
- EFIAPI
-@@ -1487,13 +1286,13 @@ RpiFirmwareNotifyGpioSetCfg (
- 
-   Status = RpiFirmwareNotifyGpioGetCfg (Gpio, &Result);
-   if (EFI_ERROR (Status)) {
--      DEBUG ((DEBUG_ERROR, "%a: Failed to get GPIO polarity\n", __FUNCTION__));
-+      DEBUG ((DEBUG_ERROR, "%a: Failed to get GPIO polarity\n", __func__));
-       Result = 0; //default polarity
-   }
- 
- 
-   if (!AcquireSpinLockOrFail (&mMailboxLock)) {
--    DEBUG ((DEBUG_ERROR, "%a: failed to acquire spinlock\n", __FUNCTION__));
-+    DEBUG ((DEBUG_ERROR, "%a: failed to acquire spinlock\n", __func__));
-     return EFI_DEVICE_ERROR;
-   }
- 
-@@ -1521,7 +1320,7 @@ RpiFirmwareNotifyGpioSetCfg (
-       Cmd->BufferHead.Response != RPI_MBOX_RESP_SUCCESS) {
-     DEBUG ((DEBUG_ERROR,
-       "%a: mailbox  transaction error: Status == %r, Response == 0x%x\n",
--      __FUNCTION__, Status, Cmd->BufferHead.Response));
-+      __func__, Status, Cmd->BufferHead.Response));
-   }
- 
-   ReleaseSpinLock (&mMailboxLock);
-@@ -1532,6 +1331,96 @@ RpiFirmwareNotifyGpioSetCfg (
+@@ -1504,6 +1331,96 @@ RpiFirmwareNotifyGpioSetCfg (
    return Status;
  }
  
@@ -2688,7 +905,7 @@ index 4edec0ad0..977200711 100644
  STATIC RASPBERRY_PI_FIRMWARE_PROTOCOL mRpiFirmwareProtocol = {
    RpiFirmwareSetPowerState,
    RpiFirmwareGetMacAddress,
-@@ -1547,19 +1436,30 @@ STATIC RASPBERRY_PI_FIRMWARE_PROTOCOL mRpiFirmwareProtocol = {
+@@ -1519,19 +1436,30 @@ STATIC RASPBERRY_PI_FIRMWARE_PROTOCOL mRpiFirmwareProtocol = {
    RpiFirmwareGetSerial,
    RpiFirmwareGetModel,
    RpiFirmwareGetModelRevision,
@@ -2725,7 +942,7 @@ index 4edec0ad0..977200711 100644
  /**
    Initialize the state information for the CPU Architectural Protocol
  
-@@ -1578,7 +1478,10 @@ RpiFirmwareDxeInitialize (
+@@ -1550,7 +1478,10 @@ RpiFirmwareDxeInitialize (
    )
  {
    EFI_STATUS      Status;
@@ -2737,15 +954,14 @@ index 4edec0ad0..977200711 100644
  
    //
    // We only need one of these
-@@ -1587,17 +1490,17 @@ RpiFirmwareDxeInitialize (
+@@ -1559,14 +1490,14 @@ RpiFirmwareDxeInitialize (
  
    InitializeSpinLock (&mMailboxLock);
  
 -  Status = DmaAllocateBuffer (EfiBootServicesData, NUM_PAGES, &mDmaBuffer);
 +  Status = DmaAllocateBuffer (EfiRuntimeServicesData, NUM_PAGES, &mDmaBuffer);
    if (EFI_ERROR (Status)) {
--    DEBUG ((DEBUG_ERROR, "%a: failed to allocate DMA buffer (Status == %r)\n", __FUNCTION__));
-+    DEBUG ((DEBUG_ERROR, "%a: failed to allocate DMA buffer (Status == %r)\n", __func__));
+     DEBUG ((DEBUG_ERROR, "%a: failed to allocate DMA buffer (Status == %r)\n", __func__));
      return Status;
    }
  
@@ -2755,20 +971,11 @@ index 4edec0ad0..977200711 100644
 +  Status = DmaMap (MapOperationBusMasterCommonBuffer, mDmaBuffer, &mDmaBufferSize,
               &mDmaBufferBusAddress, &mDmaBufferMapping);
    if (EFI_ERROR (Status)) {
--    DEBUG ((DEBUG_ERROR, "%a: failed to map DMA buffer (Status == %r)\n", __FUNCTION__));
-+    DEBUG ((DEBUG_ERROR, "%a: failed to map DMA buffer (Status == %r)\n", __func__));
-     goto FreeBuffer;
+     DEBUG ((DEBUG_ERROR, "%a: failed to map DMA buffer (Status == %r)\n", __func__));
+@@ -1589,6 +1520,42 @@ RpiFirmwareDxeInitialize (
+     goto UnmapBuffer;
    }
  
-@@ -1613,7 +1516,43 @@ RpiFirmwareDxeInitialize (
-   if (EFI_ERROR (Status)) {
-     DEBUG ((DEBUG_ERROR,
-       "%a: failed to install RPI firmware protocol (Status == %r)\n",
--      __FUNCTION__, Status));
-+      __func__, Status));
-+    goto UnmapBuffer;
-+  }
-+
 +  AlignedMboxAddress = mMboxBaseAddress & ~(EFI_PAGE_SIZE - 1);
 +
 +  Status = gDS->AddMemorySpace (
@@ -2802,9 +1009,12 @@ index 4edec0ad0..977200711 100644
 +  if (EFI_ERROR (Status)) {
 +    DEBUG ((DEBUG_ERROR, "%a: failed to register for virtual address change. Status=%r\n",
 +            __func__, Status));
-     goto UnmapBuffer;
-   }
++    goto UnmapBuffer;
++  }
++
+   return EFI_SUCCESS;
  
+ UnmapBuffer:
 diff --git a/Platform/RaspberryPi/Drivers/RpiFirmwareDxe/RpiFirmwareDxe.inf b/Platform/RaspberryPi/Drivers/RpiFirmwareDxe/RpiFirmwareDxe.inf
 index a3fc0fa49..1ab8d0b7e 100644
 --- a/Platform/RaspberryPi/Drivers/RpiFirmwareDxe/RpiFirmwareDxe.inf
@@ -2846,190 +1056,6 @@ index a3fc0fa49..1ab8d0b7e 100644
  
  [Depex]
    TRUE
-diff --git a/Platform/RaspberryPi/Drivers/SdHostDxe/SdHostDxe.c b/Platform/RaspberryPi/Drivers/SdHostDxe/SdHostDxe.c
-index 0fd1ac6e8..336c18c74 100644
---- a/Platform/RaspberryPi/Drivers/SdHostDxe/SdHostDxe.c
-+++ b/Platform/RaspberryPi/Drivers/SdHostDxe/SdHostDxe.c
-@@ -388,7 +388,7 @@ SdSendCommand (
-     if (MmioRead32 (SDHOST_CMD) & SDHOST_CMD_NEW_FLAG) {
-       DEBUG ((DEBUG_MMCHOST_SD_ERROR,
-         "%a(%u): CMD%d is still being executed after %d trial(s)\n",
--        __FUNCTION__, __LINE__, MMC_GET_INDX (MmcCmd), RetryCount));
-+        __func__, __LINE__, MMC_GET_INDX (MmcCmd), RetryCount));
-     }
- 
-     // Write command and set it to start execution
-@@ -445,7 +445,7 @@ SdSendCommand (
-       Status = EFI_SUCCESS;
-     } else {
-       DEBUG ((DEBUG_MMCHOST_SD_ERROR, "%a(%u): CMD%d execution failed after %d trial(s)\n",
--        __FUNCTION__, __LINE__, MMC_GET_INDX (MmcCmd), RetryCount));
-+        __func__, __LINE__, MMC_GET_INDX (MmcCmd), RetryCount));
-       SdHostDumpStatus ();
-     }
- 
-diff --git a/Platform/RaspberryPi/Drivers/VarBlockServiceDxe/VarBlockServiceDxe.c b/Platform/RaspberryPi/Drivers/VarBlockServiceDxe/VarBlockServiceDxe.c
-index 4071a3fca..bc8ab2270 100644
---- a/Platform/RaspberryPi/Drivers/VarBlockServiceDxe/VarBlockServiceDxe.c
-+++ b/Platform/RaspberryPi/Drivers/VarBlockServiceDxe/VarBlockServiceDxe.c
-@@ -10,6 +10,8 @@
- 
- #include "VarBlockService.h"
- 
-+#include <Protocol/ResetNotification.h>
-+
- //
- // Minimum delay to enact before reset, when variables are dirty (in μs).
- // Needed to ensure that SSD-based USB 3.0 devices have time to flush their
-@@ -51,6 +53,8 @@ InstallProtocolInterfaces (
-                     &FvbDevice->FwVolBlockInstance,
-                     &gEfiDevicePathProtocolGuid,
-                     FvbDevice->DevicePath,
-+                    &gEdkiiNvVarStoreFormattedGuid,
-+                    NULL,
-                     NULL
-                   );
-     ASSERT_EFI_ERROR (Status);
-@@ -159,10 +163,8 @@ DoDump (
- 
- STATIC
- VOID
--EFIAPI
- DumpVars (
--  IN EFI_EVENT Event,
--  IN VOID *Context
-+  VOID
-   )
- {
-   EFI_STATUS Status;
-@@ -200,6 +202,29 @@ DumpVars (
-   mFvInstance->Dirty = FALSE;
- }
- 
-+STATIC
-+VOID
-+EFIAPI
-+DumpVarsOnEvent (
-+  IN EFI_EVENT Event,
-+  IN VOID *Context
-+  )
-+{
-+  DumpVars ();
-+}
-+
-+STATIC
-+VOID
-+EFIAPI
-+DumpVarsOnReset (
-+  IN EFI_RESET_TYPE  ResetType,
-+  IN EFI_STATUS      ResetStatus,
-+  IN UINTN           DataSize,
-+  IN VOID            *ResetData OPTIONAL
-+  )
-+{
-+  DumpVars ();
-+}
- 
- VOID
- ReadyToBootHandler (
-@@ -214,7 +239,7 @@ ReadyToBootHandler (
-   Status = gBS->CreateEvent (
-                   EVT_NOTIFY_SIGNAL,
-                   TPL_CALLBACK,
--                  DumpVars,
-+                  DumpVarsOnEvent,
-                   NULL,
-                   &ImageInstallEvent
-                 );
-@@ -227,7 +252,7 @@ ReadyToBootHandler (
-                 );
-   ASSERT_EFI_ERROR (Status);
- 
--  DumpVars (NULL, NULL);
-+  DumpVars ();
-   Status = gBS->CloseEvent (Event);
-   ASSERT_EFI_ERROR (Status);
- }
-@@ -238,19 +263,9 @@ InstallDumpVarEventHandlers (
-   VOID
-   )
- {
--  EFI_STATUS Status;
--  EFI_EVENT ResetEvent;
--  EFI_EVENT ReadyToBootEvent;
--
--  Status = gBS->CreateEventEx (
--                  EVT_NOTIFY_SIGNAL,
--                  TPL_CALLBACK,
--                  DumpVars,
--                  NULL,
--                  &gRaspberryPiEventResetGuid,
--                  &ResetEvent
--                );
--  ASSERT_EFI_ERROR (Status);
-+  EFI_STATUS                       Status;
-+  EFI_EVENT                        ReadyToBootEvent;
-+  EFI_RESET_NOTIFICATION_PROTOCOL  *ResetNotify;
- 
-   Status = gBS->CreateEventEx (
-                   EVT_NOTIFY_SIGNAL,
-@@ -261,6 +276,20 @@ InstallDumpVarEventHandlers (
-                   &ReadyToBootEvent
-                 );
-   ASSERT_EFI_ERROR (Status);
-+
-+  Status = gBS->LocateProtocol (
-+                  &gEfiResetNotificationProtocolGuid,
-+                  NULL,
-+                  (VOID **)&ResetNotify
-+                  );
-+  ASSERT_EFI_ERROR (Status);
-+  if (!EFI_ERROR (Status)) {
-+    Status = ResetNotify->RegisterResetNotify (
-+                            ResetNotify,
-+                            DumpVarsOnReset
-+                            );
-+    ASSERT_EFI_ERROR (Status);
-+  }
- }
- 
- 
-diff --git a/Platform/RaspberryPi/Drivers/VarBlockServiceDxe/VarBlockServiceDxe.inf b/Platform/RaspberryPi/Drivers/VarBlockServiceDxe/VarBlockServiceDxe.inf
-index c2edb25bd..d15671af7 100644
---- a/Platform/RaspberryPi/Drivers/VarBlockServiceDxe/VarBlockServiceDxe.inf
-+++ b/Platform/RaspberryPi/Drivers/VarBlockServiceDxe/VarBlockServiceDxe.inf
-@@ -34,6 +34,7 @@
- 
- [Packages]
-   ArmPkg/ArmPkg.dec
-+  EmbeddedPkg/EmbeddedPkg.dec
-   MdePkg/MdePkg.dec
-   MdeModulePkg/MdeModulePkg.dec
-   Platform/RaspberryPi/RaspberryPi.dec
-@@ -51,8 +52,8 @@
-   UefiRuntimeLib
- 
- [Guids]
-+  gEdkiiNvVarStoreFormattedGuid			## PRODUCES ## PROTOCOL
-   gEfiEventVirtualAddressChangeGuid
--  gRaspberryPiEventResetGuid
-   gEfiEventReadyToBootGuid
- 
- [Protocols]
-@@ -61,6 +62,7 @@
-   gEfiBlockIoProtocolGuid
-   gEfiFirmwareVolumeBlockProtocolGuid           # PROTOCOL SOMETIMES_PRODUCED
-   gEfiDevicePathProtocolGuid                    # PROTOCOL SOMETIMES_PRODUCED
-+  gEfiResetNotificationProtocolGuid
- 
- [FixedPcd]
-   gEfiMdeModulePkgTokenSpaceGuid.PcdFlashNvStorageVariableSize
-@@ -85,4 +87,4 @@
- [FeaturePcd]
- 
- [Depex]
--  TRUE
-+  gEfiResetNotificationProtocolGuid
 diff --git a/Platform/RaspberryPi/Include/IndustryStandard/RpiMbox.h b/Platform/RaspberryPi/Include/IndustryStandard/RpiMbox.h
 index 551c2b82e..916b74428 100644
 --- a/Platform/RaspberryPi/Include/IndustryStandard/RpiMbox.h
@@ -3163,510 +1189,23 @@ index c48bb6e43..92ab7f84c 100644
  } RASPBERRY_PI_FIRMWARE_PROTOCOL;
  
  extern EFI_GUID gRaspberryPiFirmwareProtocolGuid;
-diff --git a/Platform/RaspberryPi/Library/MemoryInitPeiLib/MemoryInitPeiLib.c b/Platform/RaspberryPi/Library/MemoryInitPeiLib/MemoryInitPeiLib.c
-index 7ba1cc560..cf9eca2ff 100644
---- a/Platform/RaspberryPi/Library/MemoryInitPeiLib/MemoryInitPeiLib.c
-+++ b/Platform/RaspberryPi/Library/MemoryInitPeiLib/MemoryInitPeiLib.c
-@@ -51,6 +51,8 @@ AddBasicMemoryRegion (
-     EFI_RESOURCE_ATTRIBUTE_WRITE_COMBINEABLE |
-     EFI_RESOURCE_ATTRIBUTE_WRITE_THROUGH_CACHEABLE |
-     EFI_RESOURCE_ATTRIBUTE_WRITE_BACK_CACHEABLE |
-+    EFI_RESOURCE_ATTRIBUTE_WRITE_PROTECTABLE |
-+    EFI_RESOURCE_ATTRIBUTE_EXECUTION_PROTECTABLE |
-     EFI_RESOURCE_ATTRIBUTE_TESTED,
-     Desc->PhysicalBase,
-     Desc->Length
-diff --git a/Platform/RaspberryPi/Library/MemoryInitPeiLib/MemoryInitPeiLib.inf b/Platform/RaspberryPi/Library/MemoryInitPeiLib/MemoryInitPeiLib.inf
-index d39210c7a..ecb03d8cb 100644
---- a/Platform/RaspberryPi/Library/MemoryInitPeiLib/MemoryInitPeiLib.inf
-+++ b/Platform/RaspberryPi/Library/MemoryInitPeiLib/MemoryInitPeiLib.inf
-@@ -25,6 +25,7 @@
-   ArmPkg/ArmPkg.dec
-   ArmPlatformPkg/ArmPlatformPkg.dec
-   Platform/RaspberryPi/RaspberryPi.dec
-+  UefiCpuPkg/UefiCpuPkg.dec
- 
- [LibraryClasses]
-   DebugLib
-diff --git a/Platform/RaspberryPi/Library/PlatformBootManagerLib/PlatformBm.c b/Platform/RaspberryPi/Library/PlatformBootManagerLib/PlatformBm.c
-index 1a0fcbf8f..323a23642 100644
---- a/Platform/RaspberryPi/Library/PlatformBootManagerLib/PlatformBm.c
-+++ b/Platform/RaspberryPi/Library/PlatformBootManagerLib/PlatformBm.c
-@@ -17,6 +17,7 @@
- #include <Library/DevicePathLib.h>
- #include <Library/HobLib.h>
- #include <Library/PcdLib.h>
-+#include <Library/TimerLib.h>
- #include <Library/UefiBootManagerLib.h>
- #include <Library/UefiLib.h>
- #include <Library/PrintLib.h>
-@@ -25,6 +26,7 @@
- #include <Protocol/EsrtManagement.h>
- #include <Protocol/GraphicsOutput.h>
- #include <Protocol/LoadedImage.h>
-+#include <Protocol/PlatformSpecificResetHandler.h>
- #include <Guid/BootDiscoveryPolicy.h>
- #include <Guid/EventGroup.h>
- #include <Guid/TtyTerm.h>
-@@ -244,7 +246,7 @@ FilterAndProcess (
-     //
-     // This is not an error, just an informative condition.
-     //
--    DEBUG ((DEBUG_VERBOSE, "%a: %g: %r\n", __FUNCTION__, ProtocolGuid,
-+    DEBUG ((DEBUG_VERBOSE, "%a: %g: %r\n", __func__, ProtocolGuid,
-       Status));
-     return;
-   }
-@@ -295,25 +297,25 @@ AddOutput (
-   DevicePath = DevicePathFromHandle (Handle);
-   if (DevicePath == NULL) {
-     DEBUG ((DEBUG_ERROR, "%a: %s: handle %p: device path not found\n",
--      __FUNCTION__, ReportText, Handle));
-+      __func__, ReportText, Handle));
-     return;
-   }
- 
-   Status = EfiBootManagerUpdateConsoleVariable (ConOut, DevicePath, NULL);
-   if (EFI_ERROR (Status)) {
--    DEBUG ((DEBUG_ERROR, "%a: %s: adding to ConOut: %r\n", __FUNCTION__,
-+    DEBUG ((DEBUG_ERROR, "%a: %s: adding to ConOut: %r\n", __func__,
-       ReportText, Status));
-     return;
-   }
- 
-   Status = EfiBootManagerUpdateConsoleVariable (ErrOut, DevicePath, NULL);
-   if (EFI_ERROR (Status)) {
--    DEBUG ((DEBUG_ERROR, "%a: %s: adding to ErrOut: %r\n", __FUNCTION__,
-+    DEBUG ((DEBUG_ERROR, "%a: %s: adding to ErrOut: %r\n", __func__,
-       ReportText, Status));
-     return;
-   }
- 
--  DEBUG ((DEBUG_VERBOSE, "%a: %s: added to ConOut and ErrOut\n", __FUNCTION__,
-+  DEBUG ((DEBUG_VERBOSE, "%a: %s: added to ConOut and ErrOut\n", __func__,
-     ReportText));
- }
- 
-@@ -337,8 +339,8 @@ Connect (
-                   NULL,   // RemainingDevicePath -- produce all children
-                   FALSE   // Recursive
-                   );
--  DEBUG ((EFI_ERROR (Status) ? EFI_D_ERROR : EFI_D_VERBOSE, "%a: %s: %r\n",
--    __FUNCTION__, ReportText, Status));
-+  DEBUG ((EFI_ERROR (Status) ? DEBUG_ERROR : DEBUG_VERBOSE, "%a: %s: %r\n",
-+    __func__, ReportText, Status));
- }
- 
- STATIC
-@@ -455,9 +457,9 @@ RemoveStaleBootOptions (
- 
-       DevicePathString = ConvertDevicePathToText(BootOptions[Index].FilePath, FALSE, FALSE);
-       DEBUG ((
--        EFI_ERROR (Status) ? EFI_D_WARN : EFI_D_INFO,
-+        EFI_ERROR (Status) ? DEBUG_WARN : DEBUG_INFO,
-         "%a: removing stale Boot#%04x %s: %r\n",
--        __FUNCTION__,
-+        __func__,
-         (UINT32)BootOptions[Index].OptionNumber,
-         DevicePathString == NULL ? L"<unavailable>" : DevicePathString,
-         Status
-@@ -527,6 +529,66 @@ SerialConPrint (
-   }
- }
- 
-+/**
-+  Disconnect everything.
-+  Modified from the UEFI 2.3 spec (May 2009 version)
-+
-+**/
-+STATIC
-+VOID
-+DisconnectAll (
-+  VOID
-+  )
-+{
-+  EFI_STATUS  Status;
-+  UINTN       HandleCount;
-+  EFI_HANDLE  *HandleBuffer;
-+  UINTN       HandleIndex;
-+
-+  /*
-+   * Retrieve the list of all handles from the handle database
-+   */
-+  Status = gBS->LocateHandleBuffer (
-+                  AllHandles,
-+                  NULL,
-+                  NULL,
-+                  &HandleCount,
-+                  &HandleBuffer
-+                  );
-+  if (EFI_ERROR (Status)) {
-+    return;
-+  }
-+
-+  for (HandleIndex = 0; HandleIndex < HandleCount; HandleIndex++) {
-+    gBS->DisconnectController (HandleBuffer[HandleIndex], NULL, NULL);
-+  }
-+
-+  gBS->FreePool(HandleBuffer);
-+}
-+
-+
-+STATIC
-+VOID
-+EFIAPI
-+OnResetNotify (
-+  IN EFI_RESET_TYPE  ResetType,
-+  IN EFI_STATUS      ResetStatus,
-+  IN UINTN           DataSize,
-+  IN VOID            *ResetData OPTIONAL
-+  )
-+{
-+  UINT32 Delay;
-+
-+  DisconnectAll ();
-+
-+  Delay = PcdGet32 (PcdPlatformResetDelay);
-+  if (Delay != 0) {
-+    DEBUG ((DEBUG_INFO, "Platform will be reset in %d.%d seconds...\n",
-+          Delay / 1000000, (Delay % 1000000) / 100000));
-+    MicroSecondDelay (Delay);
-+  }
-+}
-+
- //
- // BDS Platform Functions
- //
-@@ -549,6 +611,7 @@ PlatformBootManagerBeforeConsole (
- {
-   EFI_STATUS Status;
-   ESRT_MANAGEMENT_PROTOCOL *EsrtManagement;
-+  EDKII_PLATFORM_SPECIFIC_RESET_HANDLER_PROTOCOL *ResetNotify;
- 
-   if (GetBootModeHob () == BOOT_ON_FLASH_UPDATE) {
-     DEBUG ((DEBUG_INFO, "ProcessCapsules Before EndOfDxe ......\n"));
-@@ -582,6 +645,21 @@ PlatformBootManagerBeforeConsole (
-   EfiBootManagerUpdateConsoleVariable (ConOut, (EFI_DEVICE_PATH_PROTOCOL*)&mSerialConsole, NULL);
-   EfiBootManagerUpdateConsoleVariable (ErrOut, (EFI_DEVICE_PATH_PROTOCOL*)&mSerialConsole, NULL);
- 
-+  Status = gBS->LocateProtocol (
-+                  &gEdkiiPlatformSpecificResetHandlerProtocolGuid,
-+                  NULL,
-+                  (VOID **)&ResetNotify
-+                  );
-+  ASSERT_EFI_ERROR (Status);
-+  if (!EFI_ERROR (Status)) {
-+    Status = ResetNotify->RegisterResetNotify (
-+                            ResetNotify,
-+                            OnResetNotify
-+                            );
-+    ASSERT_EFI_ERROR (Status);
-+  }
-+
-+
-   //
-   // Signal EndOfDxe PI Event
-   //
-@@ -657,7 +735,7 @@ BootDiscoveryPolicyHandler (
-       DEBUG ((
-         DEBUG_INFO,
-         "%a - Unexpected DiscoveryPolicy (0x%x). Run Minimal Discovery Policy\n",
--        __FUNCTION__,
-+        __func__,
-         DiscoveryPolicy
-         ));
-       return EFI_SUCCESS;
-@@ -669,13 +747,13 @@ BootDiscoveryPolicyHandler (
-                   (VOID **)&BMPolicy
-                   );
-   if (EFI_ERROR (Status)) {
--    DEBUG ((DEBUG_ERROR, "%a - Failed to locate gEfiBootManagerPolicyProtocolGuid - %r\n", __FUNCTION__, Status));
-+    DEBUG ((DEBUG_ERROR, "%a - Failed to locate gEfiBootManagerPolicyProtocolGuid - %r\n", __func__, Status));
-     return Status;
-   }
- 
-   Status = BMPolicy->ConnectDeviceClass (BMPolicy, Class);
-   if (EFI_ERROR (Status)){
--    DEBUG ((DEBUG_ERROR, "%a - ConnectDeviceClass returns - %r\n", __FUNCTION__, Status));
-+    DEBUG ((DEBUG_ERROR, "%a - ConnectDeviceClass returns - %r\n", __func__, Status));
-     return Status;
-   }
- 
-@@ -849,7 +927,7 @@ PlatformBootManagerUnableToBoot (
-   //
-   if (NewBootOptionCount != OldBootOptionCount) {
-     DEBUG ((DEBUG_WARN, "%a: rebooting after refreshing all boot options\n",
--      __FUNCTION__));
-+      __func__));
-     gRT->ResetSystem (EfiResetCold, EFI_SUCCESS, 0, NULL);
-   }
- 
-diff --git a/Platform/RaspberryPi/Library/PlatformBootManagerLib/PlatformBootManagerLib.inf b/Platform/RaspberryPi/Library/PlatformBootManagerLib/PlatformBootManagerLib.inf
-index 5e55eff7b..57280db98 100644
---- a/Platform/RaspberryPi/Library/PlatformBootManagerLib/PlatformBootManagerLib.inf
-+++ b/Platform/RaspberryPi/Library/PlatformBootManagerLib/PlatformBootManagerLib.inf
-@@ -46,12 +46,12 @@
-   MemoryAllocationLib
-   PcdLib
-   PrintLib
-+  TimerLib
-   UefiBootManagerLib
-   UefiBootServicesTableLib
-   UefiLib
- 
- [FeaturePcd]
--  gEfiMdePkgTokenSpaceGuid.PcdUgaConsumeSupport
- 
- [FixedPcd]
-   gEfiMdePkgTokenSpaceGuid.PcdUartDefaultBaudRate
-@@ -63,6 +63,7 @@
- [Pcd]
-   gEfiMdeModulePkgTokenSpaceGuid.PcdBootDiscoveryPolicy
-   gEfiMdePkgTokenSpaceGuid.PcdPlatformBootTimeOut
-+  gRaspberryPiTokenSpaceGuid.PcdPlatformResetDelay
-   gRaspberryPiTokenSpaceGuid.PcdSdIsArasan
- 
- [Guids]
-@@ -78,6 +79,7 @@
-   gEfiBootManagerPolicyConnectAllGuid
- 
- [Protocols]
-+  gEdkiiPlatformSpecificResetHandlerProtocolGuid
-   gEfiBootManagerPolicyProtocolGuid
-   gEfiDevicePathProtocolGuid
-   gEfiGraphicsOutputProtocolGuid
-@@ -86,3 +88,6 @@
-   gEfiSimpleFileSystemProtocolGuid
-   gEsrtManagementProtocolGuid
-   gEfiUsb2HcProtocolGuid
-+
-+[Depex]
-+  gEdkiiPlatformSpecificResetHandlerProtocolGuid
 diff --git a/Platform/RaspberryPi/Library/PlatformLib/AArch64/RaspberryPiHelper.S b/Platform/RaspberryPi/Library/PlatformLib/AArch64/RaspberryPiHelper.S
-index 7008aaf8a..d3c77be2d 100644
+index afd3fafee..80917f54b 100644
 --- a/Platform/RaspberryPi/Library/PlatformLib/AArch64/RaspberryPiHelper.S
 +++ b/Platform/RaspberryPi/Library/PlatformLib/AArch64/RaspberryPiHelper.S
 @@ -12,6 +12,7 @@
- #include <AsmMacroIoLibV8.h>
+ #include <AsmMacroLib.h>
  #include <Library/ArmLib.h>
  #include <IndustryStandard/Bcm2836.h>
 +#include <IndustryStandard/Bcm2836Mbox.h>
  #include <IndustryStandard/RpiMbox.h>
  
      .macro  drain
-diff --git a/Platform/RaspberryPi/Library/ResetLib/ResetLib.c b/Platform/RaspberryPi/Library/ResetLib/ResetLib.c
-deleted file mode 100644
-index 2bcef8d4d..000000000
---- a/Platform/RaspberryPi/Library/ResetLib/ResetLib.c
-+++ /dev/null
-@@ -1,151 +0,0 @@
--/** @file
-- *
-- *  Support ResetSystem Runtime call using PSCI calls.
-- *  Signals the gRaspberryPiEventResetGuid event group on reset.
-- *
-- *  Copyright (c) 2018, Andrei Warkentin <andrey.warkentin@gmail.com>
-- *  Copyright (c) 2014, Linaro Ltd. All rights reserved.
-- *  Copyright (c) 2013-2015, ARM Ltd. All rights reserved.
-- *  Copyright (c) 2008-2009, Apple Inc. All rights reserved.
-- *
-- *  SPDX-License-Identifier: BSD-2-Clause-Patent
-- *
-- **/
--
--#include <PiDxe.h>
--
--#include <Library/BaseLib.h>
--#include <Library/DebugLib.h>
--#include <Library/TimerLib.h>
--#include <Library/EfiResetSystemLib.h>
--#include <Library/ArmSmcLib.h>
--#include <Library/UefiBootServicesTableLib.h>
--#include <Library/UefiLib.h>
--#include <Library/UefiRuntimeLib.h>
--
--#include <IndustryStandard/ArmStdSmc.h>
--
--
--/**
--  Disconnect everything.
--  Modified from the UEFI 2.3 spec (May 2009 version)
--
--**/
--STATIC
--VOID
--DisconnectAll (
--  VOID
--  )
--{
--  EFI_STATUS Status;
--  UINTN HandleCount;
--  EFI_HANDLE *HandleBuffer;
--  UINTN HandleIndex;
--
--  /*
--   * Retrieve the list of all handles from the handle database
--   */
--  Status = gBS->LocateHandleBuffer (
--    AllHandles,
--    NULL,
--    NULL,
--    &HandleCount,
--    &HandleBuffer
--   );
--  if (EFI_ERROR (Status)) {
--      return;
--  }
--
--  for (HandleIndex = 0; HandleIndex < HandleCount; HandleIndex++) {
--    gBS->DisconnectController (HandleBuffer[HandleIndex], NULL, NULL);
--  }
--
--  gBS->FreePool(HandleBuffer);
--}
--
--
--/**
--  Resets the entire platform.
--
--  @param  ResetType             The type of reset to perform.
--  @param  ResetStatus           The status code for the reset.
--  @param  DataSize              The size, in bytes, of WatchdogData.
--  @param  ResetData             For a ResetType of EfiResetCold, EfiResetWarm, or
--                                EfiResetShutdown the data buffer starts with a Null-terminated
--                                Unicode string, optionally followed by additional binary data.
--
--**/
--EFI_STATUS
--EFIAPI
--LibResetSystem (
--  IN EFI_RESET_TYPE   ResetType,
--  IN EFI_STATUS       ResetStatus,
--  IN UINTN            DataSize,
--  IN CHAR16           *ResetData OPTIONAL
--  )
--{
--  ARM_SMC_ARGS ArmSmcArgs;
--  UINT32 Delay;
--
--  if (!EfiAtRuntime ()) {
--    /*
--     * Only if still in UEFI.
--     */
--    EfiEventGroupSignal (&gRaspberryPiEventResetGuid);
--
--    DisconnectAll ();
--
--    Delay = PcdGet32 (PcdPlatformResetDelay);
--    if (Delay != 0) {
--      DEBUG ((DEBUG_INFO, "Platform will be reset in %d.%d seconds...\n",
--              Delay / 1000000, (Delay % 1000000) / 100000));
--      MicroSecondDelay (Delay);
--    }
--  }
--  DEBUG ((DEBUG_INFO, "Platform %a.\n",
--          (ResetType == EfiResetShutdown) ? "shutdown" : "reset"));
--
--  switch (ResetType) {
--  case EfiResetPlatformSpecific:
--    // Map the platform specific reset as reboot
--  case EfiResetWarm:
--    // Map a warm reset into a cold reset
--  case EfiResetCold:
--    // Send a PSCI 0.2 SYSTEM_RESET command
--    ArmSmcArgs.Arg0 = ARM_SMC_ID_PSCI_SYSTEM_RESET;
--    break;
--  case EfiResetShutdown:
--    // Send a PSCI 0.2 SYSTEM_OFF command
--    ArmSmcArgs.Arg0 = ARM_SMC_ID_PSCI_SYSTEM_OFF;
--    break;
--  default:
--    ASSERT (FALSE);
--    return EFI_UNSUPPORTED;
--  }
--
--  ArmCallSmc (&ArmSmcArgs);
--
--  // We should never be here
--  DEBUG ((DEBUG_ERROR, "%a: PSCI Reset failed\n", __FUNCTION__));
--  CpuDeadLoop ();
--  return EFI_UNSUPPORTED;
--}
--
--/**
--  Initialize any infrastructure required for LibResetSystem () to function.
--
--  @param  ImageHandle   The firmware allocated handle for the EFI image.
--  @param  SystemTable   A pointer to the EFI System Table.
--
--  @retval EFI_SUCCESS   The constructor always returns EFI_SUCCESS.
--
--**/
--EFI_STATUS
--EFIAPI
--LibInitializeResetSystem (
--  IN EFI_HANDLE        ImageHandle,
--  IN EFI_SYSTEM_TABLE  *SystemTable
--  )
--{
--  return EFI_SUCCESS;
--}
-diff --git a/Platform/RaspberryPi/Library/ResetLib/ResetLib.inf b/Platform/RaspberryPi/Library/ResetLib/ResetLib.inf
-deleted file mode 100644
-index 9bdb94a52..000000000
---- a/Platform/RaspberryPi/Library/ResetLib/ResetLib.inf
-+++ /dev/null
-@@ -1,45 +0,0 @@
--#/** @file
--#
--#  Reset System lib using PSCI hypervisor or secure monitor calls.
--#  Signals the gRaspberryPiEventResetGuid event group on reset.
--#
--#  Copyright (c) 2018, Andrei Warkentin <andrey.warkentin@gmail.com>
--#  Copyright (c) 2014, Linaro Ltd. All rights reserved.
--#  Copyright (c) 2014, ARM Ltd. All rights reserved.
--#  Copyright (c) 2008, Apple Inc. All rights reserved.
--#
--#  SPDX-License-Identifier: BSD-2-Clause-Patent
--#
--#**/
--
--[Defines]
--  INF_VERSION                    = 0x0001001A
--  BASE_NAME                      = ResetLib
--  FILE_GUID                      = B9F59B69-A105-41C7-8F5A-2C60DD7FD7AB
--  MODULE_TYPE                    = BASE
--  VERSION_STRING                 = 1.0
--  LIBRARY_CLASS                  = EfiResetSystemLib
--
--[Sources]
--  ResetLib.c
--
--[Packages]
--  ArmPkg/ArmPkg.dec
--  MdePkg/MdePkg.dec
--  EmbeddedPkg/EmbeddedPkg.dec
--  Platform/RaspberryPi/RaspberryPi.dec
--
--[LibraryClasses]
--  DebugLib
--  BaseLib
--  ArmSmcLib
--  PcdLib
--  TimerLib
--  UefiLib
--  UefiRuntimeLib
--
--[Guids]
--  gRaspberryPiEventResetGuid
--
--[Pcd]
--  gRaspberryPiTokenSpaceGuid.PcdPlatformResetDelay      ## CONSUMES
 diff --git a/Platform/RaspberryPi/RPi3/RPi3.dsc b/Platform/RaspberryPi/RPi3/RPi3.dsc
-index f5361ab95..99762f207 100644
+index 843a082db..8bfbae2b8 100644
 --- a/Platform/RaspberryPi/RPi3/RPi3.dsc
 +++ b/Platform/RaspberryPi/RPi3/RPi3.dsc
-@@ -181,6 +181,10 @@
+@@ -170,6 +170,10 @@
    VariablePolicyHelperLib|MdeModulePkg/Library/VariablePolicyHelperLib/VariablePolicyHelperLib.inf
    GpioLib|Silicon/Broadcom/Bcm283x/Library/GpioLib/GpioLib.inf
  
@@ -3677,7 +1216,7 @@ index f5361ab95..99762f207 100644
  [LibraryClasses.common.SEC]
    PcdLib|MdePkg/Library/BasePcdLibNull/BasePcdLibNull.inf
    BaseMemoryLib|MdePkg/Library/BaseMemoryLib/BaseMemoryLib.inf
-@@ -446,6 +450,11 @@
+@@ -427,6 +431,11 @@
    gRaspberryPiTokenSpaceGuid.PcdGicPmuIrq2|0x09
    gRaspberryPiTokenSpaceGuid.PcdGicPmuIrq3|0x09
  
@@ -3689,7 +1228,7 @@ index f5361ab95..99762f207 100644
    ## Default Terminal Type
    ## 0-PCANSI, 1-VT100, 2-VT00+, 3-UTF8, 4-TTYTERM
    gEfiMdePkgTokenSpaceGuid.PcdDefaultTerminalType|4
-@@ -727,6 +736,11 @@
+@@ -715,6 +724,11 @@
    #
    Silicon/Broadcom/Bcm283x/Drivers/Bcm2835RngDxe/Bcm2835RngDxe.inf
  
@@ -3702,10 +1241,10 @@ index f5361ab95..99762f207 100644
    # UEFI application (Shell Embedded Boot Loader)
    #
 diff --git a/Platform/RaspberryPi/RPi3/RPi3.fdf b/Platform/RaspberryPi/RPi3/RPi3.fdf
-index 3c569f577..ae1e0628a 100644
+index 9a681a5a4..a2985c788 100644
 --- a/Platform/RaspberryPi/RPi3/RPi3.fdf
 +++ b/Platform/RaspberryPi/RPi3/RPi3.fdf
-@@ -230,6 +230,11 @@ READ_LOCK_STATUS   = TRUE
+@@ -231,6 +231,11 @@ READ_LOCK_STATUS   = TRUE
    INF FatPkg/EnhancedFatDxe/Fat.inf
    INF MdeModulePkg/Universal/Disk/UnicodeCollation/EnglishDxe/EnglishDxe.inf
  
@@ -3718,10 +1257,10 @@ index 3c569f577..ae1e0628a 100644
    # UEFI application (Shell Embedded Boot Loader)
    #
 diff --git a/Platform/RaspberryPi/RPi4/RPi4.dsc b/Platform/RaspberryPi/RPi4/RPi4.dsc
-index 4e91eb9ae..02aae2042 100644
+index 9db2ea8cb..551939a4d 100644
 --- a/Platform/RaspberryPi/RPi4/RPi4.dsc
 +++ b/Platform/RaspberryPi/RPi4/RPi4.dsc
-@@ -189,6 +189,10 @@
+@@ -176,6 +176,10 @@
    # The "segment lib" provides the CAM accessors/etc when they aren't ECAM standard
    PciSegmentLib|Silicon/Broadcom/Bcm27xx/Library/Bcm2711PciSegmentLib/PciSegmentLib.inf
  
@@ -3732,7 +1271,7 @@ index 4e91eb9ae..02aae2042 100644
  [LibraryClasses.common.SEC]
    PcdLib|MdePkg/Library/BasePcdLibNull/BasePcdLibNull.inf
    BaseMemoryLib|MdePkg/Library/BaseMemoryLib/BaseMemoryLib.inf
-@@ -452,6 +456,16 @@
+@@ -436,6 +440,16 @@
    gRaspberryPiTokenSpaceGuid.PcdGicPmuIrq2|0x32
    gRaspberryPiTokenSpaceGuid.PcdGicPmuIrq3|0x33
  
@@ -3749,7 +1288,7 @@ index 4e91eb9ae..02aae2042 100644
    #
    # Fixed CPU settings.
    #
-@@ -773,6 +787,11 @@
+@@ -764,6 +778,11 @@
    #
    MdeModulePkg/Bus/Pci/NvmExpressDxe/NvmExpressDxe.inf
  
@@ -3762,10 +1301,10 @@ index 4e91eb9ae..02aae2042 100644
    # UEFI application (Shell Embedded Boot Loader)
    #
 diff --git a/Platform/RaspberryPi/RPi4/RPi4.fdf b/Platform/RaspberryPi/RPi4/RPi4.fdf
-index 816927761..4f2fc5bd5 100644
+index ba13c79ce..4d6397941 100644
 --- a/Platform/RaspberryPi/RPi4/RPi4.fdf
 +++ b/Platform/RaspberryPi/RPi4/RPi4.fdf
-@@ -227,6 +227,11 @@ READ_LOCK_STATUS   = TRUE
+@@ -232,6 +232,11 @@ READ_LOCK_STATUS   = TRUE
    INF FatPkg/EnhancedFatDxe/Fat.inf
    INF MdeModulePkg/Universal/Disk/UnicodeCollation/EnglishDxe/EnglishDxe.inf
  
@@ -3778,20 +1317,18 @@ index 816927761..4f2fc5bd5 100644
    # UEFI application (Shell Embedded Boot Loader)
    #
 diff --git a/Platform/RaspberryPi/RaspberryPi.dec b/Platform/RaspberryPi/RaspberryPi.dec
-index 6bd16a5ae..5c050f895 100644
+index a5fa1fb00..5c050f895 100644
 --- a/Platform/RaspberryPi/RaspberryPi.dec
 +++ b/Platform/RaspberryPi/RaspberryPi.dec
-@@ -24,8 +24,8 @@
- 
+@@ -25,6 +25,7 @@
  [Guids]
    gRaspberryPiTokenSpaceGuid = {0xCD7CC258, 0x31DB, 0x11E6, {0x9F, 0xD3, 0x63, 0xB0, 0xB8, 0xEE, 0xD6, 0xB5}}
--  gRaspberryPiEventResetGuid = {0xCD7CC258, 0x31DB, 0x11E6, {0x9F, 0xD3, 0x63, 0xB4, 0xB4, 0xE4, 0xD4, 0xB4}}
    gConfigDxeFormSetGuid = {0xCD7CC258, 0x31DB, 0x22E6, {0x9F, 0x22, 0x63, 0xB0, 0xB8, 0xEE, 0xD6, 0xB5}}
 +  gMemoryAttributeManagerFormSetGuid = { 0xefab3427, 0x4793, 0x4e9e, { 0xaa, 0x29, 0x88, 0x0c, 0x9a, 0x77, 0x5b, 0x5f } }
  
  [PcdsFixedAtBuild.common]
    #
-@@ -50,6 +50,7 @@
+@@ -49,6 +50,7 @@
    gRaspberryPiTokenSpaceGuid.PcdGicPmuIrq1|0x0|UINT32|0x00000034
    gRaspberryPiTokenSpaceGuid.PcdGicPmuIrq2|0x0|UINT32|0x00000035
    gRaspberryPiTokenSpaceGuid.PcdGicPmuIrq3|0x0|UINT32|0x00000036
@@ -3799,7 +1336,7 @@ index 6bd16a5ae..5c050f895 100644
  
  [PcdsFixedAtBuild, PcdsPatchableInModule, PcdsDynamic, PcdsDynamicEx]
    gRaspberryPiTokenSpaceGuid.PcdCpuClock|0|UINT32|0x0000000d
-@@ -74,3 +75,4 @@
+@@ -73,3 +75,4 @@
    gRaspberryPiTokenSpaceGuid.PcdXhciPci|0|UINT32|0x00000022
    gRaspberryPiTokenSpaceGuid.PcdMiniUartClockRate|0|UINT32|0x00000023
    gRaspberryPiTokenSpaceGuid.PcdXhciReload|0|UINT32|0x00000024
@@ -3912,28 +1449,6 @@ index fdc1b2574..dadd57656 100644
  
  [Depex]
    TRUE
-diff --git a/Silicon/Broadcom/Bcm283x/Drivers/InterruptDxe/InterruptDxe.c b/Silicon/Broadcom/Bcm283x/Drivers/InterruptDxe/InterruptDxe.c
-index a1fe13032..427be4111 100644
---- a/Silicon/Broadcom/Bcm283x/Drivers/InterruptDxe/InterruptDxe.c
-+++ b/Silicon/Broadcom/Bcm283x/Drivers/InterruptDxe/InterruptDxe.c
-@@ -290,7 +290,7 @@ CpuArchEventProtocolNotify (
-   Status = Cpu->RegisterInterruptHandler (Cpu, ARM_ARCH_EXCEPTION_IRQ, NULL);
-   if (EFI_ERROR (Status)) {
-     DEBUG ((DEBUG_ERROR, "%a: Cpu->RegisterInterruptHandler() - %r\n",
--      __FUNCTION__, Status));
-+      __func__, Status));
-     ASSERT (FALSE);
-     return;
-   }
-@@ -301,7 +301,7 @@ CpuArchEventProtocolNotify (
-   Status = Cpu->RegisterInterruptHandler (Cpu, ARM_ARCH_EXCEPTION_IRQ, IrqInterruptHandler);
-   if (EFI_ERROR (Status)) {
-     DEBUG ((DEBUG_ERROR, "%a: Cpu->RegisterInterruptHandler() - %r\n",
--      __FUNCTION__, Status));
-+      __func__, Status));
-     ASSERT (FALSE);
-     return;
-   }
 diff --git a/Silicon/Broadcom/Bcm283x/Include/IndustryStandard/Bcm2836.h b/Silicon/Broadcom/Bcm283x/Include/IndustryStandard/Bcm2836.h
 index a930c64af..93d5eee94 100644
 --- a/Silicon/Broadcom/Bcm283x/Include/IndustryStandard/Bcm2836.h
@@ -3987,260 +1502,3 @@ index 003866fa8..8b3211512 100644
  
  #define RNG_CTRL_ENABLE_MASK                0x1fff
  #define RNG_CTRL_SAMPLE_RATE_DIVISOR_SHIFT  13      // Unmasked bits from above
-diff --git a/Silicon/Broadcom/Drivers/Net/BcmGenetDxe/DriverBinding.c b/Silicon/Broadcom/Drivers/Net/BcmGenetDxe/DriverBinding.c
-index 435ef4935..321d546dd 100644
---- a/Silicon/Broadcom/Drivers/Net/BcmGenetDxe/DriverBinding.c
-+++ b/Silicon/Broadcom/Drivers/Net/BcmGenetDxe/DriverBinding.c
-@@ -129,7 +129,7 @@ GenetDriverBindingStart (
-   Genet = AllocateZeroPool (sizeof (GENET_PRIVATE_DATA));
-   if (Genet == NULL) {
-     DEBUG ((DEBUG_ERROR,
--      "%a: Couldn't allocate private data\n", __FUNCTION__));
-+      "%a: Couldn't allocate private data\n", __func__));
-     return EFI_OUT_OF_RESOURCES;
-   }
- 
-@@ -141,14 +141,14 @@ GenetDriverBindingStart (
-                               EFI_OPEN_PROTOCOL_BY_DRIVER);
-   if (EFI_ERROR (Status)) {
-     DEBUG ((DEBUG_ERROR,
--      "%a: Couldn't open protocol: %r\n", __FUNCTION__, Status));
-+      "%a: Couldn't open protocol: %r\n", __func__, Status));
-     goto FreeDevice;
-   }
- 
-   Status = GenetDmaAlloc (Genet);
-   if (EFI_ERROR (Status)) {
-     DEBUG ((DEBUG_ERROR,
--      "%a: Couldn't allocate DMA buffers: %r\n", __FUNCTION__, Status));
-+      "%a: Couldn't allocate DMA buffers: %r\n", __func__, Status));
-     goto FreeDevice;
-   }
- 
-@@ -210,7 +210,7 @@ GenetDriverBindingStart (
- 
-   if (EFI_ERROR (Status)) {
-     DEBUG ((DEBUG_ERROR,
--      "%a: Couldn't install protocol interfaces: %r\n", __FUNCTION__, Status));
-+      "%a: Couldn't install protocol interfaces: %r\n", __func__, Status));
-     gBS->CloseProtocol (ControllerHandle,
-                         &gBcmGenetPlatformDeviceProtocolGuid,
-                         This->DriverBindingHandle,
-@@ -224,7 +224,7 @@ GenetDriverBindingStart (
- FreeEvent:
-   gBS->CloseEvent (Genet->ExitBootServicesEvent);
- FreeDevice:
--  DEBUG ((DEBUG_WARN, "%a: Returning %r\n", __FUNCTION__, Status));
-+  DEBUG ((DEBUG_WARN, "%a: Returning %r\n", __func__, Status));
-   FreePool (Genet);
-   return Status;
- }
-@@ -457,7 +457,7 @@ GenetUnload (
- 
-   if (EFI_ERROR (Status)) {
-     DEBUG ((DEBUG_WARN, "%a: failed to disconnect all controllers - %r\n",
--      __FUNCTION__, Status));
-+      __func__, Status));
-     return Status;
-   }
- 
-diff --git a/Silicon/Broadcom/Drivers/Net/BcmGenetDxe/GenericPhy.c b/Silicon/Broadcom/Drivers/Net/BcmGenetDxe/GenericPhy.c
-index 54f899ff7..3f556bd39 100644
---- a/Silicon/Broadcom/Drivers/Net/BcmGenetDxe/GenericPhy.c
-+++ b/Silicon/Broadcom/Drivers/Net/BcmGenetDxe/GenericPhy.c
-@@ -115,7 +115,7 @@ GenericPhyDetect (
-       Phy->PhyAddr = PhyAddr;
-       DEBUG ((DEBUG_INFO,
-         "%a: PHY detected at address 0x%02X (PHYIDR1=0x%04X, PHYIDR2=0x%04X)\n",
--        __FUNCTION__, PhyAddr, Id1, Id2));
-+        __func__, PhyAddr, Id1, Id2));
-       return EFI_SUCCESS;
-     }
-   }
-@@ -354,7 +354,7 @@ GenericPhyGetConfig (
-   }
- 
-   DEBUG ((DEBUG_INFO, "%a: Link speed %d Mbps, %a-duplex\n",
--    __FUNCTION__, *Speed, *Duplex == PHY_DUPLEX_FULL ? "full" : "half"));
-+    __func__, *Speed, *Duplex == PHY_DUPLEX_FULL ? "full" : "half"));
- 
-   return EFI_SUCCESS;
- }
-@@ -387,7 +387,7 @@ GenericPhyUpdateConfig (
- 
-   if (Phy->LinkUp != LinkUp) {
-     if (LinkUp) {
--      DEBUG ((DEBUG_VERBOSE, "%a: Link is up\n", __FUNCTION__));
-+      DEBUG ((DEBUG_VERBOSE, "%a: Link is up\n", __func__));
- 
-       Status = GenericPhyGetConfig (Phy, &Speed, &Duplex);
-       if (EFI_ERROR (Status)) {
-@@ -396,7 +396,7 @@ GenericPhyUpdateConfig (
- 
-       GenericPhyConfigure (Phy, Speed, Duplex);
-     } else {
--      DEBUG ((DEBUG_VERBOSE, "%a: Link is down\n", __FUNCTION__));
-+      DEBUG ((DEBUG_VERBOSE, "%a: Link is down\n", __func__));
-     }
-   }
- 
-diff --git a/Silicon/Broadcom/Drivers/Net/BcmGenetDxe/GenetUtil.c b/Silicon/Broadcom/Drivers/Net/BcmGenetDxe/GenetUtil.c
-index 20f20fd28..a2f8c112a 100644
---- a/Silicon/Broadcom/Drivers/Net/BcmGenetDxe/GenetUtil.c
-+++ b/Silicon/Broadcom/Drivers/Net/BcmGenetDxe/GenetUtil.c
-@@ -108,7 +108,7 @@ GenetPhyRead (
- 
-   if (Retry == 0) {
-     DEBUG ((DEBUG_ERROR,
--      "%a: Timeout reading PhyAddr %d, Reg %d\n", __FUNCTION__, PhyAddr, Reg));
-+      "%a: Timeout reading PhyAddr %d, Reg %d\n", __func__, PhyAddr, Reg));
-     return EFI_DEVICE_ERROR;
-   }
- 
-@@ -157,7 +157,7 @@ GenetPhyWrite (
- 
-   if (Retry == 0) {
-     DEBUG ((DEBUG_ERROR,
--      "%a: Timeout writing PhyAddr %d, Reg %d\n", __FUNCTION__, PhyAddr, Reg));
-+      "%a: Timeout writing PhyAddr %d, Reg %d\n", __func__, PhyAddr, Reg));
-     return EFI_DEVICE_ERROR;
-   }
- 
-@@ -618,7 +618,7 @@ GenetDmaAlloc (
-                   &Genet->RxBuffer);
-   if (EFI_ERROR (Status)) {
-     DEBUG ((DEBUG_ERROR,
--      "%a: Failed to allocate RX buffer: %r\n", __FUNCTION__, Status));
-+      "%a: Failed to allocate RX buffer: %r\n", __func__, Status));
-   }
-   return Status;
- }
-@@ -653,7 +653,7 @@ GenetDmaMapRxDescriptor (
-              &Genet->RxBufferMap[DescIndex].Mapping);
-   if (EFI_ERROR (Status)) {
-     DEBUG ((DEBUG_ERROR, "%a: Failed to map RX buffer: %r\n",
--      __FUNCTION__, Status));
-+      __func__, Status));
-     return Status;
-   }
- 
-diff --git a/Silicon/Broadcom/Drivers/Net/BcmGenetDxe/SimpleNetwork.c b/Silicon/Broadcom/Drivers/Net/BcmGenetDxe/SimpleNetwork.c
-index 84adf5e57..c65c003ca 100644
---- a/Silicon/Broadcom/Drivers/Net/BcmGenetDxe/SimpleNetwork.c
-+++ b/Silicon/Broadcom/Drivers/Net/BcmGenetDxe/SimpleNetwork.c
-@@ -578,7 +578,7 @@ GenetSimpleNetworkTransmit (
- 
-   if (This == NULL || Buffer == NULL) {
-     DEBUG ((DEBUG_ERROR, "%a: Invalid parameter (missing handle or buffer)\n",
--      __FUNCTION__));
-+      __func__));
-     return EFI_INVALID_PARAMETER;
-   }
- 
-@@ -603,13 +603,13 @@ GenetSimpleNetworkTransmit (
-     // grub send failure messages.
-     //
-     Retries = 1000;
--    DEBUG ((DEBUG_INFO, "%a: Waiting 10s for link\n", __FUNCTION__));
-+    DEBUG ((DEBUG_INFO, "%a: Waiting 10s for link\n", __func__));
-     do {
-       gBS->Stall (10000);
-       Status = GenericPhyUpdateConfig (&Genet->Phy);
-     } while (EFI_ERROR (Status) && Retries-- > 0);
-     if (EFI_ERROR (Status)) {
--      DEBUG ((DEBUG_ERROR, "%a: no link\n", __FUNCTION__));
-+      DEBUG ((DEBUG_ERROR, "%a: no link\n", __func__));
-       return EFI_NOT_READY;
-     } else {
-       Genet->SnpMode.MediaPresent = TRUE;
-@@ -620,32 +620,32 @@ GenetSimpleNetworkTransmit (
-     if (HeaderSize != Genet->SnpMode.MediaHeaderSize) {
-       DEBUG ((DEBUG_ERROR,
-         "%a: Invalid parameter (header size mismatch; HeaderSize 0x%X, SnpMode.MediaHeaderSize 0x%X))\n",
--        __FUNCTION__, HeaderSize, Genet->SnpMode.MediaHeaderSize));
-+        __func__, HeaderSize, Genet->SnpMode.MediaHeaderSize));
-       return EFI_INVALID_PARAMETER;
-     }
-     if (DestAddr == NULL || Protocol == NULL) {
-       DEBUG ((DEBUG_ERROR,
-         "%a: Invalid parameter (dest addr or protocol missing)\n",
--        __FUNCTION__));
-+        __func__));
-       return EFI_INVALID_PARAMETER;
-     }
-   }
- 
-   if (BufferSize < Genet->SnpMode.MediaHeaderSize) {
--    DEBUG ((DEBUG_ERROR, "%a: Buffer too small\n", __FUNCTION__));
-+    DEBUG ((DEBUG_ERROR, "%a: Buffer too small\n", __func__));
-     return EFI_BUFFER_TOO_SMALL;
-   }
- 
-   Status = EfiAcquireLockOrFail (&Genet->Lock);
-   if (EFI_ERROR (Status)) {
--    DEBUG ((DEBUG_ERROR, "%a: Couldn't get lock: %r\n", __FUNCTION__, Status));
-+    DEBUG ((DEBUG_ERROR, "%a: Couldn't get lock: %r\n", __func__, Status));
-     return EFI_ACCESS_DENIED;
-   }
- 
-   if (Genet->TxQueued == GENET_DMA_DESC_COUNT - 1) {
-     EfiReleaseLock (&Genet->Lock);
- 
--    DEBUG ((DEBUG_ERROR, "%a: Queue full\n", __FUNCTION__));
-+    DEBUG ((DEBUG_ERROR, "%a: Queue full\n", __func__));
-     return EFI_NOT_READY;
-   }
- 
-@@ -667,7 +667,7 @@ GenetSimpleNetworkTransmit (
-                    &DmaDeviceAddress,
-                    &Genet->TxBufferMap[Desc]);
-   if (EFI_ERROR (Status)) {
--    DEBUG ((DEBUG_ERROR, "%a: DmaMap failed: %r\n", __FUNCTION__, Status));
-+    DEBUG ((DEBUG_ERROR, "%a: DmaMap failed: %r\n", __func__, Status));
-     EfiReleaseLock (&Genet->Lock);
-     return Status;
-   }
-@@ -736,7 +736,7 @@ GenetSimpleNetworkReceive (
- 
-   if (This == NULL || Buffer == NULL) {
-     DEBUG ((DEBUG_ERROR, "%a: Invalid parameter (missing handle or buffer)\n",
--      __FUNCTION__));
-+      __func__));
-     return EFI_INVALID_PARAMETER;
-   }
- 
-@@ -750,7 +750,7 @@ GenetSimpleNetworkReceive (
- 
-   Status = EfiAcquireLockOrFail (&Genet->Lock);
-   if (EFI_ERROR (Status)) {
--    DEBUG ((DEBUG_ERROR, "%a: Couldn't get lock: %r\n", __FUNCTION__, Status));
-+    DEBUG ((DEBUG_ERROR, "%a: Couldn't get lock: %r\n", __func__, Status));
-     return EFI_ACCESS_DENIED;
-   }
- 
-@@ -774,7 +774,7 @@ GenetSimpleNetworkReceive (
-     if (*BufferSize < FrameLength) {
-       DEBUG ((DEBUG_ERROR,
-         "%a: Buffer size (0x%X) is too small for frame (0x%X)\n",
--        __FUNCTION__, *BufferSize, FrameLength));
-+        __func__, *BufferSize, FrameLength));
-       Status = EFI_BUFFER_TOO_SMALL;
-       goto out;
-     }
-@@ -798,14 +798,14 @@ GenetSimpleNetworkReceive (
-     Status = EFI_SUCCESS;
-   } else {
-     DEBUG ((DEBUG_ERROR, "%a: Short packet (FrameLength 0x%X)",
--      __FUNCTION__, FrameLength));
-+      __func__, FrameLength));
-     Status = EFI_NOT_READY;
-   }
- 
- out:
-   Status = GenetDmaMapRxDescriptor (Genet, DescIndex);
-   if (EFI_ERROR (Status)) {
--    DEBUG ((DEBUG_ERROR, "%a: Failed to remap RX descriptor!\n", __FUNCTION__));
-+    DEBUG ((DEBUG_ERROR, "%a: Failed to remap RX descriptor!\n", __func__));
-   }
- 
-   GenetRxComplete (Genet);

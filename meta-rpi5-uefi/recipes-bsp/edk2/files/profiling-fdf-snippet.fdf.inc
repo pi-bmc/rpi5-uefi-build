@@ -1,5 +1,5 @@
 # Dp shell command, sed-included into RPi5.fdf's FVMAIN by the
-# edk2-rpi5-firmware recipe. Mirrors profiling-dsc-snippet.inc -- see its
+# edk2 recipe. Mirrors profiling-dsc-snippet.inc -- see its
 # header for why the gate is the PROFILING_ENABLED macro rather than the
 # presence of these lines, and for what the platform already provides.
 #

@@ -41,7 +41,7 @@
 
 [PcdsFixedAtBuild]
   ## The Redfish host-interface wire contract with the BMC. The defaults here
-  #  are the contract's documented values; the edk2-rpi5-firmware recipe
+  #  are the contract's documented values; the edk2 recipe
   #  overrides the MAC and the credentials from its own knobs.
   gRpiRedfishTokenSpaceGuid.PcdRpiRedfishGadgetMac|{0xDA, 0xC0, 0xFF, 0xEE, 0x10, 0x02}|VOID*|0x00000001
 

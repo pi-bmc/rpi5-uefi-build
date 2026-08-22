@@ -14,7 +14,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SHELL_EFI="${REPO_ROOT}/build/tmp/work/cortexa76-poky-linux-musl/edk2-rpi5-firmware/202405+git/Build/RPi5/DEBUG_GCC/AARCH64/Shell.efi"
+SHELL_EFI="${REPO_ROOT}/build/tmp/work/cortexa76-poky-linux-musl/edk2/202608/Build/RPi5/DEBUG_GCC/AARCH64/Shell.efi"
 CONNECTION="nanokvm-share"
 TFTP_ROOT="/srv/tftp"
 CONF="/etc/NetworkManager/dnsmasq-shared.d/pxe.conf"

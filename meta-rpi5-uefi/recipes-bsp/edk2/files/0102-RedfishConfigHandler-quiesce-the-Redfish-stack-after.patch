@@ -58,11 +58,9 @@ covered.
 Upstream-Status: Submittable [generic RedfishPkg lifecycle fix]
 Signed-off-by: appkins <nbatkins@gmail.com>
 ---
-diff --git a/RedfishPkg/RedfishConfigHandler/RedfishConfigHandlerCommon.c b/RedfishPkg/RedfishConfigHandler/RedfishConfigHandlerCommon.c
-index f6c8c3d..6f79693 100644
 --- a/RedfishPkg/RedfishConfigHandler/RedfishConfigHandlerCommon.c
 +++ b/RedfishPkg/RedfishConfigHandler/RedfishConfigHandlerCommon.c
-@@ -16,6 +16,25 @@ REDFISH_CONFIG_DRIVER_DATA  gRedfishConfigData;     // Only one Redfish service
+@@ -17,6 +17,25 @@
  EFI_EVENT                          gEndOfDxeEvent        = NULL;
  EFI_EVENT                          gExitBootServiceEvent = NULL;
  EDKII_REDFISH_CREDENTIAL_PROTOCOL  *gCredential          = NULL;
@@ -88,11 +86,10 @@ index f6c8c3d..6f79693 100644
  
  /**
    Callback function executed when the EndOfDxe event group is signaled.
-@@ -45,6 +64,125 @@ RedfishConfigOnEndOfDxe (
-   gEndOfDxeEvent = NULL;
+@@ -59,6 +78,125 @@
  }
  
-+/**
+ /**
 +  Stop every registered Redfish config handler while the network stack that
 +  carries their Redfish services is still fully connected, and latch
 +  gRedfishConfigQuiesced so discovery and configuration cannot restart.
@@ -211,12 +208,13 @@ index f6c8c3d..6f79693 100644
 +  RedfishConfigQuiesce ("ReadyToBoot");
 +}
 +
- /**
++/**
    Callback function executed when the ExitBootService event group is signaled.
  
-@@ -61,6 +199,14 @@ RedfishConfigOnExitBootService (
- {
-   EFI_STATUS  Status;
+   @param[in]   Event    Event whose notification function is being invoked.
+@@ -86,6 +224,14 @@
+     }
+   }
  
 +  //
 +  // Backstop for a platform whose feature core never reached its
@@ -229,7 +227,7 @@ index f6c8c3d..6f79693 100644
    Status = gCredential->StopService (gCredential, ServiceStopTypeExitBootService);
    if (EFI_ERROR (Status) && (Status != EFI_UNSUPPORTED)) {
      DEBUG ((DEBUG_ERROR, "Redfish credential protocol failed to stop service on ExitBootService: %r", Status));
-@@ -90,6 +236,16 @@ RedfishConfigDriverCommonUnload (
+@@ -115,6 +261,16 @@
      gExitBootServiceEvent = NULL;
    }
  
@@ -246,7 +244,7 @@ index f6c8c3d..6f79693 100644
    if (gRedfishConfigData.Event != NULL) {
      gBS->CloseEvent (gRedfishConfigData.Event);
      gRedfishConfigData.Event = NULL;
-@@ -160,6 +316,51 @@ RedfishConfigCommonInit (
+@@ -171,6 +327,51 @@
      return Status;
    }
  
@@ -298,11 +296,9 @@ index f6c8c3d..6f79693 100644
    return EFI_SUCCESS;
  }
  
-diff --git a/RedfishPkg/RedfishConfigHandler/RedfishConfigHandlerCommon.h b/RedfishPkg/RedfishConfigHandler/RedfishConfigHandlerCommon.h
-index 203b394..11e0d3c 100644
 --- a/RedfishPkg/RedfishConfigHandler/RedfishConfigHandlerCommon.h
 +++ b/RedfishPkg/RedfishConfigHandler/RedfishConfigHandlerCommon.h
-@@ -46,6 +46,17 @@ typedef struct {
+@@ -47,6 +47,17 @@
    REDFISH_CONFIG_SERVICE_INFORMATION    RedfishServiceInfo; /// Redfish Service information discovered
  } REDFISH_CONFIG_DRIVER_DATA;
  
@@ -320,11 +316,9 @@ index 203b394..11e0d3c 100644
  /**
    Common code of unloading image for both UEFI/DXE Redfish Configuration drivers.
  
-diff --git a/RedfishPkg/RedfishConfigHandler/RedfishConfigHandlerDriver.c b/RedfishPkg/RedfishConfigHandler/RedfishConfigHandlerDriver.c
-index d6498b5..3b166a8 100644
 --- a/RedfishPkg/RedfishConfigHandler/RedfishConfigHandlerDriver.c
 +++ b/RedfishPkg/RedfishConfigHandler/RedfishConfigHandlerDriver.c
-@@ -77,6 +77,14 @@ RedfishConfigHandlerInstalledCallback (
+@@ -115,6 +115,14 @@
    IN VOID       *Context
    )
  {
@@ -339,7 +333,7 @@ index d6498b5..3b166a8 100644
    if (!gRedfishDiscoverActivated) {
      //
      // No Redfish service is discovered yet.
-@@ -313,9 +321,11 @@ RedfishServiceDiscoveredCallback (
+@@ -367,9 +375,11 @@
    gBS->CloseEvent (RedfishDiscoveredToken->Event);
  
    //
@@ -351,9 +345,9 @@ index d6498b5..3b166a8 100644
 -  if (!gRedfishServiceDiscovered) {
 +  if (!gRedfishConfigQuiesced && !gRedfishServiceDiscovered) {
      RedfishInstance = RedfishDiscoveredToken->DiscoverList.RedfishInstances;
-     //
-     // Only pick up the first found Redfish service.
-@@ -363,6 +373,13 @@ AcquireRedfishServiceOnNetworkInterfaceCallback (
+ 
+     // Save EFI_REDFISH_DISCOVERED_LIST for the later release.
+@@ -446,6 +456,13 @@
    UINTN                                   NetworkInterfaceIndex;
    EFI_REDFISH_DISCOVERED_TOKEN            *ThisRedfishDiscoveredToken;
  
@@ -367,7 +361,7 @@ index d6498b5..3b166a8 100644
    ThisNetworkInterface = mNetworkInterfaces;
    //
    // Loop to discover Redfish service on each network interface.
-@@ -440,6 +457,16 @@ RedfishDiscoverProtocolInstalled (
+@@ -523,6 +540,16 @@
    EFI_HANDLE  HandleBuffer;
    VOID        *RedfishHostInterfaceReadyProtocol;
  

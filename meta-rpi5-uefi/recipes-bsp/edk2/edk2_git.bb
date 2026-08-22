@@ -37,12 +37,12 @@ DEPENDS += "${@bb.utils.contains('RPI5_SECURE_BOOT_DEFAULT_KEYS', '1', 'openssl-
 # needs openssl for its own reasons.
 DEPENDS += "openssl-native"
 
-PV = "202602+git${SRCPV}"
+PV = "202608"
 
 # Patch order matters and follows SRC_URI order. Every patch listed here
 # applies to the edk2 tree: 0001-EDK2-Sd-Mmc-v4 (the former fork's only
-# commit), then 0100 (UsbNetwork point-to-point media), 0101 (skip the IPv6
-# discovery leg), 0102 (quiesce the Redfish stack after provisioning -- the
+# commit), then 0100 (UsbNetwork point-to-point media), 0102 (quiesce the
+# Redfish stack after provisioning -- the
 # in-Setup gadget-detach use-after-free; NOT at ReadyToBoot, which races the
 # client feature core and kills provisioning outright), 0103 (keep USB NICs out
 # of BDS boot-option enumeration) and 0104 (RELEASE-build JsonLib fix).
@@ -55,7 +55,6 @@ SRC_URI = "gitsm://github.com/tianocore/edk2.git;protocol=https;branch=master;de
            file://config.txt \
            file://0001-EDK2-Sd-Mmc-v4.patch \
            file://0100-UsbNetwork-assume-media-on-a-point-to-point-gadget.patch \
-           file://0101-RedfishDiscoverDxe-skip-the-IPv6-discovery-leg.patch \
            file://0102-RedfishConfigHandler-quiesce-the-Redfish-stack-after.patch \
            file://0103-UefiBootManagerLib-do-not-enumerate-USB-NICs-as-boot.patch \
            file://0104-JsonLib-fix-RELEASE-build-of-lex_unget_unsave.patch \
@@ -122,15 +121,19 @@ SRC_URI[msdbwin2011.sha256sum] = "e8e95f0733a55e8bad7be0a1413ee23c51fcea64b3c8fa
 SRC_URI[msdbuefi2011.sha256sum] = "48e99b991f57fc52f76149599bff0a58c47154229b9f8d603ac40d3500248507"
 SRC_URI[msdbwin2023.sha256sum] = "076f1fea90ac29155ebf77c17682f75f1fdd1be196da302dc8461e350a9ae330"
 SRC_URI[msdbuefi2023.sha256sum] = "f6124e34125bee3fe6d79a574eaa7b91c0e7bd9d929c1a321178efd611dad901"
-# Upstream pin chosen for byte-parity with the retired NumberOneGit fork
-# (audited 2026-08-17 with git merge-base + reconstruction diffs): the fork was
-# upstream master @ this exact commit plus ONE commit -- the SD fixup now
-# carried as 0001-EDK2-Sd-Mmc-v4.patch.
+# edk2-stable202608, the August 2026 quarterly release tag. A release tag
+# rather than a master commit: the tree is the one upstream tested and tagged,
+# and the pin reads as a version rather than as a SHA nobody can date.
 #
-# It is also one half of a compatibility pair with edk2-redfish-client's
-# SRCREV: that recipe's header documents the window this edk2's RedfishPkg
-# defines, so bump the two together or not at all.
-SRCREV = "c4d29cb62187060493a1f595083ddfb6dd346f39"
+# This replaced a master pin (c4d29cb6, 2026-03-26) that had been chosen for
+# byte-parity with the retired NumberOneGit fork -- the fork was that commit
+# plus one, the SD fixup carried here as 0001-EDK2-Sd-Mmc-v4.patch. That parity
+# argument retired with the fork; there is nothing left to be byte-identical to.
+#
+# It remains one half of a compatibility pair with edk2-redfish-client's
+# SRCREV -- the client is built against THIS tree's RedfishPkg -- so read that
+# recipe's header before moving either.
+SRCREV = "2970e5699ba6267f3384ffab20f96647578aebc8"
 
 # UNPACKDIR only exists from styhead (Yocto 5.1) on; scarthgap unpacks
 # straight into WORKDIR. Without this shim, S = "${UNPACKDIR}/git" never
@@ -554,7 +557,7 @@ do_compile() {
         bbfatal "RPI5_REDFISH_MAC '${RPI5_REDFISH_MAC}' is not a 6-octet MAC"
     mac_bytes=$(printf '%s' "${mac_plain}" | sed 's/../0x&, /g; s/, $//')
 
-    redfish_marker='# Redfish wire contract, appended by the edk2-rpi5-firmware recipe.'
+    redfish_marker='# Redfish wire contract, appended by the edk2 recipe.'
     grep -qF "${redfish_marker}" "${dsc}" || {
         printf '\n#\n%s\n#\n[PcdsFixedAtBuild.common]\n' "${redfish_marker}" >> "${dsc}"
         printf '  gRpiRedfishTokenSpaceGuid.PcdRpiRedfishGadgetMac|{%s}\n' "${mac_bytes}" >> "${dsc}"
@@ -603,7 +606,7 @@ do_compile() {
     # tree and skips the append entirely -- producing firmware whose
     # certificate buffer is empty, which is to say firmware that accepts
     # no capsule ever, with nothing said about it at build time.
-    cert_marker='# Capsule signing certificate, appended by the edk2-rpi5-firmware recipe.'
+    cert_marker='# Capsule signing certificate, appended by the edk2 recipe.'
     grep -qF "${cert_marker}" "${dsc}" || {
         printf '\n#\n%s\n# FmpDxe authenticates every capsule payload against it.\n#\n[PcdsFixedAtBuild.common]\n' "${cert_marker}" >> "${dsc}"
         cat "${cert_pcd}" >> "${dsc}"
