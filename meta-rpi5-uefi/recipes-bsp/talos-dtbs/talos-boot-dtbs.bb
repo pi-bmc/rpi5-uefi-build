@@ -146,6 +146,22 @@ do_compile() {
         # FdtDxe's by-uname lookup.
         if [ "${tag}" = "${TALOS_KERNEL_TAG}" ]; then
             cp ${B}/dtbs/by-uname/${release}/*.dtb ${B}/dtbs/
+
+            # The VPU bootloader picks the tree by board AND SoC stepping, and
+            # it asks for Raspberry Pi's downstream filenames. The two naming
+            # schemes disagree for D0 silicon: mainline -- and therefore Talos
+            # -- calls that tree bcm2712-d-rpi-5-b, while the firmware release
+            # calls the same silicon bcm2712d0-rpi-5-b (its bcm2712-d-rpi-5-b
+            # is a different tree again, with no main d0 pinctrl node).
+            #
+            # A D0 board asks for bcm2712d0-rpi-5-b.dtb, does not find it on
+            # this card and falls back to bcm2712-rpi-5-b.dtb -- a C0 tree on
+            # D0 silicon. It boots, which is what makes this hard to notice,
+            # but every pinctrl offset in it is wrong. Ship the D0 tree under
+            # both names so the fallback never happens.
+            if [ -f ${B}/dtbs/bcm2712-d-rpi-5-b.dtb ]; then
+                cp ${B}/dtbs/bcm2712-d-rpi-5-b.dtb ${B}/dtbs/bcm2712d0-rpi-5-b.dtb
+            fi
         fi
     done
 

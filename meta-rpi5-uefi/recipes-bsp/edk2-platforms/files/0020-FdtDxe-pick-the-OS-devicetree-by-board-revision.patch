@@ -1,0 +1,376 @@
+From: meta-rpi5-uefi <nbatkins@gmail.com>
+Subject: [PATCH] FdtDxe: pick the OS devicetree by board revision
+
+0017 taught FdtDxe to load the OS's own devicetree off a filesystem, but at
+one fixed leaf name -- bcm2712-rpi-5-b.dtb -- on the grounds that guessing
+between the Pi 5 variants meant reimplementing the VPU bootloader's
+model-to-filename mapping. That reasoning was about the wrong mapping. We are
+not naming a tree for the bootloader to find; we are choosing between trees
+somebody already laid down, in mainline's naming, which is a table U-Boot has
+carried for years and which this SoC family has exactly one interesting row
+in.
+
+Raspberry Pi 5 rev 1.1 is BCM2712 D0, and D0's pinctrl register offsets are
+not C0's. Mainline calls that tree bcm2712-d-rpi-5-b.dtb. Asking for
+bcm2712-rpi-5-b.dtb on a D0 board hands the OS a C0 tree, which boots -- that
+is what makes it hard to notice -- with every pinctrl offset wrong. The same
+failure the talos-boot-dtbs recipe already goes out of its way to keep the VPU
+bootloader out of, arriving instead through FdtDxe. That recipe deploys both
+trees under by-uname/<release>/, so on the cards this firmware ships the right
+one is already sitting next to the wrong one; nothing was asking for it.
+
+BoardRevisionHelperLib gains BoardRevisionGetFdtName(), a sibling of
+BoardRevisionGetModelName() driven off the same RPI_TYPE switch and carrying
+the same models. Where a model needs more than one tree it gets a list indexed
+by the revision nibble with entry 0 as the default, which is U-Boot's
+rpi_models_new_scheme[] FDTFILES() shape and set_fdtfile()'s lookup, one for
+one. Unlike its neighbours it declines old-scheme revision codes rather than
+misdecoding them: those functions produce display strings, this one produces a
+file name that gets loaded.
+
+FdtDxe then tries the board's tree first and the old fixed name second, under
+both the keyed \dtb\<kernel release>\ and unkeyed \dtb\ directories. The
+fallback keeps installs made against 0017 booting; taking it is the
+wrong-silicon case above, so it logs a warning rather than substituting
+quietly. On a rev 1.0 board both names are the same and only one lookup
+happens.
+
+Both files are upstream, which is why this is a patch rather than part of the
+overlay.
+
+Signed-off-by: meta-rpi5-uefi <nbatkins@gmail.com>
+---
+diff -urN a/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.c b/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.c
+--- a/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.c
++++ b/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.c
+@@ -97,8 +97,8 @@
+ //
+ // Two shapes are looked for:
+ //
+-//   \dtb\<kernel release>\bcm2712-rpi-5-b.dtb   -- keyed to one kernel
+-//   \dtb\bcm2712-rpi-5-b.dtb                    -- whatever boots
++//   \dtb\<kernel release>\<tree>   -- keyed to one kernel
++//   \dtb\<tree>                    -- whatever boots
+ //
+ // The keyed form is there because "the tree that matches the kernel" stops
+ // being a single answer on a machine that keeps two kernels around. An A/B
+@@ -110,16 +110,34 @@
+ // `uname -r` string such as "6.18.44-talos", so the two are paired by
+ // construction rather than by an installer remembering to keep them in step.
+ //
+-// One fixed leaf name, deliberately. Guessing between the Pi 5 variants
+-// (bcm2712-rpi-5-b / bcm2712d0-rpi-5-b / bcm2712-d-rpi-5-b) from a board
+-// revision would put us in the business of reimplementing the VPU
+-// bootloader's model-to-filename mapping, and getting it wrong hands the OS a
+-// tree for different silicon. Placing the right file is the installer's job,
+-// exactly as it is for config.txt's device_tree=.
+-//
+-#define FDT_OS_LEAF      L"bcm2712-rpi-5-b.dtb"
+-#define FDT_OS_PATH      L"\\dtb\\" FDT_OS_LEAF
+-#define FDT_OS_PATH_FMT  L"\\dtb\\%a\\" FDT_OS_LEAF
++// <tree> is the board's, not a constant. BoardRevisionGetFdtName() maps the
++// revision code to the tree that board wants, off the same table U-Boot
++// drives its `fdtfile` from (board/raspberrypi/rpi/rpi.c: rpi_model.fdtfiles,
++// indexed by the revision nibble in set_fdtfile()). The Pi 5 needs it: rev
++// 1.1 is D0 silicon, whose pinctrl register offsets are not C0's, and
++// mainline calls that tree bcm2712-d-rpi-5-b. Asking for one fixed name hands
++// a D0 board the C0 tree, which boots -- that is what makes it hard to notice
++// -- and is wrong.
++//
++// Names are mainline's, matching what an OS installs next to its kernel. The
++// VPU bootloader's own naming is a separate scheme (it calls the D0 tree
++// bcm2712d0-rpi-5-b) and is not reimplemented here; this is only ever
++// choosing between files somebody else laid down.
++//
++// FDT_OS_LEAF_FALLBACK is tried after the board's own name so an install made
++// while this did ask for one fixed name still boots. Taking it means running
++// a C0 tree on D0 silicon, so it is a warning rather than a quiet
++// substitution.
++//
++#define FDT_OS_LEAF_FALLBACK   "bcm2712-rpi-5-b.dtb"
++#define FDT_OS_PATH_FMT        L"\\dtb\\%a"
++#define FDT_OS_PATH_FMT_UNAME  L"\\dtb\\%a\\%a"
++
++//
++// Longest tree name we will build a path out of. The table's longest today is
++// 26 characters (bcm2712-rpi-cm5l-cm5io.dtb).
++//
++#define FDT_OS_LEAF_MAX  32
+ 
+ //
+ // Longest kernel release we will build a path out of. Linux caps its own
+@@ -832,6 +850,79 @@
+ }
+ 
+ /**
++  Look for the device trees this board can boot, under one directory, and stop
++  at the first that loads.
++
++  The board's own tree is tried first and the model default second; on a Pi 5
++  rev 1.0 those are the same name and only one lookup happens.
++
++  @param  Uname[in]  Kernel release to key the directory on, or NULL for the
++                     unkeyed \dtb\ directory.
++
++  @retval EFI_SUCCESS  A tree was loaded, fixed up and installed.
++  @retval other        No volume carries any of the names.
++
++**/
++STATIC
++EFI_STATUS
++LoadFdtForBoard (
++  IN CONST CHAR8  *Uname   OPTIONAL
++  )
++{
++  CONST CHAR8  *Names[2];
++  UINTN        Count;
++  UINTN        Index;
++  CHAR16       Path[FDT_OS_UNAME_MAX + FDT_OS_LEAF_MAX + 8];
++  EFI_STATUS   Status;
++
++  Count = 0;
++
++  Names[Count] = BoardRevisionGetFdtName (mBoardRevision);
++  if (Names[Count] != NULL) {
++    Count++;
++  }
++
++  //
++  // Only a second entry if it would say something different: an unreadable
++  // revision code leaves the fallback as the sole candidate, which is the
++  // behaviour this had before it could tell the boards apart.
++  //
++  if ((Count == 0) || (AsciiStrCmp (Names[0], FDT_OS_LEAF_FALLBACK) != 0)) {
++    Names[Count] = FDT_OS_LEAF_FALLBACK;
++    Count++;
++  }
++
++  Status = EFI_NOT_FOUND;
++
++  for (Index = 0; Index < Count; Index++) {
++    if (Uname != NULL) {
++      UnicodeSPrint (Path, sizeof (Path), FDT_OS_PATH_FMT_UNAME, Uname, Names[Index]);
++    } else {
++      UnicodeSPrint (Path, sizeof (Path), FDT_OS_PATH_FMT, Names[Index]);
++    }
++
++    Status = LoadFdtByPath (Path);
++    if (!EFI_ERROR (Status)) {
++      if (Index > 0) {
++        DEBUG ((
++          DEBUG_WARN,
++          "%a: board revision 0x%x wants '%a', which is not installed; "
++          "booting '%s' instead -- expect the wrong pinctrl offsets\n",
++          __func__,
++          mBoardRevision,
++          Names[0],
++          Path
++          ));
++      }
++
++      break;
++    }
++  }
++
++  return Status;
++}
++
++/**
+   At ReadyToBoot, prefer a device tree the OS installed over the one the VPU
+   bootloader loaded.
+ 
+@@ -853,7 +944,7 @@
+   IN VOID       *Context
+   )
+ {
+-  LoadFdtByPath (FDT_OS_PATH);
++  LoadFdtForBoard (NULL);
+ }
+ 
+ /**
+@@ -1056,7 +1147,6 @@
+   EFI_HANDLE                 Handle;
+   UINTN                      BufferSize;
+   CHAR8                      Uname[FDT_OS_UNAME_MAX + 1];
+-  CHAR16                     Path[FDT_OS_UNAME_MAX + 32];
+ 
+   while (TRUE) {
+     BufferSize = sizeof (Handle);
+@@ -1099,15 +1189,13 @@
+     //
+     mOsFdtMatched = TRUE;
+ 
+-    UnicodeSPrint (Path, sizeof (Path), FDT_OS_PATH_FMT, Uname);
+-
+-    Status = LoadFdtByPath (Path);
++    Status = LoadFdtForBoard (Uname);
+     DEBUG ((
+       DEBUG_INFO,
+-      "%a: booting %a: '%s': %r\n",
++      "%a: booting %a: '\\dtb\\%a\\': %r\n",
+       __func__,
+       Uname,
+-      Path,
++      Uname,
+       Status
+       ));
+   }
+diff -urN a/Platform/RaspberryPi/Include/Library/BoardRevisionHelperLib.h b/Platform/RaspberryPi/Include/Library/BoardRevisionHelperLib.h
+--- a/Platform/RaspberryPi/Include/Library/BoardRevisionHelperLib.h
++++ b/Platform/RaspberryPi/Include/Library/BoardRevisionHelperLib.h
+@@ -29,6 +29,12 @@
+ 
+ CHAR8 *
+ EFIAPI
++BoardRevisionGetFdtName (
++  IN  UINT32  RevisionCode
++  );
++
++CHAR8 *
++EFIAPI
+ BoardRevisionGetManufacturerName (
+   IN  UINT32  RevisionCode
+   );
+diff -urN a/Platform/RaspberryPi/Library/BoardRevisionHelperLib/BoardRevisionHelperLib.c b/Platform/RaspberryPi/Library/BoardRevisionHelperLib/BoardRevisionHelperLib.c
+--- a/Platform/RaspberryPi/Library/BoardRevisionHelperLib/BoardRevisionHelperLib.c
++++ b/Platform/RaspberryPi/Library/BoardRevisionHelperLib/BoardRevisionHelperLib.c
+@@ -16,6 +16,7 @@
+ #define RPI_MANUFACTURER(Rev)     ((Rev >> 16) & 0x0F)
+ #define RPI_PROCESSOR(Rev)        ((Rev >> 12) & 0x0F)
+ #define RPI_TYPE(Rev)             ((Rev >> 4) & 0xFF)
++#define RPI_REVISION(Rev)         (Rev & 0x0F)
+ 
+ UINT64
+ EFIAPI
+@@ -120,6 +121,131 @@
+   return "Unknown Raspberry Pi Model";
+ }
+ 
++//
++// Device tree file names, spelled the way mainline Linux spells them
++// (arch/arm64/boot/dts/broadcom), because that is the name an OS installer
++// has next to its kernel. The Raspberry Pi firmware's own tree names differ
++// for some variants -- it calls the Pi 5 D0 tree bcm2712d0-rpi-5-b -- and are
++// deliberately not what this returns.
++//
++// A model that needs more than one tree gets a list indexed by the board
++// revision nibble, exactly as U-Boot's rpi_models_new_scheme[] FDTFILES()
++// lists are (board/raspberrypi/rpi/rpi.c): entry 0 is the model default, and
++// a revision past the end of the list falls back to it.
++//
++STATIC CONST CHAR8 *CONST  mFdtNamesRpi5B[] = {
++  "bcm2712-rpi-5-b.dtb",       // rev 1.0 -- BCM2712 C0
++  "bcm2712-d-rpi-5-b.dtb"      // rev 1.1 -- BCM2712 D0
++};
++
++/**
++  Pick one entry out of a revision-indexed device tree list.
++
++  @param  Names         The list, model default first.
++  @param  Count         How many entries it has.
++  @param  RevisionCode  The board's revision code.
++
++  @return  The name for this board revision, or the model default if the list
++           does not reach that far.
++
++**/
++STATIC
++CHAR8 *
++FdtNameByRevision (
++  IN  CONST CHAR8 *CONST  *Names,
++  IN  UINTN               Count,
++  IN  UINT32              RevisionCode
++  )
++{
++  UINTN  Revision;
++
++  Revision = RPI_REVISION (RevisionCode);
++  if (Revision >= Count) {
++    Revision = 0;
++  }
++
++  return (CHAR8 *) Names[Revision];
++}
++
++/**
++  The device tree this board wants, as a bare file name.
++
++  @param  RevisionCode  The board's revision code.
++
++  @return  A static string, or NULL if the code names no board we know a tree
++           for. The caller owns nothing.
++
++**/
++CHAR8 *
++EFIAPI
++BoardRevisionGetFdtName (
++  IN  UINT32  RevisionCode
++  )
++{
++  //
++  // Old-scheme codes (bit 23 clear) hold the type in the low byte and index a
++  // different table entirely -- original Pi 1 boards, which no platform here
++  // builds for. Decline them rather than decode them as new-scheme and name a
++  // tree for the wrong board. The functions either side of this one are only
++  // producing display strings and can afford to be loose about it; a file
++  // name gets loaded.
++  //
++  if ((RevisionCode == 0) || ((RevisionCode & BIT23) == 0)) {
++    return NULL;
++  }
++
++  switch (RPI_TYPE (RevisionCode)) {
++    case 0x00:
++      return "bcm2835-rpi-a.dtb";
++    case 0x01:
++      return "bcm2835-rpi-b.dtb";
++    case 0x02:
++      return "bcm2835-rpi-a-plus.dtb";
++    case 0x03:
++      return "bcm2835-rpi-b-plus.dtb";
++    case 0x04:
++      return "bcm2836-rpi-2-b.dtb";
++    case 0x06:
++      return "bcm2835-rpi-cm.dtb";
++    case 0x08:
++      return "bcm2837-rpi-3-b.dtb";
++    case 0x09:
++      return "bcm2835-rpi-zero.dtb";
++    case 0x0A:
++      return "bcm2837-rpi-cm3.dtb";
++    case 0x0C:
++      return "bcm2835-rpi-zero-w.dtb";
++    case 0x0D:
++      return "bcm2837-rpi-3-b-plus.dtb";
++    case 0x0E:
++      return "bcm2837-rpi-3-a-plus.dtb";
++    case 0x10:
++      return "bcm2837-rpi-cm3.dtb";
++    case 0x11:
++      return "bcm2711-rpi-4-b.dtb";
++    case 0x12:
++      return "bcm2837-rpi-zero-2-w.dtb";
++    case 0x13:
++      return "bcm2711-rpi-400.dtb";
++    case 0x14:
++      return "bcm2711-rpi-cm4.dtb";
++    case 0x17:
++      return FdtNameByRevision (
++               mFdtNamesRpi5B,
++               ARRAY_SIZE (mFdtNamesRpi5B),
++               RevisionCode
++               );
++    case 0x18:
++      return "bcm2712-rpi-cm5-cm5io.dtb";
++    case 0x19:
++      return "bcm2712-rpi-500.dtb";
++    case 0x1A:
++      return "bcm2712-rpi-cm5l-cm5io.dtb";
++  }
++
++  return NULL;
++}
++
+ CHAR8 *
+ EFIAPI
+ BoardRevisionGetManufacturerName (

@@ -86,12 +86,21 @@ PV = "202608+git${SRCPV}"
 #   The firmware's own tree stays installed as a fallback for anything that
 #   brings none. Paired with 0014: in ACPI mode FdtDxe never runs at all.
 #
-#   0017 completes that: at ReadyToBoot, FdtDxe looks for
-#   \dtb\bcm2712-rpi-5-b.dtb on any attached filesystem and hands THAT to the
-#   OS. The device tree then lives with the OS install rather than on the
-#   firmware's card, so one firmware image boots any kernel and changing OS
-#   never means reflashing the board. The SD-card tree (see talos-boot-dtbs)
-#   stays as the fallback for an OS that ships none.
+#   0017 completes that: at ReadyToBoot, FdtDxe looks for a tree under \dtb\
+#   on any attached filesystem and hands THAT to the OS. The device tree then
+#   lives with the OS install rather than on the firmware's card, so one
+#   firmware image boots any kernel and changing OS never means reflashing the
+#   board. The SD-card tree (see talos-boot-dtbs) stays as the fallback for an
+#   OS that ships none.
+#
+#   0020 tells it WHICH tree, off the board revision code rather than one
+#   fixed name: Pi 5 rev 1.1 is BCM2712 D0, whose pinctrl offsets are not
+#   C0's, and mainline calls that tree bcm2712-d-rpi-5-b.dtb. Same table
+#   u-boot drives its `fdtfile` from (board/raspberrypi/rpi/rpi.c), added to
+#   BoardRevisionHelperLib beside BoardRevisionGetModelName. talos-boot-dtbs
+#   already deploys both trees under by-uname/<release>/ -- until this, the D0
+#   one was sitting there unasked-for while D0 boards booted the C0 tree.
+#   Depends on 0017, which is where the lookup lives.
 #
 #   0016 clears the RP1 MSIX_CFG routing 0001 arms for the two xHCIs, at
 #   ExitBootServices. Linux's drivers/misc/rp1/rp1_pci.c owns those same
@@ -140,6 +149,7 @@ SRC_URI = "git://github.com/tianocore/edk2-platforms.git;protocol=https;branch=m
            file://0017-FdtDxe-load-the-OS-provided-device-tree-from-its-own-.patch \
            file://0018-RPi5-enable-FMP-capsule-processing.patch \
            file://0019-RaspberryPi-declare-the-Secure-Boot-toggle-formset-GU.patch \
+           file://0020-FdtDxe-pick-the-OS-devicetree-by-board-revision.patch \
            "
 
 # Upstream master, 2026-08-21. Moved here from the retired NumberOneGit fork's

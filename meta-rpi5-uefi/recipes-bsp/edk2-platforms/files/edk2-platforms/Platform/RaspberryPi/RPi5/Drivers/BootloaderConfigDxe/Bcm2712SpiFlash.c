@@ -71,6 +71,31 @@
 #define FLASH_CMD_READ    0x03
 
 //
+// Fixed BCM2712 addresses for the boot SPI path, used only when the live
+// device tree does not describe it. Both are SoC constants, not board
+// wiring: spi10 and the main (non-AON) GIO block sit at the same place on
+// every BCM2712, and the soc "ranges" that translate them
+// (<0x0 0x10 0x0 0x80000000>) are equally fixed. The chip select is
+// board wiring, but the 2712_BOOT_CS_N line is GPIO1 active-low on every
+// Pi 5 / CM5 variant Raspberry Pi has shipped.
+//
+// This matters because the tree at device_tree_address is whichever
+// bcm2712-rpi-5-b.dtb sits at the root of the boot partition, and this
+// image deliberately ships the one built from the Talos kernel rather than
+// the Raspberry Pi firmware release (see recipes-bsp/images/rpi5-uefi-sdimg.bb).
+// Mainline's bcm2712.dtsi has no boot-SPI node at all -- the downstream
+// Raspberry Pi DTS is the only one that describes spi10 -- so without this
+// fallback the EEPROM update path fails on a card that is otherwise
+// working. Of every node this firmware looks up, spi10 is the only one
+// mainline omits; pinctrl, the GIO blocks, blconfig and gpio-keys are all
+// present in both trees, so the DTB stays authoritative everywhere else
+// and for all of these fields whenever it does describe them.
+//
+#define BCM2712_BOOT_SPI_BASE     0x107d004000ULL
+#define BCM2712_BOOT_CS_GIO_BASE  0x107d508500ULL
+#define BCM2712_BOOT_CS_PIN       1
+
+//
 // vc_spi0 fsel values for soc GPIO1 (CS, kept at fsel 0 = gpio),
 // GPIO2 (MISO), GPIO3 (MOSI), GPIO4 (SCLK). All four mux fields live in
 // the first pinctrl register on both steppings; 4-bit fields, one nibble
@@ -113,41 +138,50 @@ Bcm2712BootSpiLocate (
   // The soc SPI controller in front of the boot flash is the only
   // "brcm,bcm2835-spi" node in the VPU DTB (the RP1's SPIs are PL022s).
   //
+  Spi->SpiBase    = BCM2712_BOOT_SPI_BASE;
+  Spi->CsBankBase = BCM2712_BOOT_CS_GIO_BASE + (BCM2712_BOOT_CS_PIN / 32) * GIO_BANK_SIZE;
+  Spi->CsMask     = 1U << (BCM2712_BOOT_CS_PIN % 32);
+  Spi->CsPin      = BCM2712_BOOT_CS_PIN;
+  Spi->CsActiveLow = TRUE;
+
   Node = FdtNodeOffsetByCompatible (Fdt, -1, "brcm,bcm2835-spi");
   if (Node < 0) {
-    DEBUG ((DEBUG_WARN, "BootloaderConfig: no bcm2835-spi node\n"));
-    return EFI_NOT_FOUND;
+    //
+    // Mainline-derived tree: no boot-SPI node to read. Keep the constants
+    // above rather than failing -- see their comment.
+    //
+    DEBUG ((
+      DEBUG_WARN,
+      "BootloaderConfig: no bcm2835-spi node, using fixed BCM2712 addresses\n"
+      ));
+  } else if (!BlGetTranslatedRegAddress (Fdt, Node, &Address, &Size)) {
+    DEBUG ((DEBUG_WARN, "BootloaderConfig: spi10 reg untranslatable\n"));
+  } else {
+    Spi->SpiBase = Address;
+
+    //
+    // Only override the chip select when the node actually describes one;
+    // a node without cs-gpios leaves the board wiring above in place.
+    //
+    Prop = FdtGetProp (Fdt, Node, "cs-gpios", &Length);
+    if ((Prop == NULL) || (Length < 3 * (INT32)sizeof (UINT32))) {
+      DEBUG ((DEBUG_WARN, "BootloaderConfig: spi10 has no cs-gpios\n"));
+    } else {
+      Phandle = Fdt32ToCpu (Prop[0]);
+      Pin     = Fdt32ToCpu (Prop[1]);
+      Flags   = Fdt32ToCpu (Prop[2]);
+
+      GpioNode = FdtNodeOffsetByPhandle (Fdt, Phandle);
+      if ((GpioNode >= 0) && BlGetTranslatedRegAddress (Fdt, GpioNode, &Address, &Size)) {
+        Spi->CsBankBase  = Address + (Pin / 32) * GIO_BANK_SIZE;
+        Spi->CsMask      = 1U << (Pin % 32);
+        Spi->CsPin       = Pin;
+        Spi->CsActiveLow = (BOOLEAN)((Flags & GPIO_ACTIVE_LOW_FLAG) != 0);
+      } else {
+        DEBUG ((DEBUG_WARN, "BootloaderConfig: spi10 cs-gpios unresolvable\n"));
+      }
+    }
   }
-
-  if (!BlGetTranslatedRegAddress (Fdt, Node, &Address, &Size)) {
-    return EFI_NOT_FOUND;
-  }
-
-  Spi->SpiBase = Address;
-
-  Prop = FdtGetProp (Fdt, Node, "cs-gpios", &Length);
-  if ((Prop == NULL) || (Length < 3 * (INT32)sizeof (UINT32))) {
-    DEBUG ((DEBUG_WARN, "BootloaderConfig: spi10 has no cs-gpios\n"));
-    return EFI_NOT_FOUND;
-  }
-
-  Phandle = Fdt32ToCpu (Prop[0]);
-  Pin     = Fdt32ToCpu (Prop[1]);
-  Flags   = Fdt32ToCpu (Prop[2]);
-
-  GpioNode = FdtNodeOffsetByPhandle (Fdt, Phandle);
-  if (GpioNode < 0) {
-    return EFI_NOT_FOUND;
-  }
-
-  if (!BlGetTranslatedRegAddress (Fdt, GpioNode, &Address, &Size)) {
-    return EFI_NOT_FOUND;
-  }
-
-  Spi->CsBankBase  = Address + (Pin / 32) * GIO_BANK_SIZE;
-  Spi->CsMask      = 1U << (Pin % 32);
-  Spi->CsPin       = Pin;
-  Spi->CsActiveLow = (BOOLEAN)((Flags & GPIO_ACTIVE_LOW_FLAG) != 0);
 
   //
   // Main soc pinctrl block (not the AON one). The firmware fixes the
@@ -305,90 +339,168 @@ SpiXfer (
   return EFI_SUCCESS;
 }
 
+/**
+  One JEDEC RDID exchange. Returns the three ID bytes; an all-zero or
+  all-ones answer means nothing is driving MISO, which is failure, not data.
+**/
+STATIC
 EFI_STATUS
-Bcm2712BootSpiReadImage (
+SpiProbeJedec (
   IN  CONST BCM2712_BOOT_SPI  *Spi,
-  OUT UINT8                   *Buffer,
-  IN  UINTN                   Len
+  OUT UINT8                   *Id
   )
 {
   EFI_STATUS  Status;
-  UINT32      SavedMux;
-  BOOLEAN     Muxed;
-  UINT8       Cmd[4];
-  UINT8       Id[3];
+  UINT8       Cmd;
   UINTN       Try;
 
-  SavedMux = 0;
-  Muxed    = FALSE;
-  if (Spi->PinctrlBase != 0) {
-    SavedMux = SpiMuxPins (Spi);
-    Muxed    = TRUE;
-  }
+  for (Try = 0; Try < 2; Try++) {
+    Id[0] = 0;
+    Id[1] = 0;
+    Id[2] = 0;
+    Cmd   = FLASH_CMD_RDID;
 
-  //
-  // Park CS deasserted before making the pin an output, then take the
-  // controller to a clean mode-0 idle state.
-  //
-  SpiCsSet (Spi, FALSE);
-  MmioAnd32 (Spi->CsBankBase + GIO_REG_IODIR, ~Spi->CsMask);
-  MmioWrite32 (Spi->SpiBase + SPI_REG_CS, SPI_CS_CLEAR_RX | SPI_CS_CLEAR_TX);
-  MmioWrite32 (Spi->SpiBase + SPI_REG_CLK, SPI_CLK_DIVIDER);
-
-  //
-  // JEDEC ID probe proves the pins and the part answer before the long
-  // read. All-zeros/all-ones means an undriven bus.
-  //
-  for (Try = 0; ; Try++) {
-    Cmd[0] = FLASH_CMD_RDID;
     SpiCsSet (Spi, TRUE);
-    Status = SpiXfer (Spi, Cmd, 1, Id, sizeof (Id));
+    Status = SpiXfer (Spi, &Cmd, 1, Id, 3);
     SpiCsSet (Spi, FALSE);
 
     if (!EFI_ERROR (Status) &&
         !((Id[0] == 0x00) && (Id[1] == 0x00) && (Id[2] == 0x00)) &&
         !((Id[0] == 0xFF) && (Id[1] == 0xFF) && (Id[2] == 0xFF)))
     {
-      break;
-    }
-
-    if (Try > 0) {
-      DEBUG ((
-        DEBUG_WARN,
-        "BootloaderConfig: EEPROM not responding (JEDEC %02x %02x %02x, %r)\n",
-        Id[0],
-        Id[1],
-        Id[2],
-        Status
-        ));
-      if (Muxed) {
-        MmioWrite32 (Spi->PinctrlBase, SavedMux);
-      }
-
-      return EFI_DEVICE_ERROR;
+      return EFI_SUCCESS;
     }
 
     gBS->Stall (10000);
   }
 
+  return EFI_DEVICE_ERROR;
+}
+
+/**
+  Bring the controller to a clean mode-0 idle with CS deasserted and the
+  CS pin an output.
+**/
+STATIC
+VOID
+SpiIdle (
+  IN CONST BCM2712_BOOT_SPI  *Spi
+  )
+{
+  SpiCsSet (Spi, FALSE);
+  MmioAnd32 (Spi->CsBankBase + GIO_REG_IODIR, ~Spi->CsMask);
+  MmioWrite32 (Spi->SpiBase + SPI_REG_CS, SPI_CS_CLEAR_RX | SPI_CS_CLEAR_TX);
+  MmioWrite32 (Spi->SpiBase + SPI_REG_CLK, SPI_CLK_DIVIDER);
+}
+
+EFI_STATUS
+Bcm2712BootSpiReadImage (
+  IN  CONST BCM2712_BOOT_SPI    *Spi,
+  OUT UINT8                     *Buffer,
+  IN  UINTN                     Len,
+  OUT BCM2712_BOOT_SPI_RESULT   *Result OPTIONAL
+  )
+{
+  EFI_STATUS        Status;
+  BCM2712_BOOT_SPI  Work;
+  UINT32            SavedMux;
+  BOOLEAN           Muxed;
+  UINT8             Cmd[4];
+  UINT8             Id[3];
+  UINTN             Attempt;
+
+  Status   = EFI_DEVICE_ERROR;
+  SavedMux = 0;
+  Muxed    = FALSE;
+  Id[0]    = 0;
+  Id[1]    = 0;
+  Id[2]    = 0;
+  Work     = *Spi;
+
+  //
+  // The C0 and D0 steppings put the pin-mux nibbles in different places, and
+  // the only thing that tells the two apart is the pinctrl "compatible" in
+  // the live device tree. That is a claim about the tree, not about the
+  // silicon: it is right when the VPU fixed the tree up for this board, and
+  // wrong when the tree came from somewhere that never knew about steppings.
+  // Rather than trust it, try the encoding it named and then the other one.
+  // A wrong encoding costs one failed JEDEC probe -- it muxes four soc pins
+  // that belong to the boot SPI and nothing else, and the original register
+  // value goes back before the next attempt.
+  //
+  for (Attempt = 0; Attempt < 2; Attempt++) {
+    Work.IsD0 = (Attempt == 0) ? Spi->IsD0 : (BOOLEAN)(!Spi->IsD0);
+
+    Muxed = FALSE;
+    if (Work.PinctrlBase != 0) {
+      SavedMux = SpiMuxPins (&Work);
+      Muxed    = TRUE;
+    }
+
+    SpiIdle (&Work);
+
+    Status = SpiProbeJedec (&Work, Id);
+    if (!EFI_ERROR (Status)) {
+      break;
+    }
+
+    if (Muxed) {
+      MmioWrite32 (Work.PinctrlBase, SavedMux);
+      Muxed = FALSE;
+    } else {
+      //
+      // Nothing to re-mux, so the second attempt would repeat the first.
+      //
+      break;
+    }
+  }
+
+  if (Result != NULL) {
+    Result->JedecId[0] = Id[0];
+    Result->JedecId[1] = Id[1];
+    Result->JedecId[2] = Id[2];
+    Result->UsedD0     = Work.IsD0;
+    Result->Muxed      = Muxed;
+  }
+
+  if (EFI_ERROR (Status)) {
+    DEBUG ((
+      DEBUG_WARN,
+      "BootloaderConfig: EEPROM not responding (JEDEC %02x %02x %02x)\n",
+      Id[0],
+      Id[1],
+      Id[2]
+      ));
+    return EFI_DEVICE_ERROR;
+  }
+
   DEBUG ((
     DEBUG_INFO,
-    "BootloaderConfig: EEPROM JEDEC ID %02x %02x %02x\n",
+    "BootloaderConfig: EEPROM JEDEC ID %02x %02x %02x (%a mux)\n",
     Id[0],
     Id[1],
-    Id[2]
+    Id[2],
+    Work.IsD0 ? "D0" : "C0"
     ));
 
   Cmd[0] = FLASH_CMD_READ;
   Cmd[1] = 0;
   Cmd[2] = 0;
   Cmd[3] = 0;
-  SpiCsSet (Spi, TRUE);
-  Status = SpiXfer (Spi, Cmd, sizeof (Cmd), Buffer, Len);
-  SpiCsSet (Spi, FALSE);
+  SpiCsSet (&Work, TRUE);
+  Status = SpiXfer (&Work, Cmd, sizeof (Cmd), Buffer, Len);
+  SpiCsSet (&Work, FALSE);
 
   if (EFI_ERROR (Status)) {
     DEBUG ((DEBUG_WARN, "BootloaderConfig: EEPROM read failed: %r\n", Status));
+  }
+
+  //
+  // Hand the pins back exactly as they were found, on success as well as
+  // failure: the encoding above may be the one the device tree did not name.
+  //
+  if (Muxed) {
+    MmioWrite32 (Work.PinctrlBase, SavedMux);
   }
 
   return Status;

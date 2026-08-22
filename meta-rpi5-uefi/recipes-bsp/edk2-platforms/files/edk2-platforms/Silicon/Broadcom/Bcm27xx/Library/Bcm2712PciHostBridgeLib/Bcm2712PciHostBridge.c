@@ -215,7 +215,41 @@ PcieSetupAxiQosPriority (
   IN BCM2712_PCIE_RC  *Pcie
   )
 {
-  MmioAnd32 (Pcie->Base + PCIE_MISC_AXI_INTF_CTRL, ~AXI_REQFIFO_EN_QOS_PROPAGATION);
+  //
+  // Clear the broken forwarding search, and set the QoS fix bits the D0
+  // stepping needs. Several BCM2712 QoS bugs make dynamic priority elevation
+  // ineffective; on D0 these three bits are the workaround, and inbound
+  // traffic gets spurious QoS=0 assignments without them. Everything behind
+  // this root complex on a Pi 5 -- RP1, and therefore every USB port and the
+  // onboard NIC -- is inbound DMA, so the symptom is unreliable bulk
+  // transfers rather than an obvious failure to enumerate.
+  //
+  // Set unconditionally: the bits are Reserved-0 on earlier steppings, which
+  // is also how the read-back below tells the steppings apart. Linux does
+  // exactly this in brcm_pcie_post_setup_bcm2712() rather than decoding a
+  // revision register, and following it keeps the two in step.
+  //
+  MmioAndThenOr32 (
+    Pcie->Base + PCIE_MISC_AXI_INTF_CTRL,
+    ~AXI_REQFIFO_EN_QOS_PROPAGATION,
+    AXI_EN_RCLK_QOS_ARRAY_FIX |
+    AXI_EN_QOS_UPDATE_TIMING_FIX |
+    AXI_DIS_QOS_GATING_IN_MASTER
+    );
+
+  //
+  // The timing fix reading back as zero means it is Reserved-0 here: a 2712C1
+  // part, or a single-lane root complex. Neither can take the fix, so fall
+  // back to what Linux does instead -- partially throttle the AXI requests
+  // in flight to SDRAM, which blunts the same spurious-QoS problem.
+  //
+  if ((MmioRead32 (Pcie->Base + PCIE_MISC_AXI_INTF_CTRL) & AXI_EN_QOS_UPDATE_TIMING_FIX) == 0) {
+    MmioAndThenOr32 (
+      Pcie->Base + PCIE_MISC_AXI_INTF_CTRL,
+      ~(UINT32)AXI_MASTER_MAX_OUTSTANDING_REQUESTS_MASK,
+      15
+      );
+  }
 
   if (Pcie->Settings->VdmToQosMap == 0) {
     MmioAnd32 (Pcie->Base + PCIE_MISC_CTRL_1, ~PCIE_MISC_CTRL_1_EN_VDM_QOS_CONTROL_MASK);

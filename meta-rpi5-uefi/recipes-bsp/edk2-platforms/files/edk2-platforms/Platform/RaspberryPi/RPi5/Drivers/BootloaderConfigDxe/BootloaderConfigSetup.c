@@ -364,6 +364,93 @@ StagingTimestamp (
 }
 
 /**
+  Does a "key: value" line appear in a .sig file? rpi-eeprom-digest writes
+  one directive per line; the key of interest here is "rsa2048".
+**/
+STATIC
+BOOLEAN
+BlTextHasLineKey (
+  IN CONST CHAR8  *Text,
+  IN UINTN        Len,
+  IN CONST CHAR8  *Key
+  )
+{
+  UINTN  KeyLen;
+  UINTN  Index;
+  UINTN  Start;
+
+  if ((Text == NULL) || (Key == NULL)) {
+    return FALSE;
+  }
+
+  KeyLen = AsciiStrLen (Key);
+  Start  = 0;
+
+  for (Index = 0; Index <= Len; Index++) {
+    if ((Index == Len) || (Text[Index] == '\n') || (Text[Index] == '\r')) {
+      if (((Index - Start) > KeyLen) &&
+          (CompareMem (&Text[Start], Key, KeyLen) == 0) &&
+          (Text[Start + KeyLen] == ':'))
+      {
+        return TRUE;
+      }
+
+      Start = Index + 1;
+    }
+  }
+
+  return FALSE;
+}
+
+/**
+  Rebuild a digest-only bootconf.sig over the replacement config text, in
+  the exact shape "rpi-eeprom-digest -i bootconf.txt -o bootconf.sig"
+  produces: the hex SHA-256, then a "ts:" line. No target-soc line -- that
+  one only appears when the tool is given -c, which the config digest is not.
+
+  Best effort: a config whose sig cannot be rewritten is reported by the
+  caller, not silently accepted.
+**/
+STATIC
+EFI_STATUS
+SyncConfigDigest (
+  IN OUT UINT8        *Image,
+  IN     UINTN        Size,
+  IN     UINTN        WalkStart,
+  IN     UINTN        WinStart,
+  IN     UINTN        WinEnd,
+  IN     CONST CHAR8  *Config,
+  IN     UINTN        ConfigLen,
+  IN     UINT32       Timestamp
+  )
+{
+  UINT8  Digest[BLCFG_SHA256_DIGEST_SIZE];
+  CHAR8  Sig[128];
+  UINTN  SigLen;
+  UINTN  Index;
+
+  BlSha256 ((CONST UINT8 *)Config, ConfigLen, Digest);
+
+  SigLen = 0;
+  for (Index = 0; Index < BLCFG_SHA256_DIGEST_SIZE; Index++) {
+    SigLen += AsciiSPrint (&Sig[SigLen], sizeof (Sig) - SigLen, "%02x", Digest[Index]);
+  }
+
+  SigLen += AsciiSPrint (&Sig[SigLen], sizeof (Sig) - SigLen, "\nts: %u\n", Timestamp);
+
+  return EepromReplaceFileIn (
+           Image,
+           Size,
+           WalkStart,
+           WinStart,
+           WinEnd,
+           "bootconf.sig",
+           (CONST UINT8 *)Sig,
+           SigLen
+           );
+}
+
+/**
   Patch bootconf.txt (and updatetime) with Values inside a freshly read
   EEPROM image.
 **/
@@ -381,23 +468,47 @@ PatchImage (
   EEPROM_FILE_LOC  Loc;
   CHAR8            *NewConfig;
   UINTN            NewLen;
+  BOOLEAN          HasSig;
 
   if (!EepromImageValid (Image, Size)) {
     *FailLine = L"The EEPROM content does not look like a bootloader image.";
     return EFI_VOLUME_CORRUPTED;
   }
 
-  if (EepromFindFileIn (
-        Image,
-        Size,
-        0,
-        EEPROM_PARTITION_A_START,
-        EEPROM_PARTITION_A_END,
-        "bootconf.sig",
-        &Loc
+  //
+  // A bootconf.sig is not by itself a reason to stop. rpi-eeprom-digest
+  // writes that file in two quite different shapes:
+  //
+  //   <sha256>\nts: <epoch>\n                 - integrity digest only
+  //   <sha256>\nts: <epoch>\nrsa2048: <hex>\n  - RSA-signed for secure boot
+  //
+  // Only the second is a signature, and only signatures are reproducible
+  // exclusively by whoever holds the private key. The first we can recompute
+  // ourselves, which is what SyncConfigDigest below does.
+  //
+  // A digest-only sig also proves the board is not enforcing signed boot: the
+  // bootloader verifies the RSA signature over the config whenever secure
+  // boot is active in OTP (or SIGNED_BOOT=1 is set), so a board carrying an
+  // unsigned config sig while enforcing would not have booted far enough to
+  // run this code.
+  //
+  HasSig = EepromFindFileIn (
+             Image,
+             Size,
+             0,
+             EEPROM_PARTITION_A_START,
+             EEPROM_PARTITION_A_END,
+             "bootconf.sig",
+             &Loc
+             );
+  if (HasSig &&
+      BlTextHasLineKey (
+        (CONST CHAR8 *)Image + Loc.ContentOffset,
+        Loc.ContentLen,
+        "rsa2048"
         ))
   {
-    *FailLine = L"The EEPROM config is signed (secure boot); refusing to modify it.";
+    *FailLine = L"The EEPROM config is RSA-signed; only the signing key can change it.";
     return EFI_SECURITY_VIOLATION;
   }
 
@@ -448,6 +559,24 @@ PatchImage (
     return Status;
   }
 
+  if (HasSig) {
+    Status = SyncConfigDigest (
+               Image,
+               Size,
+               0,
+               EEPROM_PARTITION_A_START,
+               EEPROM_PARTITION_A_END,
+               NewConfig,
+               NewLen,
+               Timestamp
+               );
+    if (EFI_ERROR (Status)) {
+      FreePool (NewConfig);
+      *FailLine = L"The config digest (bootconf.sig) could not be rewritten.";
+      return Status;
+    }
+  }
+
   //
   // A/B-capable images carry a second partition after a 0xFF gap with
   // its own section chain; keep its config in step when it has one.
@@ -478,6 +607,33 @@ PatchImage (
         "BootloaderConfig: partition B config not updated: %r\n",
         Status
         ));
+    } else if (EepromFindFileIn (
+                 Image,
+                 Size,
+                 EEPROM_PARTITION_B_START,
+                 EEPROM_PARTITION_B_START,
+                 EEPROM_PARTITION_B_END,
+                 "bootconf.sig",
+                 &Loc
+                 ))
+    {
+      Status = SyncConfigDigest (
+                 Image,
+                 Size,
+                 EEPROM_PARTITION_B_START,
+                 EEPROM_PARTITION_B_START,
+                 EEPROM_PARTITION_B_END,
+                 NewConfig,
+                 NewLen,
+                 Timestamp
+                 );
+      if (EFI_ERROR (Status)) {
+        DEBUG ((
+          DEBUG_WARN,
+          "BootloaderConfig: partition B config digest not updated: %r\n",
+          Status
+          ));
+      }
     }
   }
 
@@ -535,6 +691,9 @@ StageUpdate (
   RPI_BLCFG_DATA     Edited;
   BLCFG_VALUES       NewValues;
   BCM2712_BOOT_SPI   Spi;
+  BCM2712_BOOT_SPI_RESULT  SpiResult;
+  CHAR16             DiagLine1[80];
+  CHAR16             DiagLine2[80];
   UINT8              *Image;
   UINT8              Digest[BLCFG_SHA256_DIGEST_SIZE];
   CHAR8              Sig[128];
@@ -599,7 +758,7 @@ StageUpdate (
 
   Status = Bcm2712BootSpiLocate (mFdt, &Spi);
   if (EFI_ERROR (Status)) {
-    PopupWait (L"Boot SPI controller not found in the device tree.", NULL);
+    PopupWait (L"Could not determine the boot SPI controller.", NULL);
     return;
   }
 
@@ -611,13 +770,37 @@ StageUpdate (
 
   PopupInfo (L"Reading the 2 MiB boot EEPROM over SPI...");
 
-  Status = Bcm2712BootSpiReadImage (&Spi, Image, EEPROM_IMAGE_SIZE_2712);
+  ZeroMem (&SpiResult, sizeof (SpiResult));
+  Status = Bcm2712BootSpiReadImage (&Spi, Image, EEPROM_IMAGE_SIZE_2712, &SpiResult);
   if (EFI_ERROR (Status)) {
     FreePool (Image);
-    PopupWait (
-      L"Reading the boot EEPROM failed.",
-      L"The flash did not respond on the boot SPI."
+    //
+    // Show what the probe actually saw. A RELEASE build emits no DEBUG
+    // output, and without these numbers "did not respond" is the same
+    // message for a wrong address, a wrong chip select, a wrong pin mux and
+    // a genuinely dead part. JEDEC 00 00 00 means MISO was never driven;
+    // ff ff ff means it floated high with nothing answering.
+    //
+    UnicodeSPrint (
+      DiagLine1,
+      sizeof (DiagLine1),
+      L"No answer: JEDEC %02x %02x %02x, %a mux %a",
+      SpiResult.JedecId[0],
+      SpiResult.JedecId[1],
+      SpiResult.JedecId[2],
+      SpiResult.UsedD0 ? "D0" : "C0",
+      SpiResult.Muxed ? "applied" : "unavailable"
       );
+    UnicodeSPrint (
+      DiagLine2,
+      sizeof (DiagLine2),
+      L"SPI %Lx CS %Lx/%x pinctrl %Lx",
+      Spi.SpiBase,
+      Spi.CsBankBase,
+      Spi.CsMask,
+      Spi.PinctrlBase
+      );
+    PopupWait (DiagLine1, DiagLine2);
     return;
   }
 

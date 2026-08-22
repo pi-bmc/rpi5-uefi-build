@@ -937,6 +937,32 @@
   #
   # edk2-redfish-client feature drivers and schema converters.
   #
+  # Two of RedfishClientPkg's three HiiToRedfish* drivers are deliberately NOT
+  # built. HiiToRedfishBiosDxe publishes /Bios/Attributes/BiosOption1..4 whose
+  # values are "Item #1".."Item #3"; HiiToRedfishMemoryDxe publishes four
+  # invented DIMMs on a board whose LPDDR4X is soldered down.
+  # RedfishPlatformConfigDxe would hand both to the BMC as real, settable
+  # inventory. The platform's actual attributes come from its own per-formset
+  # *Map.uni files instead -- see RPi5/Drivers/RpiRedfishSyncDxe/README.md.
+  #
+  # HiiToRedfishBootDxe stays, despite the sample-looking name and the
+  # "HII to Redfish (Boot)" Setup page it adds, because it is the ONLY backing
+  # for ComputerSystem's Boot/BootOrder array: it builds an ordered list from
+  # EfiBootManagerGetLoadOptions(), tags each entry Boot%04x in the
+  # x-UEFI-redfish-ComputerSystem.v1_5_0 language, and rewrites the real
+  # BootOrder variable on submit. ComputerSystemDxe resolves every Boot/*
+  # property by configure-language lookup alone, so without this driver the
+  # BMC can enumerate boot options through BootOptionCollectionDxe (which
+  # reads the boot manager directly) but cannot persistently reorder them.
+  #
+  # Its BootSourceOverride{Enabled,Mode,Target} questions are a different
+  # matter, and worth knowing about: they map to the same
+  # /Systems/{1}/Boot/BootSourceOverride* paths that RpiRedfishSyncDxe reads
+  # FROM the BMC to stage a one-shot BootNext, and nothing on the host
+  # consumes their efivarstore copy. Two writers, one property, opposite
+  # directions -- if a staged override ever comes back cleared, provisioning
+  # pushing the host's defaults (Disabled/UEFI/None) is the first suspect.
+  #
   RedfishPkg/RestJsonStructureDxe/RestJsonStructureDxe.inf
   RedfishPkg/RedfishPlatformConfigDxe/RedfishPlatformConfigDxe.inf
   MdeModulePkg/Universal/RegularExpressionDxe/RegularExpressionDxe.inf
@@ -944,8 +970,6 @@
   RedfishClientPkg/RedfishETagDxe/RedfishETagDxe.inf
   RedfishClientPkg/RedfishConfigLangMapDxe/RedfishConfigLangMapDxe.inf
   RedfishClientPkg/HiiToRedfishBootDxe/HiiToRedfishBootDxe.inf
-  RedfishClientPkg/HiiToRedfishBiosDxe/HiiToRedfishBiosDxe.inf
-  RedfishClientPkg/HiiToRedfishMemoryDxe/HiiToRedfishMemoryDxe.inf
   RedfishClientPkg/Features/ComputerSystem/v1_5_0/Dxe/ComputerSystemDxe.inf
   RedfishClientPkg/Features/ComputerSystemCollectionDxe/ComputerSystemCollectionDxe.inf
   RedfishClientPkg/Features/Bios/v1_0_9/Dxe/BiosDxe.inf

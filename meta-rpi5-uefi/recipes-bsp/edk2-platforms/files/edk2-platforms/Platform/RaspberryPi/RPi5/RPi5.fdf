@@ -385,6 +385,10 @@ READ_LOCK_STATUS   = TRUE
   #
   # edk2-redfish-client feature drivers and schema converters.
   #
+  # HiiToRedfishBootDxe is built: it is the only backing for ComputerSystem's
+  # Boot/BootOrder array. Its HiiToRedfishBiosDxe/HiiToRedfishMemoryDxe
+  # siblings are demos of invented inventory and are not. See RPi5.dsc.
+  #
   INF RedfishPkg/RestJsonStructureDxe/RestJsonStructureDxe.inf
   INF RedfishPkg/RedfishPlatformConfigDxe/RedfishPlatformConfigDxe.inf
   INF MdeModulePkg/Universal/RegularExpressionDxe/RegularExpressionDxe.inf
@@ -392,8 +396,6 @@ READ_LOCK_STATUS   = TRUE
   INF RedfishClientPkg/RedfishETagDxe/RedfishETagDxe.inf
   INF RedfishClientPkg/RedfishConfigLangMapDxe/RedfishConfigLangMapDxe.inf
   INF RedfishClientPkg/HiiToRedfishBootDxe/HiiToRedfishBootDxe.inf
-  INF RedfishClientPkg/HiiToRedfishBiosDxe/HiiToRedfishBiosDxe.inf
-  INF RedfishClientPkg/HiiToRedfishMemoryDxe/HiiToRedfishMemoryDxe.inf
   INF RedfishClientPkg/Features/ComputerSystem/v1_5_0/Dxe/ComputerSystemDxe.inf
   INF RedfishClientPkg/Features/ComputerSystemCollectionDxe/ComputerSystemCollectionDxe.inf
   INF RedfishClientPkg/Features/Bios/v1_0_9/Dxe/BiosDxe.inf
