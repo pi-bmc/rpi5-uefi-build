@@ -1,0 +1,518 @@
+From: appkins <nbatkins@gmail.com>
+Date: Sat, 22 Aug 2026 21:00:00 -0500
+Subject: [PATCH] DwUsbHostDxe: pump polled bulk IN endpoints from the periodic
+ handler
+
+The USB network class drivers receive by polling: every UNDI poll turns
+into a synchronous bulk IN with a 1-3 ms timeout
+(USB_ETHERNET_BULK_TIMEOUT). On this controller a synchronous transfer
+is a busy-wait at TPL_NOTIFY, and an empty bulk IN does not even fail
+fast: in buffer DMA mode the core retries NAKed bulk transactions on its
+own, the channel never halts, and Wait4Bit spends the caller's entire
+timeout before DwHcTransfer gives up through the XFER_NOT_HALTED path.
+Polled from MnpSystemPoll every 10 ms that is a steady 10% of the CPU
+held above everything at TPL_CALLBACK and below; polled from a TCP
+receive loop during the Redfish exchange it approaches all of it. The
+same class driver on the RP1 xHCI ports is quick because that hardware
+runs transfer rings autonomously by DMA - the CPU never waits on the
+wire.
+
+Point the same DWC2 autonomy the right way instead of fighting it. A
+dedicated, otherwise unused host channel (4; the driver's fixed
+assignments stop at 3, the core has 16) is left armed with a standing IN
+request into a driver-owned common buffer. The core performs the NAK
+retries by itself, for free. The 1 ms periodic handler checks HCINT for
+a halt - one register read per tick while the endpoint is quiet - and on
+XFERCOMP parks the completed transfer. A polled receive is then served
+from memory, or told "nothing yet" immediately, without ever touching
+the wire at TPL_NOTIFY. Transfer boundaries are preserved: a completion
+is one short-packet-terminated transfer, exactly what the synchronous
+path would have returned, so CDC NTB/frame framing is untouched. The
+hardware owns the endpoint's data toggle while the pump runs, and every
+delivery mirrors HCTSIZ.PID back into the caller's DataToggle, so a
+handover to the classic path stays coherent.
+
+Engagement is by transfer shape, not device knowledge (the host
+controller has none): a high-speed bulk IN with no transaction
+translator and a caller timeout of at most 8 ms. The short timeout is
+the polling-receive signature - the CDC drivers use 1-3 ms, and the
+nearest other bulk user, mass storage BOT, uses 3-5 seconds, three
+orders of magnitude away. Everything else takes the classic path
+unchanged. Persistent error halts (device detached, endpoint stalled)
+stand the pump down for 64 polls of the classic path, which surfaces
+the real fault to the class driver and quiesces the channel when the
+device is simply gone; the pump re-engages by itself if polling
+continues against a live endpoint. DwHcQuiesce halts the pump channel
+before resetting the core, so nothing is left mastering the bus at
+ExitBootServices, and teardown returns the buffer.
+
+Upstream-Status: Pending
+Signed-off-by: appkins <nbatkins@gmail.com>
+---
+--- a/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.c
++++ b/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.c
+@@ -56,6 +56,23 @@
+  * https://www.quicklogic.com/assets/pdf/data-sheets/QL-Hi-Speed-USB-2.0-OTG-Controller-Data-Sheet.pdf
+  */
+ 
++/*
++ * Bulk IN pump tunables; the pump itself is described at DwHcPumpBulkIn.
++ *
++ * Channel 4 sits above the driver's fixed channel assignments (DwcHw.h
++ * uses 0-3) on a core with 16. A bulk IN whose caller timeout is at most
++ * DWC2_PUMP_ENGAGE_TIMEOUT_MS is taken to be a polling receive - the CDC
++ * network drivers use 1-3 ms, while the nearest other bulk user (mass
++ * storage BOT) uses 3-5 seconds. After DWC2_PUMP_MAX_ERRORS consecutive
++ * error halts the pump stands down for DWC2_PUMP_COOLDOWN_POLLS polls of
++ * the classic path, which surfaces the fault to the class driver and
++ * quiesces the channel when the device is simply gone.
++ */
++#define DWC2_HC_CHANNEL_PUMP            4
++#define DWC2_PUMP_ENGAGE_TIMEOUT_MS     8
++#define DWC2_PUMP_MAX_ERRORS            8
++#define DWC2_PUMP_COOLDOWN_POLLS        64
++
+ typedef enum {
+   XFER_NOT_HALTED,
+   XFER_ERROR,
+@@ -1069,6 +1086,322 @@
+   return Status;
+ }
+ 
++/*
++ * Bulk IN pump.
++ *
++ * The USB network class drivers receive by polling: NetworkCommon's UNDI
++ * calls the class driver's receive on every poll, and that becomes a
++ * synchronous bulk IN with a millisecond timeout (USB_ETHERNET_BULK_TIMEOUT).
++ * On this controller a synchronous transfer is a busy-wait at TPL_NOTIFY,
++ * and a bulk IN the device has nothing for does not even fail fast: in
++ * buffer DMA mode the core retries NAKed bulk transactions on its own, the
++ * channel never halts, and Wait4Bit burns the caller's entire timeout
++ * before the transfer is abandoned. Polled from MnpSystemPoll every 10 ms
++ * that is a steady tax; polled from a TCP receive loop it is nearly all of
++ * the CPU, and everything below TPL_NOTIFY - BDS included - crawls.
++ *
++ * The same hardware autonomy, pointed the right way, is the fix. Leave one
++ * channel armed with a standing IN request, let the core do the NAK
++ * retries for free, and notice the completed transfer from the 1 ms
++ * periodic handler - one register read per tick. The polled receive is
++ * then served from memory, or told "nothing yet" immediately, without
++ * touching the wire. Transfer boundaries are preserved: a completion is
++ * one short-packet-terminated transfer, exactly what the synchronous path
++ * would have returned, so NTB/frame framing is untouched.
++ *
++ * Only a short-timeout high-speed bulk IN with no transaction translator
++ * engages the pump (see DWC2_PUMP_ENGAGE_TIMEOUT_MS above). Everything
++ * else takes the classic synchronous path unchanged.
++ */
++
++STATIC
++VOID
++DwHcPumpArm (
++  IN  DWUSB_OTGHC_DEV *DwHc
++  )
++{
++  DWUSB_PUMP    *Pump = &DwHc->Pump;
++  SPLIT_CONTROL NoSplit;
++  UINT32        NumPackets;
++
++  ZeroMem (&NoSplit, sizeof (NoSplit));
++  NumPackets = Pump->ArmedLength / (UINT32)Pump->MaximumPacketLength;
++
++  MmioWrite32 (DwHc->DwUsbBase + HCDMA (DWC2_HC_CHANNEL_PUMP),
++    (UINTN)Pump->BufferBusAddress);
++
++  DwOtgHcInit (DwHc, DWC2_HC_CHANNEL_PUMP, NULL, Pump->DeviceSpeed,
++    Pump->DeviceAddress, Pump->EpAddress, 1, DWC2_HCCHAR_EPTYPE_BULK,
++    (UINT16)Pump->MaximumPacketLength, &NoSplit);
++
++  MmioWrite32 (DwHc->DwUsbBase + HCTSIZ (DWC2_HC_CHANNEL_PUMP),
++    (Pump->ArmedLength << DWC2_HCTSIZ_XFERSIZE_OFFSET) |
++    (NumPackets << DWC2_HCTSIZ_PKTCNT_OFFSET) |
++    (Pump->Pid << DWC2_HCTSIZ_PID_OFFSET));
++
++  MmioAndThenOr32 (DwHc->DwUsbBase + HCCHAR (DWC2_HC_CHANNEL_PUMP),
++    ~(DWC2_HCCHAR_MULTICNT_MASK |
++      DWC2_HCCHAR_CHEN |
++      DWC2_HCCHAR_CHDIS),
++      ((1 << DWC2_HCCHAR_MULTICNT_OFFSET) |
++        DWC2_HCCHAR_CHEN));
++
++  Pump->State = DwUsbPumpArmed;
++}
++
++STATIC
++VOID
++DwHcPumpHalt (
++  IN  DWUSB_OTGHC_DEV *DwHc
++  )
++{
++  DWUSB_PUMP *Pump = &DwHc->Pump;
++  EFI_TPL    Tpl;
++  UINTN      Waited;
++
++  Tpl = gBS->RaiseTPL (TPL_NOTIFY);
++
++  if (Pump->State == DwUsbPumpArmed) {
++    if ((MmioRead32 (DwHc->DwUsbBase + HCINT (DWC2_HC_CHANNEL_PUMP)) &
++         DWC2_HCINT_CHHLTD) == 0) {
++      MmioOr32 (DwHc->DwUsbBase + HCCHAR (DWC2_HC_CHANNEL_PUMP),
++        DWC2_HCCHAR_CHDIS);
++      for (Waited = 0; Waited < 2000; Waited += 10) {
++        if ((MmioRead32 (DwHc->DwUsbBase + HCINT (DWC2_HC_CHANNEL_PUMP)) &
++             DWC2_HCINT_CHHLTD) != 0) {
++          break;
++        }
++
++        MicroSecondDelay (10);
++      }
++    }
++
++    MmioWrite32 (DwHc->DwUsbBase + HCINT (DWC2_HC_CHANNEL_PUMP), 0x3FFF);
++  }
++
++  Pump->State = DwUsbPumpIdle;
++  Pump->ReadyLength = 0;
++
++  gBS->RestoreTPL (Tpl);
++}
++
++/*
++ * Classify a halted pump channel. Runs from the TPL_NOTIFY periodic
++ * handler every millisecond and from DwHcPumpBulkIn; while the channel is
++ * armed and the endpoint is NAKing, the cost is the single HCINT read.
++ */
++STATIC
++VOID
++DwHcPumpHarvest (
++  IN  DWUSB_OTGHC_DEV *DwHc
++  )
++{
++  DWUSB_PUMP *Pump = &DwHc->Pump;
++  UINT32     Hcint;
++  UINT32     Hctsiz;
++  UINT32     Sub;
++
++  if (Pump->State != DwUsbPumpArmed) {
++    return;
++  }
++
++  Hcint = MmioRead32 (DwHc->DwUsbBase + HCINT (DWC2_HC_CHANNEL_PUMP));
++  if ((Hcint & DWC2_HCINT_CHHLTD) == 0) {
++    return;
++  }
++
++  if ((Hcint & DWC2_HCINT_XFERCOMP) != 0) {
++    Hctsiz = MmioRead32 (DwHc->DwUsbBase + HCTSIZ (DWC2_HC_CHANNEL_PUMP));
++    Sub = (Hctsiz & DWC2_HCTSIZ_XFERSIZE_MASK) >> DWC2_HCTSIZ_XFERSIZE_OFFSET;
++    Pump->Pid = (Hctsiz & DWC2_HCTSIZ_PID_MASK) >> DWC2_HCTSIZ_PID_OFFSET;
++    Pump->Errors = 0;
++
++    if (Sub >= Pump->ArmedLength) {
++      /*
++       * A completion that moved no data (a bare ZLP) carries no frame
++       * block; rearm rather than waking the class driver for nothing.
++       */
++      DwHcPumpArm (DwHc);
++      return;
++    }
++
++    ArmDataSynchronizationBarrier ();
++    Pump->ReadyLength = Pump->ArmedLength - Sub;
++    Pump->State = DwUsbPumpReady;
++    return;
++  }
++
++  if ((Hcint & (DWC2_HCINT_NAK | DWC2_HCINT_FRMOVRUN)) != 0) {
++    /*
++     * Halted without data. Not an error: rearm, the next tick looks
++     * again.
++     */
++    DwHcPumpArm (DwHc);
++    return;
++  }
++
++  /*
++   * XACTERR, BBLERR, STALL, AHBERR... Retry a few times - transaction
++   * errors are recoverable - then stand down and let the classic
++   * synchronous path surface the condition to the class driver, which is
++   * also what quiesces the pump once the device is detached and the class
++   * driver stops polling.
++   */
++  Pump->Errors++;
++  if (Pump->Errors < DWC2_PUMP_MAX_ERRORS) {
++    DwHcPumpArm (DwHc);
++    return;
++  }
++
++  DEBUG ((DEBUG_INFO,
++    "%a: dev %u ep 0x%x HCINT 0x%x after %u error halts; standing down\n",
++    __func__, Pump->DeviceAddress, Pump->EpAddress, Hcint, Pump->Errors));
++  MmioWrite32 (DwHc->DwUsbBase + HCINT (DWC2_HC_CHANNEL_PUMP), 0x3FFF);
++  Pump->State = DwUsbPumpIdle;
++  Pump->Errors = 0;
++  Pump->Cooldown = DWC2_PUMP_COOLDOWN_POLLS;
++}
++
++STATIC
++EFI_STATUS
++DwHcPumpBulkIn (
++  IN     DWUSB_OTGHC_DEV *DwHc,
++  IN     UINT8           DeviceAddress,
++  IN     UINT8           EndPointAddress,
++  IN     UINT8           DeviceSpeed,
++  IN     UINTN           MaximumPacketLength,
++  IN OUT VOID            *Data,
++  IN OUT UINTN           *DataLength,
++  IN OUT UINT8           *DataToggle,
++  OUT    UINT32          *TransferResult,
++  OUT    BOOLEAN         *Handled
++  )
++{
++  DWUSB_PUMP *Pump = &DwHc->Pump;
++  EFI_STATUS Status;
++  EFI_TPL    Tpl;
++  UINT8      EpNum;
++  UINT32     Request;
++  UINT32     NumPackets;
++  UINTN      Bytes;
++  UINTN      BufferSize;
++
++  *Handled = TRUE;
++  EpNum = EndPointAddress & 0x0F;
++
++  Tpl = gBS->RaiseTPL (TPL_NOTIFY);
++
++  /*
++   * A different endpoint than the pump is serving means the device was
++   * re-enumerated or another poller appeared; the newcomer wins.
++   */
++  if ((Pump->State != DwUsbPumpIdle) &&
++      ((Pump->DeviceAddress != DeviceAddress) ||
++       (Pump->EpAddress != EpNum) ||
++       (Pump->MaximumPacketLength != MaximumPacketLength))) {
++    DwHcPumpHalt (DwHc);
++    Pump->Errors = 0;
++    Pump->Cooldown = 0;
++  }
++
++  if (Pump->State == DwUsbPumpIdle) {
++    if (Pump->Cooldown != 0) {
++      Pump->Cooldown--;
++      *Handled = FALSE;
++      gBS->RestoreTPL (Tpl);
++      return EFI_DEVICE_ERROR;
++    }
++
++    if (Pump->Buffer == NULL) {
++      Status = DmaAllocateBuffer (EfiBootServicesData,
++                 EFI_SIZE_TO_PAGES (DWC2_DATA_BUF_SIZE),
++                 (VOID **)&Pump->Buffer);
++      if (EFI_ERROR (Status)) {
++        Pump->Buffer = NULL;
++        *Handled = FALSE;
++        gBS->RestoreTPL (Tpl);
++        return Status;
++      }
++
++      BufferSize = EFI_PAGES_TO_SIZE (EFI_SIZE_TO_PAGES (DWC2_DATA_BUF_SIZE));
++      Status = DmaMap (MapOperationBusMasterCommonBuffer, Pump->Buffer,
++                 &BufferSize, &Pump->BufferBusAddress, &Pump->BufferMapping);
++      if (EFI_ERROR (Status)) {
++        DmaFreeBuffer (EFI_SIZE_TO_PAGES (DWC2_DATA_BUF_SIZE), Pump->Buffer);
++        Pump->Buffer = NULL;
++        *Handled = FALSE;
++        gBS->RestoreTPL (Tpl);
++        return Status;
++      }
++    }
++
++    Request = (UINT32)MIN (*DataLength,
++                (UINTN)(DWC2_MAX_TRANSFER_SIZE - MaximumPacketLength + 1));
++    NumPackets = (Request + (UINT32)MaximumPacketLength - 1) /
++                 (UINT32)MaximumPacketLength;
++    if (NumPackets == 0) {
++      *Handled = FALSE;
++      gBS->RestoreTPL (Tpl);
++      return EFI_INVALID_PARAMETER;
++    }
++
++    if (NumPackets > DWC2_MAX_PACKET_COUNT) {
++      NumPackets = DWC2_MAX_PACKET_COUNT;
++    }
++
++    Pump->DeviceAddress = DeviceAddress;
++    Pump->EpAddress = EpNum;
++    Pump->DeviceSpeed = DeviceSpeed;
++    Pump->MaximumPacketLength = MaximumPacketLength;
++    Pump->ArmedLength = NumPackets * (UINT32)MaximumPacketLength;
++    Pump->Pid = (UINT32)(*DataToggle << 1);
++    Pump->Errors = 0;
++
++    DEBUG ((DEBUG_INFO, "%a: pumping dev %u ep 0x%02x mps %u request %u\n",
++      __func__, DeviceAddress, EndPointAddress,
++      (UINT32)MaximumPacketLength, Pump->ArmedLength));
++
++    DwHcPumpArm (DwHc);
++  }
++
++  /*
++   * A completion may have been sitting since the last tick; look now
++   * rather than costing the caller a poll interval of latency.
++   */
++  DwHcPumpHarvest (DwHc);
++
++  if (Pump->State == DwUsbPumpReady) {
++    Bytes = MIN (*DataLength, (UINTN)Pump->ReadyLength);
++    CopyMem (Data, Pump->Buffer, Bytes);
++    *DataLength = Bytes;
++    *DataToggle = (UINT8)(Pump->Pid >> 1);
++    *TransferResult = EFI_USB_NOERROR;
++    DwHcPumpArm (DwHc);
++    gBS->RestoreTPL (Tpl);
++    return EFI_SUCCESS;
++  }
++
++  if (Pump->State == DwUsbPumpArmed) {
++    /*
++     * Nothing yet. The synchronous path would now busy-wait the whole
++     * timeout at TPL_NOTIFY against a NAKing endpoint; the hardware is
++     * already doing those retries, so report the timeout immediately.
++     */
++    *DataLength = 0;
++    *TransferResult = EFI_USB_ERR_TIMEOUT;
++    gBS->RestoreTPL (Tpl);
++    return EFI_TIMEOUT;
++  }
++
++  /*
++   * The harvest just stood the pump down; let the classic path run and
++   * report the fault.
++   */
++  *Handled = FALSE;
++  gBS->RestoreTPL (Tpl);
++  return EFI_DEVICE_ERROR;
++}
++
+ EFI_STATUS
+ EFIAPI
+ DwHcBulkTransfer (
+@@ -1091,6 +1424,7 @@
+   UINT8                   TransferDirection;
+   UINT8                   EpAddress;
+   UINT32                  Pid;
++  BOOLEAN                 Handled;
+   EFI_EVENT TimeoutEvt = NULL;
+ 
+   if ((Data == NULL) || (Data[0] == NULL) ||
+@@ -1114,6 +1448,27 @@
+ 
+   DwHc = DWHC_FROM_THIS (This);
+ 
++  //
++  // A short-timeout high-speed bulk IN is the polling-receive idiom of the
++  // USB network class drivers (USB_ETHERNET_BULK_TIMEOUT is 1-3 ms; every
++  // other bulk user asks for seconds). Serve it from the pump: data the
++  // hardware already collected, or an immediate "nothing yet", instead of
++  // busy-waiting the timeout at TPL_NOTIFY while the core NAK-retries on
++  // the wire. See DwHcPumpBulkIn above.
++  //
++  if (((EndPointAddress & USB_ENDPOINT_DIR_IN) != 0) &&
++      (TimeOut != 0) &&
++      (TimeOut <= DWC2_PUMP_ENGAGE_TIMEOUT_MS) &&
++      (DeviceSpeed == EFI_USB_SPEED_HIGH) &&
++      ((Translator == NULL) || (Translator->TranslatorHubAddress == 0))) {
++    Status = DwHcPumpBulkIn (DwHc, DeviceAddress, EndPointAddress,
++               DeviceSpeed, MaximumPacketLength, Data[0], DataLength,
++               DataToggle, TransferResult, &Handled);
++    if (Handled) {
++      return Status;
++    }
++  }
++
+   Status = gBS->CreateEvent (EVT_TIMER, 0, NULL, NULL, &TimeoutEvt);
+   ASSERT_EFI_ERROR (Status);
+   if (EFI_ERROR (Status)) {
+@@ -1832,6 +2187,12 @@
+     gBS->CloseEvent (DwHc->ExitBootServiceEvent);
+   }
+ 
++  if (DwHc->Pump.Buffer != NULL) {
++    DmaUnmap (DwHc->Pump.BufferMapping);
++    DmaFreeBuffer (EFI_SIZE_TO_PAGES (DWC2_DATA_BUF_SIZE), DwHc->Pump.Buffer);
++    DwHc->Pump.Buffer = NULL;
++  }
++
+   Pages = EFI_SIZE_TO_PAGES (DWC2_DATA_BUF_SIZE);
+   DmaUnmap (DwHc->AlignedBufferMapping);
+   DmaFreeBuffer (Pages, DwHc->AlignedBuffer);
+@@ -1901,6 +2262,8 @@
+   LIST_ENTRY *NextEntry;
+   DWUSB_OTGHC_DEV *DwHc = Context;
+ 
++  DwHcPumpHarvest (DwHc);
++
+   DwHc->CurrentFrame += FramesPassed (DwHc);
+   Frame = DwHc->CurrentFrame;
+ 
+@@ -2028,6 +2391,8 @@
+   IN  DWUSB_OTGHC_DEV *DwHc
+   )
+ {
++  DwHcPumpHalt (DwHc);
++
+   if (DwHc->PeriodicEvent != NULL) {
+     EFI_TPL PreviousTpl;
+     PreviousTpl = gBS->RaiseTPL (TPL_NOTIFY);
+--- a/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.h
++++ b/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.h
+@@ -94,6 +94,39 @@
+   IN     UINTN                              TimeOut;
+ } DWUSB_DEFERRED_REQ;
+ 
++typedef enum {
++  DwUsbPumpIdle = 0,
++  DwUsbPumpArmed,
++  DwUsbPumpReady
++} DWUSB_PUMP_STATE;
++
++/*
++ * A standing bulk IN request executed autonomously by an otherwise unused
++ * host channel, so polled receives (the USB network class drivers' idiom)
++ * are served from memory instead of busy-waiting at TPL_NOTIFY while the
++ * core NAK-retries on the wire. See DwHcPumpBulkIn.
++ */
++typedef struct {
++  DWUSB_PUMP_STATE                State;
++  UINT8                           DeviceAddress;
++  UINT8                           EpAddress;
++  UINT8                           DeviceSpeed;
++  UINTN                           MaximumPacketLength;
++  /*
++   * HCTSIZ PID encoding of the next expected data toggle. The hardware
++   * owns the endpoint's toggle while the pump runs; this mirrors it back
++   * to the caller's DataToggle on every delivery.
++   */
++  UINT32                          Pid;
++  UINT32                          ArmedLength;
++  UINT32                          ReadyLength;
++  UINT32                          Errors;
++  UINT32                          Cooldown;
++  UINT8                           *Buffer;
++  VOID                            *BufferMapping;
++  UINTN                           BufferBusAddress;
++} DWUSB_PUMP;
++
+ typedef struct _DWUSB_OTGHC_DEV {
+   UINTN                           Signature;
+ 
+@@ -127,6 +160,8 @@
+    * 125us frames;
+    */
+   UINT16                          LastMicroFrame;
++
++  DWUSB_PUMP                      Pump;
+ } DWUSB_OTGHC_DEV;
+ 
+ extern EFI_COMPONENT_NAME_PROTOCOL  gComponentName;

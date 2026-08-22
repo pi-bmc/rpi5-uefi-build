@@ -1,0 +1,76 @@
+From: appkins <nbatkins@gmail.com>
+Date: Sat, 22 Aug 2026 20:10:00 -0500
+Subject: [PATCH] NetworkCommon: hold off binding until the platform opens the
+ gate
+
+A USB NIC that binds during EfiBootManagerConnectAll drags the whole
+network stack into existence in the middle of boot option enumeration.
+On this platform the NIC is the BMC's CDC gadget - the Redfish host
+interface - so what actually springs to life is RedfishDiscoverDxe,
+RedfishConfigHandlerDriver and RpiRedfishSyncDxe's HTTP exchange, all of
+it running from timer and protocol-notify callbacks at TPL_CALLBACK and
+TPL_NOTIFY. TPL is strictly priority-scheduled: BDS at TPL_APPLICATION
+resumes only when all of that drains. Behind the DWC2 USB-C controller,
+where every USB transfer is a TPL_NOTIFY busy-wait, enumeration slowed
+to a visible crawl (patches 0030-0032 in the edk2-platforms recipe made
+the individual transfers honest, but the co-scheduling is structural).
+
+The connect-all does not need this NIC: it must never be a boot target
+(patch 0103 already keeps it out of the boot options), and nothing in
+boot option enumeration reads from it. So let the platform choose the
+moment. NetworkCommonSupported returns EFI_UNSUPPORTED until the
+platform installs the gate protocol - a bare GUID, no interface - after
+which binding proceeds exactly as before. NetworkCommon is the single
+choke point for all three CDC class drivers (ECM, NCM, RNDIS produce
+the USB Ethernet protocol; only NetworkCommon consumes it), and it is
+where the notification endpoint is armed and the UNDI/SNP chain starts,
+so gating here keeps the wire completely quiet.
+
+The platform half lives in PlatformBootManagerLib (edk2-platforms patch
+0034): it installs the gate and connects the USB Ethernet handles after
+boot option enumeration, so the Redfish stack comes up during the boot
+timeout countdown instead of on top of the enumeration. The GUID literal
+is duplicated there; keep the two in sync.
+
+Upstream-Status: Inappropriate [platform boot-policy gate]
+Signed-off-by: appkins <nbatkins@gmail.com>
+---
+--- a/MdeModulePkg/Bus/Usb/UsbNetwork/NetworkCommon/DriverBinding.c
++++ b/MdeModulePkg/Bus/Usb/UsbNetwork/NetworkCommon/DriverBinding.c
+@@ -14,6 +14,24 @@
+ UINT32       gRateLimitingPollTimer;
+ BOOLEAN      gRateLimitingEnable;
+ 
++//
++// Platform gate: NetworkCommonSupported refuses to bind until some platform
++// agent installs this protocol (a bare GUID, no interface).
++//
++// A USB NIC that binds during the boot manager's connect-all drags the whole
++// network stack -- and, on Redfish host interface platforms, the Redfish
++// discovery and configuration machinery -- into existence in the middle of
++// boot option enumeration, where its timer- and protocol-notify-driven work
++// preempts BDS at TPL_APPLICATION for as long as it runs. The platform
++// decides when that cost is welcome by installing the gate and connecting
++// the USB Ethernet handles itself.
++//
++// The GUID literal is duplicated in the platform's PlatformBootManagerLib
++// (edk2-platforms is a separate tree); keep the two in sync.
++//
++STATIC CONST EFI_GUID  mUsbNicGateGuid =
++  { 0x5144a8c6, 0x4d1c, 0x4709, { 0xb3, 0xa6, 0xfc, 0xb7, 0x44, 0xc3, 0x60, 0xdc } };
++
+ EFI_DRIVER_BINDING_PROTOCOL  gNetworkCommonDriverBinding = {
+   NetworkCommonSupported,
+   NetworkCommonDriverStart,
+@@ -103,6 +121,11 @@
+ {
+   EFI_STATUS                   Status;
+   EDKII_USB_ETHERNET_PROTOCOL  *UsbEth;
++  VOID                         *UsbNicGate;
++
++  if (EFI_ERROR (gBS->LocateProtocol ((EFI_GUID *)&mUsbNicGateGuid, NULL, &UsbNicGate))) {
++    return EFI_UNSUPPORTED;
++  }
+ 
+   Status = gBS->OpenProtocol (
+                   ControllerHandle,

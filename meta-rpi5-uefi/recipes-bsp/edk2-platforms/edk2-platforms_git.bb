@@ -124,6 +124,19 @@ PV = "202608+git${SRCPV}"
 #   the driver it belongs to, and everything else this layer adds, lives in
 #   the overlay instead of in a patch.
 #
+#   0034 (PlatformBm opens the USB NIC gate and connects the USB Ethernet
+#   handles AFTER boot option enumeration) is the platform half of the edk2
+#   recipe's 0108, which teaches NetworkCommon to refuse to bind until the
+#   gate protocol exists -- without the pair, the Redfish host interface
+#   stack assembles mid-ConnectAll and preempts BDS from TPL callbacks for
+#   as long as it runs. The gate GUID literal is duplicated across the two
+#   trees; change one and you change the other. 0035 gives DwUsbHostDxe a
+#   hardware-pumped bulk IN path (a standing request on a dedicated channel,
+#   harvested from the 1 ms periodic handler) so the CDC network drivers'
+#   polled receives stop busy-waiting their timeout at TPL_NOTIFY; 0036
+#   (DEBUG only, appended below) must apply after it. Numbering is sparse
+#   again: 0033 was the same diagnostic before the pump existed.
+#
 # ORDERING IS LOAD-BEARING: do_unpack processes SRC_URI entries in listing
 # order, and the git fetcher PRUNES its destsuffix dir before checkout -- the
 # file://edk2-platforms entry must therefore stay AFTER the git entry of the
@@ -159,14 +172,17 @@ SRC_URI = "git://github.com/tianocore/edk2-platforms.git;protocol=https;branch=m
            file://0030-DwUsbHostDxe-do-not-reject-re-arming-an-async-interr.patch \
            file://0031-DwUsbHostDxe-bound-the-deferred-transfer-timeout.patch \
            file://0032-DwUsbHostDxe-optimize-the-transfer-hot-path.patch \
+           file://0034-PlatformBm-connect-USB-NICs-after-boot-option-enumer.patch \
+           file://0035-DwUsbHostDxe-pump-polled-bulk-IN-endpoints-from-the-p.patch \
            "
 
-# Diagnostics, DEBUG builds only. 0033 counts transfers, halt reasons and
-# time spent inside DwUsbHostDxe, and reports a line every five seconds. The
-# accounting itself is cheap, but it reads the performance counter twice per
-# transfer on a path that runs at TPL_NOTIFY, and a production image has no
-# reader for the numbers. It applies on top of 0032 and must stay last.
-SRC_URI += "${@bb.utils.contains('RPI5_BUILD_TARGET', 'DEBUG', 'file://0033-DIAG-DwUsbHostDxe-account-for-time-spent-in-the-driv.patch', '', d)}"
+# Diagnostics, DEBUG builds only. 0036 (the former 0033, regenerated to apply
+# on top of 0035's bulk IN pump) counts transfers, halt reasons and time spent
+# inside DwUsbHostDxe, and reports a line every five seconds. The accounting
+# itself is cheap, but it reads the performance counter twice per transfer on
+# a path that runs at TPL_NOTIFY, and a production image has no reader for the
+# numbers. It applies on top of 0035 and must stay last.
+SRC_URI += "${@bb.utils.contains('RPI5_BUILD_TARGET', 'DEBUG', 'file://0036-DIAG-DwUsbHostDxe-account-for-time-spent-in-the-driv.patch', '', d)}"
 
 # Upstream master, 2026-08-21. Moved here from the retired NumberOneGit fork's
 # merge-base (80ee8b861, 2024-03-13) when the edk2 recipe took

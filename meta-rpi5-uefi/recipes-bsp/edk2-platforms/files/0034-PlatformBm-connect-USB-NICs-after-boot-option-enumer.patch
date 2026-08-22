@@ -1,0 +1,147 @@
+From: appkins <nbatkins@gmail.com>
+Date: Sat, 22 Aug 2026 20:20:00 -0500
+Subject: [PATCH] PlatformBm: connect USB NICs after boot option enumeration
+
+This is the platform half of the USB NIC gate (edk2 recipe patch 0108,
+which teaches NetworkCommon to refuse to bind until the gate protocol
+exists). Install the gate and connect the USB Ethernet handles at the
+end of PlatformBootManagerAfterConsole, once boot option enumeration is
+behind us, so the Redfish host interface stack assembles during the boot
+timeout countdown - waiting the firmware was doing anyway - instead of
+preempting enumeration from TPL_CALLBACK/TPL_NOTIFY callbacks the whole
+way through. The mechanism and the measurements are in 0108's log.
+
+The USB host controllers are connected first: under BDP_CONNECT_MINIMAL
+(this platform's default Boot Discovery Policy) nothing else has
+enumerated the bus by this point, so the CDC class driver has not
+produced the USB Ethernet handles yet. That also makes the Redfish host
+interface independent of the policy knob: the management NIC now
+connects on every boot, deterministically, rather than as a side effect
+of whichever discovery policy the variable happens to hold, and the
+policy goes back to governing boot device discovery only.
+
+Also drop a duplicated BootDiscoveryPolicyHandler() call: the handler
+ran twice back to back, and at BDP_CONNECT_NET/ALL each run repeats the
+full ConnectDeviceClass walk - enumeration paid for it twice.
+
+Upstream-Status: Inappropriate [platform boot policy]
+Signed-off-by: appkins <nbatkins@gmail.com>
+---
+--- a/Platform/RaspberryPi/Library/PlatformBootManagerLib/PlatformBm.c
++++ b/Platform/RaspberryPi/Library/PlatformBootManagerLib/PlatformBm.c
+@@ -854,6 +854,84 @@
+   EfiBootManagerFreeLoadOptions (Options, OptionCount);
+ }
+ 
++//
++// Gate under which NetworkCommon (the UsbNetworkPkg UNDI driver) agrees to
++// bind a USB NIC; installing it is the platform saying "now". The GUID
++// literal is duplicated in the edk2 tree's NetworkCommon (see the
++// 0108-NetworkCommon patch in the edk2 recipe); keep the two in sync.
++//
++STATIC CONST EFI_GUID mUsbNicGateGuid =
++  { 0x5144a8c6, 0x4d1c, 0x4709, { 0xb3, 0xa6, 0xfc, 0xb7, 0x44, 0xc3, 0x60, 0xdc } };
++
++/**
++  Connect the USB NICs now that boot option enumeration is over.
++
++  NetworkCommon refuses to bind while mUsbNicGateGuid is absent, so the
++  BMC's CDC gadget NIC - the Redfish host interface - sits out the
++  connect-all that feeds boot option enumeration. Without the gate the NIC
++  binds mid-enumeration, the whole Redfish stack (discovery, config
++  handlers, RpiRedfishSyncDxe's HTTP exchange) springs to life from
++  protocol-notify callbacks, and - TPL being strictly priority-scheduled -
++  BDS at TPL_APPLICATION only runs when all of it drains. Behind the DWC2
++  USB-C controller, where every transfer is a TPL_NOTIFY busy-wait, that
++  turned enumeration into a crawl.
++
++  Opening the gate here instead lets the Redfish stack come up during the
++  boot-timeout countdown, overlapping waiting the firmware was doing
++  anyway. It also decouples the Redfish host interface from the Boot
++  Discovery Policy: the NIC connects on every boot even at
++  BDP_CONNECT_MINIMAL, and that knob goes back to governing boot device
++  discovery only.
++
++  The USB host controllers are connected first: under BDP_CONNECT_MINIMAL
++  nothing else has enumerated the bus, so the CDC class driver has not
++  produced the USB Ethernet handles yet.
++**/
++STATIC
++VOID
++ConnectUsbNicDevices (
++  VOID
++  )
++{
++  EFI_STATUS  Status;
++  EFI_HANDLE  GateHandle;
++  EFI_HANDLE  *Handles;
++  UINTN       Count;
++  UINTN       Index;
++
++  GateHandle = NULL;
++  Status = gBS->InstallProtocolInterface (&GateHandle,
++                  (EFI_GUID *)&mUsbNicGateGuid, EFI_NATIVE_INTERFACE, NULL);
++  if (EFI_ERROR (Status)) {
++    DEBUG ((DEBUG_ERROR, "%a: install USB NIC gate: %r\n",
++      __func__, Status));
++    return;
++  }
++
++  Status = gBS->LocateHandleBuffer (ByProtocol, &gEfiUsb2HcProtocolGuid,
++                  NULL, &Count, &Handles);
++  if (!EFI_ERROR (Status)) {
++    for (Index = 0; Index < Count; Index++) {
++      gBS->ConnectController (Handles[Index], NULL, NULL, TRUE);
++    }
++
++    FreePool (Handles);
++  }
++
++  Status = gBS->LocateHandleBuffer (ByProtocol, &gEdkIIUsbEthProtocolGuid,
++                  NULL, &Count, &Handles);
++  if (EFI_ERROR (Status)) {
++    DEBUG ((DEBUG_INFO, "%a: no USB NIC present (%r)\n", __func__, Status));
++    return;
++  }
++
++  for (Index = 0; Index < Count; Index++) {
++    gBS->ConnectController (Handles[Index], NULL, NULL, TRUE);
++  }
++
++  FreePool (Handles);
++}
++
+ /**
+   Do the platform specific action after the console is ready
+   Possible things that can be done in PlatformBootManagerAfterConsole:
+@@ -895,11 +973,6 @@
+     DEBUG ((DEBUG_INFO, "Error applying Boot Discovery Policy:%r\n", Status));
+   }
+ 
+-  Status = BootDiscoveryPolicyHandler ();
+-  if (EFI_ERROR(Status)) {
+-    DEBUG ((DEBUG_INFO, "Error applying Boot Discovery Policy:%r\n", Status));
+-  }
+-
+   Status = gBS->LocateProtocol (&gEsrtManagementProtocolGuid, NULL, (VOID**)&EsrtManagement);
+   if (!EFI_ERROR (Status)) {
+     EsrtManagement->SyncEsrtFmp ();
+@@ -912,6 +985,8 @@
+   }
+ 
+   PlatformRegisterOptionsAndKeys ();
++
++  ConnectUsbNicDevices ();
+ }
+ 
+ /**
+--- a/Platform/RaspberryPi/Library/PlatformBootManagerLib/PlatformBootManagerLib.inf
++++ b/Platform/RaspberryPi/Library/PlatformBootManagerLib/PlatformBootManagerLib.inf
+@@ -86,6 +86,7 @@
+   gEfiSimpleFileSystemProtocolGuid
+   gEsrtManagementProtocolGuid
+   gEfiUsb2HcProtocolGuid
++  gEdkIIUsbEthProtocolGuid
+ 
+ [Depex]
+   gEdkiiPlatformSpecificResetHandlerProtocolGuid

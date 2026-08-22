@@ -1,8 +1,16 @@
 From: appkins <nbatkins@gmail.com>
-Date: Sat, 22 Aug 2026 18:15:00 -0500
+Date: Sat, 22 Aug 2026 21:30:00 -0500
 Subject: [PATCH] DIAG: DwUsbHostDxe: account for time spent in the driver
 
 DIAGNOSTIC PATCH -- REMOVE BEFORE SHIPPING.
+
+Regenerated from the former 0033 to apply on top of 0035 (the bulk IN
+pump); the content is unchanged apart from context. The tick timestamp
+is taken before DwHcPumpHarvest, so pump work is counted in the per-tick
+figures, and with the pump active the expected signature inverts: the
+nak column collapses (the hardware absorbs the retries), nh stops
+counting empty-receive expiries, and busy/tkmax fall to the cost of the
+transfers that still run synchronously.
 
 Boot manager enumeration is fast when the Redfish host interface runs on
 the RP1 XHCI ports and slow when the same gadget, the same CDC-NCM class
@@ -67,7 +75,7 @@ Signed-off-by: appkins <nbatkins@gmail.com>
   * https://www.quicklogic.com/assets/pdf/data-sheets/QL-Hi-Speed-USB-2.0-OTG-Controller-Data-Sheet.pdf
   */
  
-@@ -334,6 +343,9 @@
+@@ -351,6 +360,9 @@
  
    EFI_TPL Tpl = gBS->RaiseTPL (TPL_NOTIFY);
  
@@ -77,7 +85,7 @@ Signed-off-by: appkins <nbatkins@gmail.com>
    *TransferResult = EFI_USB_NOERROR;
  
    do {
-@@ -396,6 +408,11 @@
+@@ -413,6 +425,11 @@
  
      Ret = Wait4Chhltd (DwHc, Timeout, Channel, &Sub, Pid, IgnoreAck, &Split);
  
@@ -89,7 +97,7 @@ Signed-off-by: appkins <nbatkins@gmail.com>
      if (Ret == XFER_NOT_HALTED) {
        *TransferResult = EFI_USB_ERR_TIMEOUT;
        MmioOr32 (DwHc->DwUsbBase + HCCHAR (Channel), DWC2_HCCHAR_CHDIS);
-@@ -464,6 +481,18 @@
+@@ -481,6 +498,18 @@
  
    *DataLength = Done;
  
@@ -108,7 +116,7 @@ Signed-off-by: appkins <nbatkins@gmail.com>
    gBS->RestoreTPL (Tpl);
  
    ASSERT (!EFI_ERROR (Status) || *TransferResult != EFI_USB_NOERROR);
-@@ -1300,6 +1329,10 @@
+@@ -1655,6 +1684,10 @@
     */
    NewReq->TimeOut = 5; /* ms */
  
@@ -119,16 +127,16 @@ Signed-off-by: appkins <nbatkins@gmail.com>
    InsertTailList (&DwHc->DeferredList, &NewReq->List);
    Status = EFI_SUCCESS;
  
-@@ -1900,6 +1933,8 @@
+@@ -2261,6 +2294,8 @@
    LIST_ENTRY *Entry;
    LIST_ENTRY *NextEntry;
    DWUSB_OTGHC_DEV *DwHc = Context;
 +  UINT64 StatStart = GetPerformanceCounter ();   /* DIAGNOSTIC */
 +  UINT64 StatNs;
  
-   DwHc->CurrentFrame += FramesPassed (DwHc);
-   Frame = DwHc->CurrentFrame;
-@@ -1910,9 +1945,52 @@
+   DwHcPumpHarvest (DwHc);
+ 
+@@ -2273,9 +2308,52 @@
  
      if (Frame >= Req->TargetFrame) {
        Req->TargetFrame = Frame + Req->FrameInterval;
@@ -181,7 +189,7 @@ Signed-off-by: appkins <nbatkins@gmail.com>
  }
  
  EFI_STATUS
-@@ -2012,6 +2090,8 @@
+@@ -2375,6 +2453,8 @@
      return Status;
    }
  
@@ -192,10 +200,10 @@ Signed-off-by: appkins <nbatkins@gmail.com>
    if (Status != EFI_SUCCESS) {
 --- a/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.h
 +++ b/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.h
-@@ -127,6 +127,20 @@
-    * 125us frames;
-    */
+@@ -162,6 +162,20 @@
    UINT16                          LastMicroFrame;
+ 
+   DWUSB_PUMP                      Pump;
 +
 +  /*
 +   * DIAGNOSTIC. Reset every DWC2_STAT_REPORT_TICKS by DwHcPeriodicHandler.
