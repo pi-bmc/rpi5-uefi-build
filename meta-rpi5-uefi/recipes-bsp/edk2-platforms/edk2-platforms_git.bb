@@ -1,7 +1,8 @@
 SUMMARY = "tianocore edk2-platforms with this layer's Raspberry Pi 5 port applied"
 DESCRIPTION = "The edk2-platforms source tree that edk2-rpi5-firmware builds \
                Platform/RaspberryPi/RPi5/RPi5.dsc out of. Nothing is compiled here: \
-               this recipe owns the fetch, the RPi5 port and the port's fixes, and \
+               this recipe owns the fetch, the RPi5 port, the port's fixes and this \
+               layer's own RP1 GEM Ethernet driver, and \
                stages the resulting tree into ${datadir}/edk2/edk2-platforms for the \
                firmware recipe to consume out of its sysroot. Split out of \
                edk2-rpi5-firmware so a 96 MB fetch and a 17-patch series are \
@@ -22,6 +23,24 @@ PV = "202403+git${SRCPV}"
 # byte-identical to the fork within every package tree the RPi5 build
 # compiles. The fork's bulk-sync churn in other vendors' trees (187 files
 # never referenced by RPi5.dsc/.fdf) is deliberately dropped.
+#
+# files/edk2-platforms/ ALSO carries source the fork never had: this layer's
+# own Rp1GemDxe, at Silicon/Broadcom/Drivers/Net/. That addition is purely
+# additive -- it touches no fork-derived file, so the byte-parity above still
+# holds for everything the audit covered -- and it sits where it does because
+# upstream already ships the RPi4 equivalent one directory over: BcmNet.dec
+# beside BcmGenetDxe/, wired into RPi4.dsc/.fdf right after the NetworkPkg
+# includes. Rp1GemPkg.dec + Rp1GemDxe/ mirror that shape exactly, down to the
+# component block's scoped DMA PCDs, so upstreaming the driver is a move
+# rather than a rewrite. RPi5.dsc/.fdf (also overlay files) carry the component
+# and INF entries inline and unconditionally, in the same place and the same
+# form RPi4 carries GENET's -- the firmware recipe inserts nothing for it and
+# has no knob for it: the onboard NIC is not optional on this board.
+#
+# Rp1GpioLib (Phy.c's PHY-reset line) still resolves out of RpiBmcPkg, which
+# the firmware recipe supplies as its own PACKAGES_PATH root -- so this driver
+# does depend on one package it does not ship with. Moving that library into
+# RpiSiliconPkg would point the dependency the right way round; not done yet.
 #
 # Patch order matters and follows SRC_URI order: 0000 (the fork's changed
 # files) first, then this layer's own 0001..0007, 0010, the ACPI pair

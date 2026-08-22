@@ -6,9 +6,12 @@
 #  Rp1BusDxe registers (gRp1GemNonDiscoverableDeviceGuid, two MMIO
 #  resources: GEM core + eth_cfg wrapper).
 #
-#  Out-of-tree package added to PACKAGES_PATH by meta-rpi5-uefi; kept
-#  separate from RpiBmcPkg because it is a candidate for upstreaming to
-#  NumberOneGit/edk2-platforms as RpiSiliconPkg/Drivers/Rp1GemDxe.
+#  Carried in the edk2-platforms tree by meta-rpi5-uefi (see the
+#  edk2-platforms recipe), laid out to mirror the driver it sits beside:
+#  BcmNet.dec + BcmGenetDxe/ is upstream's RPi4 Ethernet driver, and this is
+#  the same shape for the Pi 5 -- a thin driver-family .dec next to the driver
+#  directory, wired into RPi5.dsc/.fdf at the same NetworkPkg anchor RPi4 uses.
+#  Written this way so upstreaming it is a move, not a rewrite.
 #
 #  SPDX-License-Identifier: BSD-2-Clause-Patent
 #

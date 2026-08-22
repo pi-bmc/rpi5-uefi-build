@@ -105,15 +105,18 @@ add-on NICs.
 
 ## Local driver packages (pi-bmc port)
 
-Beyond the upstream build, `meta-rpi5-uefi/recipes-bsp/edk2/files/` carries
-the out-of-tree EDK2 source packages, and
-`meta-rpi5-uefi/recipes-bsp/edk2-platforms/files/` the one small patch, porting the
-`../u-boot` RPi 5 driver set to EDK2 (all fresh BSD-2-Clause-Patent code;
-the GPL u-boot drivers were behavioral/wire-format reference only):
+The `../u-boot` RPi 5 driver set is ported to EDK2 across two places (all fresh
+BSD-2-Clause-Patent code; the GPL u-boot drivers were behavioral/wire-format
+reference only). `meta-rpi5-uefi/recipes-bsp/edk2-platforms/files/` carries what
+belongs in the platform tree, and
+`meta-rpi5-uefi/recipes-bsp/edk2/files/` the out-of-tree packages:
 
-- **`Rp1GemPkg`** (`RPI5_RP1_ETH`) -- `Rp1GemDxe`, a native SNP driver for
-  the onboard RJ45 (Cadence GEM_GXL in RP1), registers from Xilinx UG585 /
-  FreeBSD `if_cgem.c`. What iPXE never covered.
+- **`Rp1GemDxe`** -- a native SNP driver for the onboard RJ45
+  (Cadence GEM_GXL in RP1), registers from Xilinx UG585 / FreeBSD `if_cgem.c`.
+  What iPXE never covered. Lives in the edk2-platforms tree at
+  `Silicon/Broadcom/Drivers/Net/`, mirroring upstream's `BcmNet.dec` +
+  `BcmGenetDxe/` (the RPi4 equivalent) one directory over, so upstreaming it is
+  a move rather than a rewrite.
 - **`RpiBmcPkg`** (`RPI5_BMC`) -- the host side of the BMC shared-EEPROM
   contract (24c256 @0x50 on RP1 I2C1, real or BMC-emulated): `Rp1DwI2cDxe`
   (DesignWare I2C master), `EepromVarStoreDxe` (UbEfiVa variable blob at
@@ -139,8 +142,6 @@ Set any of these in `kas.yml`'s `local_conf_header` (or `local.conf`):
 
 - `RPI5_IPXE` (default `"0"` since the native Rp1GemDxe covers onboard
   PXE) -- embed the iPXE driver for add-on PCIe/USB NICs.
-- `RPI5_RP1_ETH` (default `"1"`) -- build/embed the native RP1 GEM
-  onboard-Ethernet SNP driver (`Rp1GemPkg`).
 - `RPI5_BMC` (default `"1"`) -- build/embed the BMC-integration driver set
   (`RpiBmcPkg`).
 - `RPI5_USBNET` (default `"1"`) -- wire edk2's USB CDC-ECM/NCM/RNDIS

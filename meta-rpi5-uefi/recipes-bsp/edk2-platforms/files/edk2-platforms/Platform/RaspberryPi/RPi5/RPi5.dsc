@@ -672,6 +672,30 @@
 !include NetworkPkg/Network.dsc.inc
 
   #
+  # Onboard Gigabit Ethernet: the Cadence GEM_GXL (r1p09) MAC inside the RP1
+  # southbridge, bound to the vendor NON_DISCOVERABLE_DEVICE Rp1BusDxe
+  # registers. Placed and scoped exactly as RPi4.dsc places BcmGenetDxe, the
+  # equivalent driver for the Pi 4 -- component entry right after the
+  # NetworkPkg include, with the DMA window pinned in a <PcdsFixedAtBuild>
+  # override. The values differ from RPi4's because this SoC's 32-bit BAR
+  # window overlaps DRAM: identity bus mapping, buffers kept below 3 GiB,
+  # matching what NonCoherentIoMmuDxe gets elsewhere in this file. DmaLib is
+  # already NonCoherentDmaLib globally.
+  #
+  # Unconditional, as GENET is for RPi4: this is the board's only onboard NIC,
+  # and a platform that cannot reach the network is no use here. Rp1GpioLib
+  # comes from RpiBmcPkg (Phy.c drives the PHY reset line); that package is a
+  # PACKAGES_PATH root the firmware recipe supplies.
+  #
+  Silicon/Broadcom/Drivers/Net/Rp1GemDxe/Rp1GemDxe.inf {
+    <LibraryClasses>
+      Rp1GpioLib|RpiBmcPkg/Library/Rp1GpioLib/Rp1GpioLib.inf
+    <PcdsFixedAtBuild>
+      gEmbeddedTokenSpaceGuid.PcdDmaDeviceOffset|0x0
+      gEmbeddedTokenSpaceGuid.PcdDmaDeviceLimit|0xBFFFFFFF
+  }
+
+  #
   # RNG
   #
   Silicon/Broadcom/Bcm283x/Drivers/Bcm2838RngDxe/Bcm2838RngDxe.inf

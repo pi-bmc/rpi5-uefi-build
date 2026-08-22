@@ -3,7 +3,9 @@ DESCRIPTION = "Builds Platform/RaspberryPi/RPi5/RPi5.dsc against UPSTREAM \
                tianocore trees. This recipe owns the edk2 tree itself -- the former \
                NumberOneGit fork's edk2 delta is one commit (0001-EDK2-Sd-Mmc-v4.patch \
                on the fork's exact master merge-base) -- plus the out-of-tree EDK2 \
-               source packages under files/. The other three trees are recipes of \
+               source packages under files/ (RpiBmcPkg, RpiRedfishPkg, RpiFmpPkg; \
+               Rp1GemDxe lives in the edk2-platforms tree instead, beside upstream's \
+               BcmGenetDxe). The other three trees are recipes of \
                their own, named after their repositories and staged into this recipe's \
                sysroot: edk2-platforms (which carries the RPi5 port and its patch \
                series), edk2-non-osi and edk2-redfish-client. TF-A's bl31.bin (see the \
@@ -57,7 +59,6 @@ SRC_URI = "gitsm://github.com/tianocore/edk2.git;protocol=https;branch=master;de
            file://0103-UefiBootManagerLib-do-not-enumerate-USB-NICs-as-boot.patch \
            file://0104-JsonLib-fix-RELEASE-build-of-lex_unget_unsave.patch \
            file://RpiBmcPkg \
-           file://Rp1GemPkg \
            file://RpiRedfishPkg \
            file://RpiFmpPkg \
            file://secureboot-keys \
@@ -163,15 +164,10 @@ do_compile[depends] += "arm-trusted-firmware:do_deploy"
 do_compile[depends] += "${@bb.utils.contains('RPI5_IPXE', '1', 'ipxe-efi:do_deploy', '', d)}"
 
 # iPXE embedding, now OFF by default: the onboard RJ45 PXE/HTTP-boots
-# natively via Rp1GemDxe (RPI5_RP1_ETH) + NetworkPkg's own UefiPxeBcDxe, so
+# natively via Rp1GemDxe + NetworkPkg's own UefiPxeBcDxe, so
 # iPXE's only remaining coverage is add-on NICs (a PCIe card on the FPC, or
 # a USB dongle from iPXE's driver table). Set to "1" to embed it for those.
 RPI5_IPXE ??= "0"
-
-# Native RP1 GEM (onboard RJ45) SNP driver, built from the local Rp1GemPkg
-# source package. Coexists with iPXE: disjoint hardware, both SNPs feed the
-# same NetworkPkg stack.
-RPI5_RP1_ETH ??= "1"
 
 # Board-integration driver set (local RpiBmcPkg): power button, active
 # cooler, BootloaderConfig provenance variables. (The I2C EEPROM sync
@@ -500,13 +496,14 @@ do_compile() {
     # under it). edk2-non-osi and edk2-redfish-client need none of that: they
     # go on PACKAGES_PATH as absolute sysroot paths, which EDK2 resolves from
     # anywhere -- exactly as it already does for ${local_pkgs} below.
-    # Local out-of-tree EDK2 packages (RpiBmcPkg, Rp1GemPkg), staged into a
-    # dedicated PACKAGES_PATH root so EDK2's path resolution sees exactly the
-    # two package dirs and nothing else from WORKDIR.
+    # Local out-of-tree EDK2 packages, staged into a dedicated PACKAGES_PATH
+    # root so EDK2's path resolution sees exactly those package dirs and
+    # nothing else from WORKDIR. Rp1GemDxe is NOT among them -- it ships inside
+    # the edk2-platforms tree, so it resolves off that PACKAGES_PATH entry.
     local_pkgs="${B}/edk2-local-pkgs"
     rm -rf "${local_pkgs}"
     mkdir -p "${local_pkgs}"
-    cp -r "${WORKDIR}/RpiBmcPkg" "${WORKDIR}/Rp1GemPkg" "${WORKDIR}/RpiRedfishPkg" \
+    cp -r "${WORKDIR}/RpiBmcPkg" "${WORKDIR}/RpiRedfishPkg" \
         "${WORKDIR}/RpiFmpPkg" "${local_pkgs}/"
 
     export WORKSPACE="${WORKDIR}"
@@ -553,16 +550,6 @@ do_compile() {
             sed -i "\|${dsc_marker}|r ${B}/rpibmc-dsc-line.inc" "${dsc}"
         grep -qF 'RpiBmcPkg/RpiBmc.fdf.inc' "${fdf}" || \
             sed -i "\|${fdf_marker}|r ${B}/rpibmc-fdf-line.inc" "${fdf}"
-    fi
-
-    # Native RP1 GEM onboard-Ethernet SNP driver (local Rp1GemPkg).
-    if [ "${RPI5_RP1_ETH}" = "1" ]; then
-        printf '%s\n' '!include Rp1GemPkg/Rp1Gem.dsc.inc' > "${B}/rp1gem-dsc-line.inc"
-        printf '%s\n' '!include Rp1GemPkg/Rp1Gem.fdf.inc' > "${B}/rp1gem-fdf-line.inc"
-        grep -qF 'Rp1GemPkg/Rp1Gem.dsc.inc' "${dsc}" || \
-            sed -i "\|${dsc_marker}|r ${B}/rp1gem-dsc-line.inc" "${dsc}"
-        grep -qF 'Rp1GemPkg/Rp1Gem.fdf.inc' "${fdf}" || \
-            sed -i "\|${fdf_marker}|r ${B}/rp1gem-fdf-line.inc" "${fdf}"
     fi
 
     # edk2's own USB CDC-ECM/NCM/RNDIS drivers (in-tree, unwired upstream).
@@ -702,7 +689,8 @@ do_compile() {
     # DEPLOY_DIR_IMAGE; wire it into the DXE firmware volume as a prebuilt
     # driver FFS file, right after the point where RPi5.fdf pulls in edk2's
     # own NetworkPkg PXE/HTTP stack. Covers add-on PCIe/USB NICs iPXE
-    # recognises; the onboard RJ45 is Rp1GemDxe's job (see RPI5_RP1_ETH).
+    # recognises; the onboard RJ45 is Rp1GemDxe's job -- always built in, the
+    # way RPi4 always builds in BcmGenetDxe.
     if [ "${RPI5_IPXE}" = "1" ]; then
         snippet="${B}/ipxe-fdf-snippet.fdf.inc"
         sed \

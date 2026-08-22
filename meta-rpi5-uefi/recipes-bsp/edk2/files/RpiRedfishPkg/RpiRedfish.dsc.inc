@@ -5,8 +5,8 @@
 #
 # The insertion point is inside [Components.common], so this file opens the
 # sections it needs and MUST end by reopening [Components.common] - anything
-# the recipe inserted at the same anchor before this block (usbnet, RpiBmcPkg,
-# Rp1GemPkg lines) follows it in the file and must land back in components.
+# the recipe inserted at the same anchor before this block (usbnet, RpiBmcPkg
+# lines) follows it in the file and must land back in components.
 #
 # RedfishPkg's own .dsc.inc files are deliberately not used: they are gated
 # on $(REDFISH_ENABLE), which has no definition at this insertion point, and

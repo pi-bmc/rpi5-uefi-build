@@ -295,6 +295,13 @@ READ_LOCK_STATUS   = TRUE
 !include NetworkPkg/Network.fdf.inc
 
   #
+  # Onboard RP1 GEM Ethernet -- mirrors RPi4.fdf's BcmGenetDxe line, and must
+  # stay in step with the component entry in RPi5.dsc: a module built in the
+  # .dsc but missing here never dispatches.
+  #
+  INF Silicon/Broadcom/Drivers/Net/Rp1GemDxe/Rp1GemDxe.inf
+
+  #
   # RNG
   #
   INF Silicon/Broadcom/Bcm283x/Drivers/Bcm2838RngDxe/Bcm2838RngDxe.inf
