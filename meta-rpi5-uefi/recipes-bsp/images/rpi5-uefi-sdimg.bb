@@ -5,8 +5,10 @@ DESCRIPTION = "Assembles rpi5-uefi-sd.img: an MBR disk image with a single \
                stack -- armstub8-2712.bin (RPI_EFI.fd under the default \
                armstub filename, so config.txt needs no armstub= line), \
                config.txt, the bcm2712 device trees (from the Talos kernel \
-               image, so they match the kernel that consumes them), and the \
-               overlays/ directory (from the Pi firmware release). \
+               image, so they match the kernel that consumes them, both flat \
+               for the VPU bootloader and under dtb/<kernel release>/ for \
+               FdtDxe to pick from), and the overlays/ directory (from the Pi \
+               firmware release). \
 \
                This image is intentionally NOT compatible with the \
                u-boot-based RPi image from ../nanokvm-build: both stacks claim \
@@ -37,7 +39,8 @@ do_install[noexec] = "1"
 do_compile[depends] += "edk2-rpi5-firmware:do_deploy rpi-boot-dtbs:do_deploy talos-boot-dtbs:do_deploy"
 
 # FAT32 boot partition size. Contents are ~9 MiB (3.8M firmware + ~4M
-# overlays + DTBs); 64 MiB leaves comfortable room for dtoverlay additions
+# overlays + DTBs), plus ~160K for each extra kernel release in
+# TALOS_KERNEL_TAGS; 64 MiB leaves comfortable room for dtoverlay additions
 # and future FD growth without resizing the layout.
 SDIMG_BOOT_MB ?= "64"
 # Partition start offset, the conventional 4 MiB alignment.
@@ -85,6 +88,28 @@ do_compile() {
     for dtb in "${DEPLOY_DIR_IMAGE}/talos-boot-dtbs/"*.dtb; do
         mcopy -i "${part}" "${dtb}" ::/
     done
+
+    # The same trees again, filed by the kernel release they belong to, which
+    # is where FdtDxe looks: \dtb\<release>\bcm2712-rpi-5-b.dtb, keyed off
+    # the .uname section of the UKI the boot manager is about to start. The
+    # copies above are for the VPU bootloader, which knows one filename and
+    # nothing about kernels; these are for picking between kernels once there
+    # is a kernel to pick for.
+    #
+    # Deliberately no unkeyed \dtb\bcm2712-rpi-5-b.dtb here. FdtDxe falls
+    # back to that path, but on this card the fallback is already better
+    # served: the tree at the root is the one the VPU loaded AND patched with
+    # this board's memory layout, MAC and blconfig placement, and FdtDxe has
+    # published it as the configuration table before any of this is reached.
+    # An unpatched duplicate under \dtb\ would only displace it. That path
+    # is for an OS that installs its own tree on its own volume.
+    mmd -i "${part}" ::/dtb
+    for dir in "${DEPLOY_DIR_IMAGE}/talos-boot-dtbs/by-uname/"*/; do
+        release=$(basename "${dir}")
+        mmd -i "${part}" ::/dtb/"${release}"
+        mcopy -i "${part}" "${dir}"*.dtb ::/dtb/"${release}"/
+    done
+
     mmd -i "${part}" ::/overlays
     mcopy -i "${part}" -s "${DEPLOY_DIR_IMAGE}/rpi-boot-dtbs/overlays/"* ::/overlays/
 

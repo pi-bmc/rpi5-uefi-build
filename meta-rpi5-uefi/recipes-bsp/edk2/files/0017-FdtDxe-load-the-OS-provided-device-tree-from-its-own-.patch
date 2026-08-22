@@ -1,9 +1,16 @@
 diff --git a/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.c b/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.c
 --- a/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.c
 +++ b/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.c
-@@ -20,6 +20,9 @@
+@@ -16,10 +16,16 @@
+ #include <Library/DxeServicesLib.h>
+ #include <Library/FdtPlatformLib.h>
+ #include <Library/MemoryAllocationLib.h>
++#include <Library/PrintLib.h>
+ #include <Library/UefiBootServicesTableLib.h>
  #include <Library/UefiLib.h>
  #include <Library/FdtLib.h>
++#include <IndustryStandard/PeImage.h>
++#include <Protocol/LoadedImage.h>
  #include <Protocol/RpiFirmware.h>
 +#include <Protocol/SimpleFileSystem.h>
 +#include <Guid/EventGroup.h>
@@ -11,12 +18,12 @@ diff --git a/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.c b/Platform/RaspberryPi
  #include <Guid/Fdt.h>
  #include <ConfigVars.h>
  
-@@ -80,6 +83,24 @@
+@@ -80,9 +86,77 @@
  //
  #define FDT_FIXUP_HEADROOM  SIZE_4KB
  
 +//
-+// Where a device tree may be placed on the OS's own filesystem.
++// Where a device tree may be placed on a filesystem we can see.
 +//
 +// This is the answer to a firmware that would otherwise have to be reflashed
 +// for every kernel: the device tree has to match the kernel, so let it live
@@ -24,19 +31,72 @@ diff --git a/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.c b/Platform/RaspberryPi
 +// installs the OS drops the tree its kernel was built against here, and the
 +// same firmware image boots it.
 +//
-+// One fixed name, deliberately. Guessing between the Pi 5 variants
++// Two shapes are looked for:
++//
++//   \dtb\<kernel release>\bcm2712-rpi-5-b.dtb   -- keyed to one kernel
++//   \dtb\bcm2712-rpi-5-b.dtb                    -- whatever boots
++//
++// The keyed form is there because "the tree that matches the kernel" stops
++// being a single answer on a machine that keeps two kernels around. An A/B
++// upgrade -- Talos being the case in hand -- installs the new image alongside
++// the old and expects a failed boot to fall back to it; with one tree at a
++// fixed path, that fallback runs last month's kernel against this month's
++// tree, which is the exact mismatch this whole mechanism exists to avoid.
++// <kernel release> is the booting UKI's .uname section verbatim, i.e. the
++// `uname -r` string such as "6.18.44-talos", so the two are paired by
++// construction rather than by an installer remembering to keep them in step.
++//
++// One fixed leaf name, deliberately. Guessing between the Pi 5 variants
 +// (bcm2712-rpi-5-b / bcm2712d0-rpi-5-b / bcm2712-d-rpi-5-b) from a board
 +// revision would put us in the business of reimplementing the VPU
 +// bootloader's model-to-filename mapping, and getting it wrong hands the OS a
 +// tree for different silicon. Placing the right file is the installer's job,
 +// exactly as it is for config.txt's device_tree=.
 +//
-+#define FDT_OS_PATH  L"\\dtb\\bcm2712-rpi-5-b.dtb"
++#define FDT_OS_LEAF      L"bcm2712-rpi-5-b.dtb"
++#define FDT_OS_PATH      L"\\dtb\\" FDT_OS_LEAF
++#define FDT_OS_PATH_FMT  L"\\dtb\\%a\\" FDT_OS_LEAF
++
++//
++// Longest kernel release we will build a path out of. Linux caps its own
++// release string at 64 (__NEW_UTS_LEN), so anything longer than this did not
++// come from a kernel and has no business being concatenated into a path.
++//
++#define FDT_OS_UNAME_MAX  64
++
++//
++// The two sections of a unified kernel image that concern us. .linux is what
++// makes an image a UKI rather than some other loader that happens to be
++// booting -- systemd-stub uses its presence for the same test, in reverse,
++// to reject a UKI handed to it as an addon -- and .uname is the kernel
++// release inside it.
++//
++#define UKI_SECTION_LINUX  ".linux"
++#define UKI_SECTION_UNAME  ".uname"
 +
  STATIC RASPBERRY_PI_FIRMWARE_PROTOCOL   *mFwProtocol;
  STATIC UINT32                           mBoardRevision;
  
-@@ -576,6 +597,172 @@
++//
++// The tree we last handed the OS, and how many pages it occupies. Kept so a
++// better-matched tree can release it: the unkeyed tree below is installed
++// before the boot option has even been loaded, so on a UKI boot it is
++// routinely superseded a moment later.
++//
++STATIC EFI_PHYSICAL_ADDRESS             mOsFdtBuffer;
++STATIC UINTN                            mOsFdtPages;
++
++//
++// Registration for the LoadedImage notify, and the latch that keeps us from
++// acting on more than the one image that is actually the OS.
++//
++STATIC VOID                             *mLoadedImageRegistration;
++STATIC BOOLEAN                          mOsFdtMatched;
++
+ STATIC
+ EFI_STATUS
+ FixEthernetAliases (
+@@ -576,6 +650,469 @@
    Rpi5DtFixup
  };
  
@@ -44,6 +104,7 @@ diff --git a/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.c b/Platform/RaspberryPi
 +  Try to load a device tree from one filesystem and hand it to the OS.
 +
 +  @param  Handle[in]  A handle carrying EFI_SIMPLE_FILE_SYSTEM_PROTOCOL.
++  @param  Path[in]    Where on that volume to look.
 +
 +  @retval EFI_SUCCESS  A tree was loaded, fixed up and installed.
 +  @retval other        This volume has none, or it could not be used.
@@ -52,7 +113,8 @@ diff --git a/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.c b/Platform/RaspberryPi
 +STATIC
 +EFI_STATUS
 +TryLoadFdtFromVolume (
-+  IN EFI_HANDLE  Handle
++  IN EFI_HANDLE    Handle,
++  IN CONST CHAR16  *Path
 +  )
 +{
 +  EFI_SIMPLE_FILE_SYSTEM_PROTOCOL  *Fs;
@@ -82,7 +144,7 @@ diff --git a/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.c b/Platform/RaspberryPi
 +    return Status;
 +  }
 +
-+  Status = Root->Open (Root, &File, FDT_OS_PATH, EFI_FILE_MODE_READ, 0);
++  Status = Root->Open (Root, &File, (CHAR16 *)Path, EFI_FILE_MODE_READ, 0);
 +  if (EFI_ERROR (Status)) {
 +    goto Done;
 +  }
@@ -108,7 +170,7 @@ diff --git a/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.c b/Platform/RaspberryPi
 +  FileSize = (UINTN)Info->FileSize;
 +  if ((FileSize < sizeof (UINT64)) || (FileSize > SIZE_32MB)) {
 +    DEBUG ((DEBUG_WARN, "%a: '%s' is not a plausible devicetree (0x%lx bytes)\n",
-+      __func__, FDT_OS_PATH, (UINT64)FileSize));
++      __func__, Path, (UINT64)FileSize));
 +    Status = EFI_VOLUME_CORRUPTED;
 +    goto Done;
 +  }
@@ -136,12 +198,23 @@ diff --git a/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.c b/Platform/RaspberryPi
 +  //
 +  Status = Rpi5DtFixup (&mDtFixupProtocol, (VOID *)(UINTN)Buffer, &BufferSize, EFI_DT_ALL);
 +  if (EFI_ERROR (Status)) {
-+    DEBUG ((DEBUG_ERROR, "%a: fixup of '%s' failed: %r\n", __func__, FDT_OS_PATH, Status));
++    DEBUG ((DEBUG_ERROR, "%a: fixup of '%s' failed: %r\n", __func__, Path, Status));
 +    goto Done;
 +  }
 +
-+  DEBUG ((DEBUG_INFO, "%a: handed the OS its own devicetree from '%s'\n", __func__, FDT_OS_PATH));
-+  Pages = 0;
++  //
++  // Installed, so this tree has to outlive the function -- and whatever we
++  // handed over before it does not.
++  //
++  if (mOsFdtPages != 0) {
++    gBS->FreePages (mOsFdtBuffer, mOsFdtPages);
++  }
++
++  mOsFdtBuffer = Buffer;
++  mOsFdtPages  = Pages;
++  Pages        = 0;
++
++  DEBUG ((DEBUG_INFO, "%a: handed the OS its own devicetree from '%s'\n", __func__, Path));
 +
 +Done:
 +  if (Info != NULL) {
@@ -164,21 +237,19 @@ diff --git a/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.c b/Platform/RaspberryPi
 +}
 +
 +/**
-+  At ReadyToBoot, prefer a device tree the OS installed over the one the VPU
-+  bootloader loaded.
++  Look for one device tree path on every filesystem we can see, and hand the
++  OS the first one that loads.
 +
-+  Late rather than at driver init because filesystems do not exist yet when
-+  FdtDxe runs. Anything that brings its own tree later -- a UKI .dtb section
-+  through the fixup protocol -- still wins, because it installs its table after
-+  this fires.
++  @param  Path[in]  Path to try on each volume.
++
++  @retval EFI_SUCCESS  A tree was loaded, fixed up and installed.
++  @retval other        No volume carries this path.
 +
 +**/
 +STATIC
-+VOID
-+EFIAPI
-+LoadFdtFromOsVolume (
-+  IN EFI_EVENT  Event,
-+  IN VOID       *Context
++EFI_STATUS
++LoadFdtByPath (
++  IN CONST CHAR16  *Path
 +  )
 +{
 +  EFI_STATUS  Status;
@@ -194,30 +265,317 @@ diff --git a/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.c b/Platform/RaspberryPi
 +                  &Handles
 +                  );
 +  if (EFI_ERROR (Status)) {
-+    return;
++    return Status;
 +  }
 +
++  Status = EFI_NOT_FOUND;
 +  for (Index = 0; Index < HandleCount; Index++) {
-+    if (!EFI_ERROR (TryLoadFdtFromVolume (Handles[Index]))) {
++    if (!EFI_ERROR (TryLoadFdtFromVolume (Handles[Index], Path))) {
++      Status = EFI_SUCCESS;
 +      break;
 +    }
 +  }
 +
 +  FreePool (Handles);
++
++  return Status;
++}
++
++/**
++  At ReadyToBoot, prefer a device tree the OS installed over the one the VPU
++  bootloader loaded.
++
++  Late rather than at driver init because filesystems do not exist yet when
++  FdtDxe runs. The unkeyed path only: EfiBootManagerBoot() signals ReadyToBoot
++  in step 3, before the gBS->LoadImage() in step 5, so there is no kernel here
++  yet to key on. OnImageLoaded() below supersedes this once there is one, and
++  this stays the answer for everything that is not a UKI.
++
++  Anything that brings its own tree later -- a UKI .dtb section through the
++  fixup protocol -- still wins, because it installs its table after this fires.
++
++**/
++STATIC
++VOID
++EFIAPI
++LoadFdtFromOsVolume (
++  IN EFI_EVENT  Event,
++  IN VOID       *Context
++  )
++{
++  LoadFdtByPath (FDT_OS_PATH);
++}
++
++/**
++  Find one section of a PE image that is already loaded into memory.
++
++  The section table is part of the headers, and the loader copies the headers
++  to the image base along with everything else, so a loaded image can be asked
++  about its own layout without going back to the file it came from. This is
++  what systemd-stub does to find its own sections, in
++  pe_memory_locate_sections().
++
++  @param  ImageBase[in]  Base of the loaded image.
++  @param  ImageSize[in]  Its size, for bounds checking.
++  @param  Name[in]       Section name, at most 8 characters.
++  @param  Data[out]      Start of the section's contents.
++  @param  Size[out]      Their length.
++
++  @retval EFI_SUCCESS    Found.
++  @retval EFI_NOT_FOUND  No such section, or this is not a PE image.
++
++**/
++STATIC
++EFI_STATUS
++PeLocateSection (
++  IN  CONST VOID   *ImageBase,
++  IN  UINTN        ImageSize,
++  IN  CONST CHAR8  *Name,
++  OUT CONST VOID   **Data,
++  OUT UINTN        *Size
++  )
++{
++  CONST EFI_IMAGE_DOS_HEADER      *DosHdr;
++  CONST EFI_IMAGE_NT_HEADERS64    *NtHdr;
++  CONST EFI_IMAGE_SECTION_HEADER  *Section;
++  CHAR8                           Padded[EFI_IMAGE_SIZEOF_SHORT_NAME];
++  UINTN                           Offset;
++  UINTN                           Index;
++
++  if ((ImageBase == NULL) || (ImageSize < sizeof (EFI_IMAGE_NT_HEADERS64))) {
++    return EFI_NOT_FOUND;
++  }
++
++  //
++  // Section names are a fixed 8 bytes, zero-padded and not necessarily
++  // terminated, so compare them as bytes rather than as strings.
++  //
++  ZeroMem (Padded, sizeof (Padded));
++  CopyMem (Padded, Name, AsciiStrnLenS (Name, sizeof (Padded)));
++
++  Offset = 0;
++  DosHdr = (CONST EFI_IMAGE_DOS_HEADER *)ImageBase;
++  if (DosHdr->e_magic == EFI_IMAGE_DOS_SIGNATURE) {
++    Offset = (UINTN)DosHdr->e_lfanew;
++  }
++
++  if (Offset > ImageSize - sizeof (EFI_IMAGE_NT_HEADERS64)) {
++    return EFI_NOT_FOUND;
++  }
++
++  NtHdr = (CONST EFI_IMAGE_NT_HEADERS64 *)((CONST UINT8 *)ImageBase + Offset);
++  if (NtHdr->Signature != EFI_IMAGE_NT_SIGNATURE) {
++    return EFI_NOT_FOUND;
++  }
++
++  Offset += OFFSET_OF (EFI_IMAGE_NT_HEADERS64, OptionalHeader) +
++            NtHdr->FileHeader.SizeOfOptionalHeader;
++
++  for (Index = 0; Index < NtHdr->FileHeader.NumberOfSections; Index++) {
++    if (Offset > ImageSize - sizeof (EFI_IMAGE_SECTION_HEADER)) {
++      return EFI_NOT_FOUND;
++    }
++
++    Section = (CONST EFI_IMAGE_SECTION_HEADER *)((CONST UINT8 *)ImageBase + Offset);
++    Offset += sizeof (EFI_IMAGE_SECTION_HEADER);
++
++    if (CompareMem (Section->Name, Padded, sizeof (Padded)) != 0) {
++      continue;
++    }
++
++    if ((Section->Misc.VirtualSize == 0) ||
++        (Section->VirtualAddress > ImageSize) ||
++        (Section->Misc.VirtualSize > ImageSize - Section->VirtualAddress))
++    {
++      return EFI_NOT_FOUND;
++    }
++
++    *Data = (CONST UINT8 *)ImageBase + Section->VirtualAddress;
++    *Size = Section->Misc.VirtualSize;
++
++    return EFI_SUCCESS;
++  }
++
++  return EFI_NOT_FOUND;
++}
++
++/**
++  Read the kernel release out of a loaded image, if it is a unified kernel
++  image at all.
++
++  @param  LoadedImage[in]  The image to inspect.
++  @param  Uname[out]       Buffer of FDT_OS_UNAME_MAX + 1 bytes.
++
++  @retval EFI_SUCCESS    Uname holds a kernel release usable as a path
++                         component.
++  @retval EFI_NOT_FOUND  Not a UKI, or its .uname is not usable.
++
++**/
++STATIC
++EFI_STATUS
++UkiGetUname (
++  IN  CONST EFI_LOADED_IMAGE_PROTOCOL  *LoadedImage,
++  OUT CHAR8                            *Uname
++  )
++{
++  CONST VOID   *Data;
++  CONST CHAR8  *Release;
++  UINTN        Size;
++  UINTN        Index;
++
++  //
++  // A .uname alone would not be enough to go on: systemd-stub's addons carry
++  // one too, and the stub loads them in this same window, from inside the
++  // very image we are trying to characterise. The kernel is what separates
++  // the two.
++  //
++  if (EFI_ERROR (
++        PeLocateSection (
++          LoadedImage->ImageBase,
++          LoadedImage->ImageSize,
++          UKI_SECTION_LINUX,
++          &Data,
++          &Size
++          )
++        ))
++  {
++    return EFI_NOT_FOUND;
++  }
++
++  if (EFI_ERROR (
++        PeLocateSection (
++          LoadedImage->ImageBase,
++          LoadedImage->ImageSize,
++          UKI_SECTION_UNAME,
++          &Data,
++          &Size
++          )
++        ))
++  {
++    return EFI_NOT_FOUND;
++  }
++
++  //
++  // ukify writes the release with no terminator and pads the section out with
++  // zeroes, so take the characters that are legal in a kernel release and
++  // stop at the first that is not. A separator is not among them, so whatever
++  // comes back is one path component under \dtb and cannot reach outside it.
++  //
++  Release = (CONST CHAR8 *)Data;
++  for (Index = 0; (Index < Size) && (Index < FDT_OS_UNAME_MAX); Index++) {
++    if (((Release[Index] >= '0') && (Release[Index] <= '9')) ||
++        ((Release[Index] >= 'A') && (Release[Index] <= 'Z')) ||
++        ((Release[Index] >= 'a') && (Release[Index] <= 'z')) ||
++        (Release[Index] == '.') || (Release[Index] == '-') ||
++        (Release[Index] == '_') || (Release[Index] == '+'))
++    {
++      Uname[Index] = Release[Index];
++      continue;
++    }
++
++    break;
++  }
++
++  Uname[Index] = '\0';
++
++  return (Index == 0) ? EFI_NOT_FOUND : EFI_SUCCESS;
++}
++
++/**
++  When an image is loaded and turns out to be the OS, swap the device tree for
++  the one built against that kernel.
++
++  A LoadedImage notify rather than anything earlier or later because of where
++  EfiBootManagerBoot() puts its steps: ReadyToBoot is signalled in step 3, the
++  boot option is loaded in step 5 and entered in step 8. The window in which
++  the kernel release is knowable but the OS has not been entered yet is
++  therefore exactly the moment gBS->LoadImage() installs this protocol on the
++  image's handle.
++
++**/
++STATIC
++VOID
++EFIAPI
++OnImageLoaded (
++  IN EFI_EVENT  Event,
++  IN VOID       *Context
++  )
++{
++  EFI_STATUS                 Status;
++  EFI_LOADED_IMAGE_PROTOCOL  *LoadedImage;
++  EFI_HANDLE                 Handle;
++  UINTN                      BufferSize;
++  CHAR8                      Uname[FDT_OS_UNAME_MAX + 1];
++  CHAR16                     Path[FDT_OS_UNAME_MAX + 32];
++
++  while (TRUE) {
++    BufferSize = sizeof (Handle);
++    Status     = gBS->LocateHandle (
++                        ByRegisterNotify,
++                        NULL,
++                        mLoadedImageRegistration,
++                        &BufferSize,
++                        &Handle
++                        );
++    if (EFI_ERROR (Status)) {
++      break;
++    }
++
++    //
++    // The queue has to be drained even once we are done with it, or the next
++    // signal hands us back what we already declined.
++    //
++    if (mOsFdtMatched) {
++      continue;
++    }
++
++    Status = gBS->HandleProtocol (
++                    Handle,
++                    &gEfiLoadedImageProtocolGuid,
++                    (VOID **)&LoadedImage
++                    );
++    if (EFI_ERROR (Status)) {
++      continue;
++    }
++
++    if (EFI_ERROR (UkiGetUname (LoadedImage, Uname))) {
++      continue;
++    }
++
++    //
++    // One shot, answered or not: if no tree is keyed to this kernel then the
++    // unkeyed one ReadyToBoot installed stands, and asking again for every
++    // image the OS goes on to load would only risk a worse answer.
++    //
++    mOsFdtMatched = TRUE;
++
++    UnicodeSPrint (Path, sizeof (Path), FDT_OS_PATH_FMT, Uname);
++
++    Status = LoadFdtByPath (Path);
++    DEBUG ((
++      DEBUG_INFO,
++      "%a: booting %a: '%s': %r\n",
++      __func__,
++      Uname,
++      Path,
++      Status
++      ));
++  }
 +}
 +
  STATIC
  EFI_STATUS
  CleanMemoryNodes (
-@@ -823,6 +1010,7 @@
+@@ -823,6 +1360,8 @@
    UINTN      FdtSize;
    VOID       *FdtImage = NULL;
    EFI_HANDLE Handle;
 +  EFI_EVENT  ReadyToBootEvent;
++  EFI_EVENT  ImageLoadEvent;
  
    if (PcdGet32 (PcdSystemTableMode) != SYSTEM_TABLE_MODE_BOTH &&
        PcdGet32 (PcdSystemTableMode) != SYSTEM_TABLE_MODE_DT) {
-@@ -860,6 +1048,18 @@
+@@ -860,6 +1399,42 @@
      DEBUG ((DEBUG_ERROR, "Failed to install EFI_DT_FIXUP_PROTOCOL: %r\n", Status));
    }
  
@@ -233,13 +591,43 @@ diff --git a/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.c b/Platform/RaspberryPi
 +    DEBUG ((DEBUG_ERROR, "Failed to register the ReadyToBoot handler: %r\n", Status));
 +  }
 +
++  //
++  // And a notify for whatever the boot manager loads, which is where the
++  // kernel release becomes knowable at all. Registered from here rather than
++  // from the handler above because that one runs too early to see it.
++  //
++  Status = gBS->CreateEvent (
++                  EVT_NOTIFY_SIGNAL,
++                  TPL_CALLBACK,
++                  OnImageLoaded,
++                  NULL,
++                  &ImageLoadEvent
++                  );
++  if (!EFI_ERROR (Status)) {
++    Status = gBS->RegisterProtocolNotify (
++                    &gEfiLoadedImageProtocolGuid,
++                    ImageLoadEvent,
++                    &mLoadedImageRegistration
++                    );
++  }
++
++  if (EFI_ERROR (Status)) {
++    DEBUG ((DEBUG_ERROR, "Failed to register the LoadedImage handler: %r\n", Status));
++  }
++
    FdtImage = FdtPlatformGetBase ();
    if (FdtImage == NULL) {
      /*
 diff --git a/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.inf b/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.inf
 --- a/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.inf
 +++ b/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.inf
-@@ -40,9 +40,12 @@
+@@ -35,14 +35,19 @@
+   FdtLib
+   FdtPlatformLib
+   MemoryAllocationLib
++  PrintLib
+   UefiBootServicesTableLib
+   UefiDriverEntryPoint
  
  [Guids]
    gFdtTableGuid
@@ -248,6 +636,7 @@ diff --git a/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.inf b/Platform/Raspberry
  
  [Protocols]
    gRaspberryPiFirmwareProtocolGuid              ## CONSUMES
++  gEfiLoadedImageProtocolGuid                   ## CONSUMES
 +  gEfiSimpleFileSystemProtocolGuid              ## CONSUMES
  
  [Depex]
