@@ -23,6 +23,7 @@ typedef struct {
   RP1_BUS_PROTOCOL               Rp1Bus;
   EFI_PHYSICAL_ADDRESS           PeripheralBase;
   UINT32                         ChipId;
+  EFI_EVENT                      ExitBootServicesEvent;
 } RP1_BUS_DATA;
 
 #define RP1_BUS_DATA_FROM_THIS(a)  CR (a, RP1_BUS_DATA, Rp1Bus, RP1_BUS_DATA_SIGNATURE)

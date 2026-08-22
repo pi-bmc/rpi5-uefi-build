@@ -38,7 +38,7 @@ Because your setup uses the Redfish Host Interface over USB CDC-NCM (RpiRedfishP
 
 #### 4. ACPI Thermal Methods (_TMP / _OST)
 
-• In ACPI-based UEFI systems, you can define ACPI Thermal Zones and sensors in an SSDT (e.g., 0003-RPi5-AcpiTables-add-SsdtThermal.patch). • The OS ACPI thermal subsystem periodically evaluates these AML methods at runtime. ──────
+• In ACPI-based UEFI systems, you can define ACPI Thermal Zones and sensors in an SSDT (e.g., SsdtThermal.asl in the RPi5 AcpiTables overlay). • The OS ACPI thermal subsystem periodically evaluates these AML methods at runtime. ──────
 
 Summary
 Approach | Runs Pre-OS? | Runs Post-OS? | Complexity | Notes ---------------------------|--------------|---------------|------------|------------------------------------------- EDK2 Timer / DXE | Yes | No | Low | Dies at ExitBootServices() EDK2 Runtime Service | Yes | Passive only | Medium | Requires OS to explicitly poll it UEFI + OS Agent Hand-off | Yes | Yes | Low | Standard approach via Redfish/CDC-NCM Out-of-Band (OOB) BMC I2C | Yes | Yes | Low | Independent of host CPU state VPU / RP1 Co-processor | Yes | Yes | High | Requires VideoCore/RP1 firmware customizat

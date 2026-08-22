@@ -24,7 +24,9 @@
   Silicon/RaspberryPi/RpiSiliconPkg/RpiSiliconPkg.dec
 
 [LibraryClasses]
+  BaseMemoryLib
   DebugLib
+  DevicePathLib
   IoLib
   MemoryAllocationLib
   NonDiscoverableDeviceRegistrationLib
@@ -37,6 +39,11 @@
   gRp1BusProtocolGuid                           ## BY_START
   gEdkiiNonDiscoverableDeviceProtocolGuid       ## BY_START
   gEfiDevicePathProtocolGuid                    ## BY_START
+
+[Guids]
+  gRp1GemNonDiscoverableDeviceGuid
+  gRp1DwI2cNonDiscoverableDeviceGuid
+  gEfiEventExitBootServicesGuid                 ## CONSUMES ## Event
 
 [Depex]
   TRUE

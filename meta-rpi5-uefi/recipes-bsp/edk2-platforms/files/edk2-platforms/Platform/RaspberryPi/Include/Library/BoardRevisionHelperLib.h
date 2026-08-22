@@ -27,6 +27,32 @@ BoardRevisionGetModelName (
   IN  UINT32  RevisionCode
   );
 
+//
+// Passed as Variant when the caller has nothing better than the revision
+// code to go on.
+//
+#define BOARD_VARIANT_FROM_REVISION  MAX_UINTN
+
+/**
+  The device tree this board wants, as a bare file name.
+
+  @param  RevisionCode  The board's revision code.
+  @param  Variant       Which entry of a multi-tree model to take, or
+                        BOARD_VARIANT_FROM_REVISION to take the one the
+                        revision code implies. A model with a single tree
+                        ignores this.
+
+  @return  A static string, or NULL if the code names no board we know a tree
+           for. The caller owns nothing.
+
+**/
+CHAR8 *
+EFIAPI
+BoardRevisionGetFdtName (
+  IN  UINT32  RevisionCode,
+  IN  UINTN   Variant
+  );
+
 CHAR8 *
 EFIAPI
 BoardRevisionGetManufacturerName (

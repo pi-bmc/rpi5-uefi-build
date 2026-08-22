@@ -154,10 +154,10 @@ no `PACKAGES_PATH` root and inserts nothing for them; its only remaining
 `sed`-marker insertions are for edk2-tree modules (`RPI5_USBNET`, profiling)
 whose sources are not in edk2-platforms at all.
 
-`0001-Rp1BusDxe-...patch` extends `Rp1BusDxe` to register the GEM and I2C1
-blocks as vendor NonDiscoverable children (the xHCI pattern), and
+`Rp1BusDxe` registers the GEM and I2C1 blocks as vendor NonDiscoverable
+children (the xHCI pattern), and
 `0019-RaspberryPi-declare-...patch` declares the Secure Boot toggle's formset
-GUID in the upstream `RaspberryPi.dec` -- the only two upstream-file changes the
+GUID in the upstream `RaspberryPi.dec` -- the only upstream-file change the
 driver set needs.
 
 ## Variables

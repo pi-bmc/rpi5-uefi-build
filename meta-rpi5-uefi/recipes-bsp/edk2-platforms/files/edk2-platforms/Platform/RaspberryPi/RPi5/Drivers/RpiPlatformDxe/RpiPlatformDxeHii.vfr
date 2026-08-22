@@ -73,7 +73,7 @@ formset
           prompt      = STRING_TOKEN(STR_SYSTEM_TABLE_MODE_PROMPT),
           help        = STRING_TOKEN(STR_SYSTEM_TABLE_MODE_HELP),
           flags       = NUMERIC_SIZE_4 | INTERACTIVE | RESET_REQUIRED,
-          default     = SYSTEM_TABLE_MODE_ACPI,
+          default     = SYSTEM_TABLE_MODE_DT,
           option text = STRING_TOKEN(STR_SYSTEM_TABLE_MODE_ACPI), value = SYSTEM_TABLE_MODE_ACPI, flags = 0;
           option text = STRING_TOKEN(STR_SYSTEM_TABLE_MODE_FDT), value = SYSTEM_TABLE_MODE_DT, flags = 0;
           option text = STRING_TOKEN(STR_SYSTEM_TABLE_MODE_ACPI_FDT), value = SYSTEM_TABLE_MODE_BOTH, flags = 0;

@@ -244,7 +244,12 @@
   # Runtime debug messages may crash an OS unless serial output to MMIO mapped UARTs is inhibited
   DebugLib|MdePkg/Library/DxeRuntimeDebugLibSerialPort/DxeRuntimeDebugLibSerialPort.inf
   MemoryAllocationLib|MdePkg/Library/UefiMemoryAllocationLib/UefiMemoryAllocationLib.inf
-  CapsuleLib|MdeModulePkg/Library/DxeCapsuleLibNull/DxeCapsuleLibNull.inf
+  #
+  # CapsuleRuntimeDxe's half of the capsule path: UpdateCapsule() validates and
+  # stages what it is handed. The runtime variant, because this one is linked
+  # into a DXE_RUNTIME_DRIVER and must not drag in boot-services-only code.
+  #
+  CapsuleLib|MdeModulePkg/Library/DxeCapsuleLibFmp/DxeRuntimeCapsuleLib.inf
   ArmMonitorLib|ArmPkg/Library/ArmMonitorLib/ArmMonitorLib.inf
   ResetSystemLib|ArmPkg/Library/ArmPsciResetSystemLib/ArmPsciResetSystemLib.inf
   VariablePolicyLib|MdeModulePkg/Library/VariablePolicyLib/VariablePolicyLibRuntimeDxe.inf
@@ -376,7 +381,31 @@
   ArmMmuLib|UefiCpuPkg/Library/ArmMmuLib/ArmMmuBaseLib.inf
   ArmPlatformLib|Platform/RaspberryPi/RPi5/Library/PlatformLib/PlatformLib.inf
   TimerLib|ArmPkg/Library/ArmArchTimerLib/ArmArchTimerLib.inf
-  CapsuleLib|MdeModulePkg/Library/DxeCapsuleLibNull/DxeCapsuleLibNull.inf
+  #
+  # The half that actually applies a capsule. ProcessCapsules() is already
+  # called from PlatformBm both before and after EndOfDxe -- with the Null
+  # instance it did nothing at all, so an UpdateCapsule() call succeeded and
+  # then silently dropped the image on the next boot.
+  #
+  CapsuleLib|MdeModulePkg/Library/DxeCapsuleLibFmp/DxeCapsuleLib.inf
+  #
+  # Required by DxeCapsuleLibFmp. Text rather than Graphics: the update runs
+  # with the serial console up and GOP not guaranteed, and a progress bar is
+  # not worth a dependency on the framebuffer being alive mid-update.
+  #
+  DisplayUpdateProgressLib|MdeModulePkg/Library/DisplayUpdateProgressLibText/DisplayUpdateProgressLibText.inf
+  #
+  # Required by FmpDxe, which authenticates every capsule payload against the
+  # certificates in PcdFmpDevicePkcs7CertBufferXdr before the device library
+  # ever sees it. There is no Null instance of this class by design.
+  #
+  FmpAuthenticationLib|SecurityPkg/Library/FmpAuthenticationLibPkcs7/FmpAuthenticationLibPkcs7.inf
+  #
+  # Also required by DxeCapsuleLibFmp, and only declared above under
+  # INCLUDE_TFTP_COMMAND -- which is FALSE here, so BdsDxe could not resolve it
+  # once PlatformBootManagerLib started pulling the real CapsuleLib in.
+  #
+  FileHandleLib|MdePkg/Library/UefiFileHandleLib/UefiFileHandleLib.inf
   UefiBootManagerLib|MdeModulePkg/Library/UefiBootManagerLib/UefiBootManagerLib.inf
   BootLogoLib|MdeModulePkg/Library/BootLogoLib/BootLogoLib.inf
   PlatformBootManagerLib|Platform/RaspberryPi/Library/PlatformBootManagerLib/PlatformBootManagerLib.inf
@@ -574,11 +603,23 @@
   #
   # Device Tree and ACPI selection.
   #
-  # 0 - SYSTEM_TABLE_MODE_ACPI (default)
+  # 0 - SYSTEM_TABLE_MODE_ACPI
   # 1 - SYSTEM_TABLE_MODE_BOTH
-  # 2 - SYSTEM_TABLE_MODE_DT
+  # 2 - SYSTEM_TABLE_MODE_DT (default)
   #
-  gRaspberryPiTokenSpaceGuid.PcdSystemTableMode|L"SystemTableMode"|gRpiPlatformFormSetGuid|0x0|0
+  # Upstream defaults to ACPI. This platform defaults to Device Tree because
+  # the onboard NIC does not come up under ACPI: the RP1 GEM is a Cadence
+  # macb, and macb has no acpi_match_table in any shipping kernel, so even
+  # with the DSDT device from 0012 the driver never binds (and would fail at
+  # devm_clk_get("pclk") if it did -- clkdev has no ACPI path). Under Device
+  # Tree the firmware DTB describes ethernet@100000 the way the driver
+  # expects and the NIC works. A headless node that cannot reach the network
+  # is worth more than ACPI is.
+  #
+  # Change this back once macb grows an ACPI binding, and keep the F9
+  # "Restore Defaults" value in RpiPlatformDxeHii.vfr in step with it.
+  #
+  gRaspberryPiTokenSpaceGuid.PcdSystemTableMode|L"SystemTableMode"|gRpiPlatformFormSetGuid|0x0|2
 
   #
   # Common UEFI ones.

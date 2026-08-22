@@ -43,6 +43,7 @@
 #define RP1_SPI6_BASE                               0x00068000
 #define RP1_SPI7_BASE                               0x0006c000
 #define RP1_I2C0_BASE                               0x00070000
+#define RP1_I2C_SIZE                                0x00001000
 #define RP1_I2C1_BASE                               0x00074000
 #define RP1_I2C2_BASE                               0x00078000
 #define RP1_I2C3_BASE                               0x0007c000
@@ -73,7 +74,9 @@
 #define RP1_PADS_BANK2_BASE                         0x000f8000
 #define RP1_PADS_ETH_BASE                           0x000fc000
 #define RP1_ETH_BASE                                0x00100000
+#define RP1_ETH_SIZE                                0x00004000
 #define RP1_ETH_CFG_BASE                            0x00104000
+#define RP1_ETH_CFG_SIZE                            0x00001000
 #define RP1_PCIE_BASE                               0x00108000
 #define RP1_MIPI0_CSIDMA_BASE                       0x00110000
 #define RP1_MIPI0_CSIHOST_BASE                      0x00114000
