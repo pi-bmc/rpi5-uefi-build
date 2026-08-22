@@ -538,7 +538,7 @@
   #
   # Redfish host interface. The gadget MAC and the HTTP Basic credentials
   # default to the wire contract's documented values in RPi5.dec; the
-  # edk2 recipe appends overrides for them, and for the matching
+  # firmware recipe appends overrides for them, and for the matching
   # RestEx device path, from its own knobs.
   #
   gEfiRedfishPkgTokenSpaceGuid.PcdRedfishServicePort|80
@@ -1001,7 +1001,7 @@
   # Firmware Management Protocol + ESRT: a signed capsule through
   # UpdateCapsule() replaces the image in place. FmpDxe authenticates every
   # payload against PcdFmpDevicePkcs7CertBufferXdr, which the
-  # edk2 recipe appends to the end of this file from its
+  # firmware recipe appends to the end of this file from its
   # capsule signing certificate.
   #
   FmpDevicePkg/FmpDxe/FmpDxe.inf {

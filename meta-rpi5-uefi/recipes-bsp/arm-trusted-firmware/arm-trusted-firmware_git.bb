@@ -9,7 +9,15 @@ DESCRIPTION = "Builds bl31.bin, the EL3 runtime firmware EDK2's RPI_EFI.fd is \
                one the NumberOneGit/rpi5-uefi wrapper repo's arm-trusted-firmware submodule \
                points at (still fetchable from ARM-software's repo by SHA even though no \
                branch/tag names it any more), so this recipe uses nobranch=1 rather than a \
-               branch= that no longer resolves."
+               branch= that no longer resolves. \
+\
+               bl31.bin reaches the firmware through edk2-non-osi, which depends on \
+               this recipe and files the binary at \
+               Platform/RaspberryPi/RPi5/TrustedFirmware/bl31.bin -- the path RPi5.dsc \
+               already looks for by default, being where upstream keeps checked-in \
+               TF-A builds. do_install stages it for that; do_deploy still puts \
+               bl31.bin and bl31.elf in DEPLOY_DIR_IMAGE, now for inspection and \
+               debugging rather than for anything to consume."
 HOMEPAGE = "https://github.com/ARM-software/arm-trusted-firmware"
 LICENSE = "BSD-3-Clause"
 LIC_FILES_CHKSUM = "file://docs/license.rst;md5=6ed7bace7b0bc63021c6eba7b524039e"
@@ -24,7 +32,13 @@ S = "${WORKDIR}/git"
 
 COMPATIBLE_MACHINE = "raspberrypi5-uefi"
 
-inherit deploy
+# bl31.bin is built for one board (PLAT=rpi5) with one set of preloaded-image
+# addresses, so it is machine-specific rather than merely AArch64.
+PACKAGE_ARCH = "${MACHINE_ARCH}"
+
+# The output is firmware: it is staged for edk2-non-osi and deployed, never
+# packaged into a rootfs.
+inherit deploy nopackages
 
 # Plain "make PLAT=rpi5 ... all" -- TF-A has no configure step of its own.
 do_configure[noexec] = "1"
@@ -55,6 +69,14 @@ do_compile() {
         bbfatal "TF-A produced no build/rpi5/${TFA_BUILD_TYPE}/bl31.bin -- check the build log"
 }
 
+# Where edk2-non-osi picks bl31.bin up; keep the two in step.
+TFA_SYSROOT_DIR = "${datadir}/arm-trusted-firmware"
+
+do_install() {
+    install -d ${D}${TFA_SYSROOT_DIR}
+    install -m 0644 ${S}/build/rpi5/${TFA_BUILD_TYPE}/bl31.bin ${D}${TFA_SYSROOT_DIR}/bl31.bin
+}
+
 do_deploy() {
     install -d ${DEPLOYDIR}
     install -m 0644 ${S}/build/rpi5/${TFA_BUILD_TYPE}/bl31.bin ${DEPLOYDIR}/bl31.bin
@@ -64,5 +86,3 @@ do_deploy() {
 }
 
 addtask deploy after do_compile
-
-do_install[noexec] = "1"

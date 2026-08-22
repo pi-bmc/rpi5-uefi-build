@@ -1,11 +1,11 @@
 SUMMARY = "tianocore edk2-platforms with this layer's Raspberry Pi 5 port applied"
-DESCRIPTION = "The edk2-platforms source tree that edk2 builds \
+DESCRIPTION = "The edk2-platforms source tree that rpi5-uefi-firmware builds \
                Platform/RaspberryPi/RPi5/RPi5.dsc out of. Nothing is compiled here: \
                this recipe owns the fetch, the RPi5 port, the port's fixes and this \
                layer's own RP1 GEM Ethernet driver, and \
                stages the resulting tree into ${datadir}/edk2/edk2-platforms for the \
-               firmware recipe to consume out of its sysroot. Split out of \
-               edk2 so a 96 MB fetch and a 17-patch series are \
+               firmware recipe to consume out of its sysroot. Split out of the \
+               firmware build so a 96 MB fetch and a 30-patch series are \
                sstate-cached on their own, instead of being redone every time the \
                EDK2 build itself is cleaned."
 HOMEPAGE = "https://github.com/tianocore/edk2-platforms"

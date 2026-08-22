@@ -20,7 +20,7 @@ A firmware that describes the platform in ACPI does not have to ship a device
 tree, and therefore does not have to be reflashed when the OS's kernel changes.
 That is the whole reason UEFI+ACPI exists, and this board is one driver away
 from it: everything else already works under `SystemTableMode=Acpi` — USB,
-storage, PCIe, the RP1 blocks described by patches 0011/0012 in the edk2 recipe
+storage, PCIe, the RP1 blocks described by patches 0011/0012 in the edk2-platforms recipe
 — and the on-board NIC is the only thing that does not come up.
 
 It does not come up because `macb` has no ACPI story at all, in any shipping
@@ -30,7 +30,7 @@ probe ends at `failed to get pclk`.
 
 ### If this lands
 
-`SystemTableMode` can go back to `Acpi` (revert patch 0014 in the edk2 recipe),
+`SystemTableMode` can go back to `Acpi` (revert patch 0014 in the edk2-platforms recipe),
 and then:
 
 - No device tree is needed anywhere — not embedded in firmware, not on the SD

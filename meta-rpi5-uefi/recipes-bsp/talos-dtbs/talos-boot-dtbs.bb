@@ -15,8 +15,8 @@ DESCRIPTION = "Extracts the bcm2712 device trees from ghcr.io/siderolabs/kernel 
                Adapted from the talos-dtbs recipe in ../nanokvm-build, which does the same job \
                for the u-boot build. The uefi-eeprom overlay is deliberately not carried over: \
                that one wires up an I2C EEPROM as U-Boot's UEFI variable store, and this \
-               firmware keeps its variables in the FD file instead (see the edk2 recipe's \
-               patch 0013)."
+               firmware keeps its variables in the FD file instead (see the edk2-platforms \
+               recipe's patch 0013)."
 HOMEPAGE = "https://github.com/siderolabs/kernel"
 
 LICENSE = "GPL-2.0-only"

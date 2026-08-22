@@ -40,26 +40,44 @@ refused even then).
 
 | Recipe | Upstream | Produces |
 | --- | --- | --- |
-| `meta-rpi5-uefi/recipes-bsp/arm-trusted-firmware/arm-trusted-firmware_git.bb` | `ARM-software/arm-trusted-firmware`, pinned commit (see caveat below) | `bl31.bin` |
+| `meta-rpi5-uefi/recipes-bsp/arm-trusted-firmware/arm-trusted-firmware_git.bb` | `ARM-software/arm-trusted-firmware`, pinned commit (see caveat below) | `bl31.bin`, staged into the sysroot (and deployed) |
+| `meta-rpi5-uefi/recipes-bsp/edk2/edk2_git.bb` | `tianocore/edk2` @ tag `edk2-stable202608` | patched source tree, staged into the sysroot |
 | `meta-rpi5-uefi/recipes-bsp/edk2-platforms/edk2-platforms_git.bb` | `tianocore/edk2-platforms` `master` @ `9ef9bcef` (2026-08-21), plus this layer's RPi5 port | patched source tree, staged into the sysroot |
-| `meta-rpi5-uefi/recipes-bsp/edk2-non-osi/edk2-non-osi_git.bb` | `tianocore/edk2-non-osi` `master`, pinned | source tree, staged into the sysroot |
+| `meta-rpi5-uefi/recipes-bsp/edk2-non-osi/edk2-non-osi_git.bb` | `tianocore/edk2-non-osi` `master`, pinned, plus `bl31.bin` from `arm-trusted-firmware` | source tree, staged into the sysroot |
 | `meta-rpi5-uefi/recipes-bsp/edk2-redfish-client/edk2-redfish-client_git.bb` | `tianocore/edk2-redfish-client` `main`, pinned | source tree, staged into the sysroot |
-| `meta-rpi5-uefi/recipes-bsp/edk2/edk2_git.bb` | `tianocore/edk2` @ tag `edk2-stable202608`, plus the three trees above | `RPI_EFI.fd`, `config.txt`, `RPi5Firmware.cap` |
+| `meta-rpi5-uefi/recipes-bsp/rpi5-secureboot-keys/rpi5-secureboot-keys_1.0.bb` | this layer's PK + Microsoft's six KEK/db CA certificates, fetched and checksum-pinned | DER certificates, staged into the sysroot |
+| `meta-rpi5-uefi/recipes-bsp/rpi5-uefi-firmware/rpi5-uefi-firmware.bb` | none -- builds the trees above | `armstub8-2712.bin` / `RPI_EFI.fd`, `config.txt`, `RPi5Firmware.cap` |
 
-One recipe per upstream repository: `edk2` owns the `edk2` tree
-and the out-of-tree packages under its own `files/`, and `DEPENDS` on the other
-three, which fetch and patch their trees and stage them under
-`${STAGING_DATADIR}/edk2`. The RPi5 port and its patch series therefore live in
-`recipes-bsp/edk2-platforms/`, not in the firmware recipe. `do_compile` copies
-`edk2-platforms` out of the sysroot before building, because wiring the optional
-feature sets in rewrites `RPi5.dsc`/`.fdf`; `edk2-non-osi` and
-`edk2-redfish-client` are read from the sysroot in place.
+One recipe per upstream repository, and none of them builds anything: `edk2`,
+`edk2-platforms`, `edk2-non-osi` and `edk2-redfish-client` each fetch and patch
+their own tree and stage it under `${STAGING_DATADIR}/edk2`, which in the
+sysroot is exactly the four-tree EDK2 workspace `worproject`/`NumberOneGit`'s
+`build.sh` assembles by hand. The RPi5 port and its patch series therefore live
+in `recipes-bsp/edk2-platforms/`, and the edk2 patches in `recipes-bsp/edk2/`,
+not in the firmware recipe.
 
-The `edk2` recipe builds
-`edk2-platforms/Platform/RaspberryPi/RPi5/RPi5.dsc`/`.fdf`, with
-`arm-trusted-firmware`'s `bl31.bin` embedded as the FD's region-0 payload
-(via `-D TFA_BUILD_ARTIFACTS=...`, the same mechanism
-`worproject`/`NumberOneGit`'s own `build.sh` uses).
+`rpi5-uefi-firmware` is what turns that workspace into firmware. It fetches no
+source of its own: `do_configure` copies the `edk2` tree out of the sysroot
+(`do_compile` builds host-native BaseTools inside it) and `do_compile` copies
+`edk2-platforms` (wiring the optional feature sets in rewrites
+`RPi5.dsc`/`.fdf`); `edk2-non-osi` and `edk2-redfish-client` are read from the
+sysroot in place.
+
+`arm-trusted-firmware`'s `bl31.bin` is embedded as the FD's region-0 payload,
+and it gets there through `edk2-non-osi`: that recipe `DEPENDS` on TF-A and
+files the binary at `Platform/RaspberryPi/RPi5/TrustedFirmware/bl31.bin`, which
+is both where upstream keeps checked-in TF-A builds for the other Pi boards and
+the path `RPi5.dsc`'s `TFA_BUILD_BL31` default names. So the FDF resolves it
+through `PACKAGES_PATH` like any other source file, and the firmware recipe
+passes no `-D TFA_BUILD_ARTIFACTS`.
+
+The Secure Boot default key set is its own recipe too, `rpi5-secureboot-keys`:
+it ships this project's PK, fetches Microsoft's KEK and db CAs (the build's only
+non-git download, with its own `FETCHCMD_wget` User-Agent workaround), checks
+every one of the seven files really is a DER X.509 certificate, and stages them
+under `${STAGING_DATADIR}/secureboot-keys`. `rpi5-uefi-firmware` depends on it
+only when `RPI5_SECURE_BOOT_DEFAULT_KEYS = "1"`, so a build with the key set off
+downloads nothing for it.
 
 All `SRCREV`s are pinned. They were originally the commits
 `NumberOneGit/rpi5-uefi`'s own git tree pointed at; that fork is retired, and

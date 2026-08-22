@@ -1,7 +1,7 @@
 SUMMARY = "tianocore edk2-redfish-client (RedfishClientPkg) source tree"
 DESCRIPTION = "RedfishClientPkg -- the standard Redfish feature layer that sits on \
                top of edk2's RedfishPkg host-interface core. Staged into \
-               ${datadir}/edk2/edk2-redfish-client as one of the edk2 recipe's \
+               ${datadir}/edk2/edk2-redfish-client as one of rpi5-uefi-firmware's \
                PACKAGES_PATH roots. RPi5.dsc/.fdf list the feature drivers and schema \
                converters built out of it directly, unconditionally."
 HOMEPAGE = "https://github.com/tianocore/edk2-redfish-client"

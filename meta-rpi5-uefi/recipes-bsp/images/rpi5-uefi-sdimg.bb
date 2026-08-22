@@ -36,7 +36,7 @@ do_patch[noexec] = "1"
 do_configure[noexec] = "1"
 do_install[noexec] = "1"
 
-do_compile[depends] += "edk2:do_deploy rpi-boot-dtbs:do_deploy talos-boot-dtbs:do_deploy"
+do_compile[depends] += "rpi5-uefi-firmware:do_deploy rpi-boot-dtbs:do_deploy talos-boot-dtbs:do_deploy"
 
 # FAT32 boot partition size. Contents are ~9 MiB (3.8M firmware + ~4M
 # overlays + DTBs), plus ~160K for each extra kernel release in
@@ -65,7 +65,7 @@ do_compile() {
     # persists EFI variables by writing the FD's variable region back into the
     # file it was loaded from, and it finds that file by name -- upstream looks
     # only for RPI_EFI.fd, so 0013-VarBlockServiceDxe-find-the-variable-store-
-    # under-eith.patch in the edk2 recipe teaches it this name too.
+    # under-eith.patch in the edk2-platforms recipe teaches it this name too.
     # Rename the target here and nothing set in Setup survives a reboot until
     # that patch's candidate list is updated to match.
     mcopy -i "${part}" "${DEPLOY_DIR_IMAGE}/RPI_EFI.fd" ::/armstub8-2712.bin
