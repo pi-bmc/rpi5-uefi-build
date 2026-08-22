@@ -1,0 +1,47 @@
+## @file
+#
+#  Firmware Management Protocol support for the Raspberry Pi 5 UEFI firmware.
+#
+#  Copyright (c) 2026, the pi-bmc contributors.
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+#
+##
+
+[Defines]
+  DEC_SPECIFICATION = 0x0001001A
+  PACKAGE_NAME      = RpiFmpPkg
+  PACKAGE_GUID      = 56c66f07-203f-404c-995c-c42b13b921b2
+  PACKAGE_VERSION   = 1.0
+
+[Guids]
+  gRpiFmpTokenSpaceGuid = { 0x62075a6a, 0xc3dd, 0x4b7d, { 0xa1, 0x18, 0x4b, 0x72, 0xe0, 0x47, 0x57, 0xfc } }
+
+[PcdsFeatureFlag]
+  ## Whether a capsule may write the firmware image at all.
+  #
+  #  This is deliberately NOT a second knob for "read-only mode" -- FmpDevicePkg
+  #  already has one, gFmpDevicePkgTokenSpaceGuid.PcdFmpDeviceStorageAccessEnable,
+  #  which makes the whole protocol report GetImageInfo() only. Use that.
+  #
+  #  What this one controls is narrower: whether the library will open the
+  #  firmware file for write when it is asked to. It exists so a build can carry
+  #  the FMP stack, publish an accurate ESRT and Redfish inventory, and still
+  #  refuse to touch the card -- without depending on every caller having
+  #  honoured the protocol-level flag.
+  gRpiFmpTokenSpaceGuid.PcdRpi5FmpUpdateSupported|TRUE|BOOLEAN|0x00000002
+
+[PcdsFixedAtBuild]
+  ## The firmware's own version, as a monotonically increasing integer.
+  #
+  #  This is the number ESRT publishes and that fwupd, a Redfish
+  #  SoftwareInventory and FmpDxe's own anti-rollback check all compare. It is
+  #  NOT the human-readable string -- that is PcdFirmwareVersionString, which
+  #  the recipe sets from the same source so the two never disagree.
+  #
+  #  The default encodes the build's year and month (202602 = 2026-06). Any
+  #  scheme works as long as it only ever increases: FmpDxe refuses an image
+  #  whose version is below the running one, so a number that goes backwards
+  #  makes the firmware permanently unupdatable by capsule.
+  gRpiFmpTokenSpaceGuid.PcdRpi5FirmwareVersion|202602|UINT32|0x00000001
+

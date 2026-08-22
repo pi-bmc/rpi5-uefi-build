@@ -126,6 +126,7 @@ SRC_URI = "gitsm://github.com/tianocore/edk2.git;protocol=https;branch=master;na
            file://0015-FdtDxe-publish-EFI_DT_FIXUP_PROTOCOL.patch;patchdir=../edk2-platforms \
            file://0016-Rp1BusDxe-disarm-RP1-interrupt-routing-at-handoff.patch;patchdir=../edk2-platforms \
            file://0017-FdtDxe-load-the-OS-provided-device-tree-from-its-own-.patch;patchdir=../edk2-platforms \
+           file://0018-RPi5-enable-FMP-capsule-processing.patch;patchdir=../edk2-platforms \
            file://0100-UsbNetwork-assume-media-on-a-point-to-point-gadget.patch \
            file://0101-RedfishDiscoverDxe-skip-the-IPv6-discovery-leg.patch \
            file://0102-RedfishConfigHandler-quiesce-the-Redfish-stack-after.patch \
@@ -134,6 +135,7 @@ SRC_URI = "gitsm://github.com/tianocore/edk2.git;protocol=https;branch=master;na
            file://RpiBmcPkg \
            file://Rp1GemPkg \
            file://RpiRedfishPkg \
+           file://RpiFmpPkg \
            file://secureboot-keys \
            file://usbnet-dsc-snippet.inc \
            file://usbnet-fdf-snippet.fdf.inc \
@@ -356,6 +358,40 @@ RPI5_BUILD_TARGET ??= "RELEASE"
 # "Firmware Version" info and by `dmidecode`/`fwupdmgr` on the running OS.
 RPI5_FW_VERSION ??= "${PV}"
 
+# Firmware Management Protocol + ESRT + capsule application. Without this the
+# firmware can only be updated by rewriting the card by hand; with it, a signed
+# capsule applied through UpdateCapsule() replaces the image in place, and the
+# running version shows up in ESRT and in the BMC's Redfish SoftwareInventory.
+#
+# OFF by default, and deliberately so: it cannot be built without a capsule
+# signing certificate (see RPI5_FMP_CERT), and this layer has no business
+# inventing key material on your behalf -- a vendored public cert whose private
+# key nobody holds would look like a working update path and be nothing of the
+# sort. Set both variables together. See files/RpiFmpPkg/README.md.
+RPI5_FMP ??= "0"
+
+# The integer version ESRT publishes and FmpDxe compares for anti-rollback --
+# distinct from RPI5_FW_VERSION, which is the human-readable string. Derived
+# from PV's leading numeric part (202602+git -> 202602). It MUST only ever
+# increase: FmpDxe refuses an image whose version is below the running one, so
+# a number that goes backwards makes the board unupdatable by capsule.
+RPI5_FMP_VERSION ??= "${@d.getVar('PV').split('+')[0].replace('.', '') or '1'}"
+
+# DER certificate whose private key signs capsules for this platform.
+#
+# There is no way to make this optional and still have a working update path:
+# FmpDxe authenticates every payload against the certificates in
+# PcdFmpDevicePkcs7CertBufferXdr, and an empty buffer means the loop over
+# candidate keys has no candidates, so nothing is ever applied. Rather than
+# ship firmware whose update path silently cannot work, the build fails when
+# RPI5_FMP=1 and this is unset.
+#
+# Generate a key and self-signed cert with, e.g.:
+#   openssl req -x509 -newkey rsa:2048 -keyout capsule.key -outform DER \
+#           -out capsule.cer -days 3650 -nodes -subj "/CN=pi-bmc capsule/"
+# and sign capsules with BaseTools/Scripts/GenerateCapsule.py.
+RPI5_FMP_CERT ??= ""
+
 # Escape hatch for one-off `-D FOO=BAR` / `--pcd ...` additions without
 # having to override do_compile wholesale.
 RPI5_EDK2_EXTRA_FLAGS ??= ""
@@ -391,7 +427,8 @@ do_compile() {
     local_pkgs="${B}/edk2-local-pkgs"
     rm -rf "${local_pkgs}"
     mkdir -p "${local_pkgs}"
-    cp -r "${WORKDIR}/RpiBmcPkg" "${WORKDIR}/Rp1GemPkg" "${WORKDIR}/RpiRedfishPkg" "${local_pkgs}/"
+    cp -r "${WORKDIR}/RpiBmcPkg" "${WORKDIR}/Rp1GemPkg" "${WORKDIR}/RpiRedfishPkg" \
+        "${WORKDIR}/RpiFmpPkg" "${local_pkgs}/"
 
     export WORKSPACE="${WORKDIR}"
     export PACKAGES_PATH="${S}:${EDK2_PLATFORMS_PATH}:${EDK2_NON_OSI_PATH}:${EDK2_REDFISH_CLIENT_PATH}:${local_pkgs}"
@@ -525,6 +562,51 @@ do_compile() {
         fi
     fi
 
+    # --- FMP capsule update ---------------------------------------------
+    # FmpDxe + EsrtFmpDxe, plus the certificate their capsule authentication
+    # checks against. The certificate is not optional: FmpDxe walks the keys in
+    # PcdFmpDevicePkcs7CertBufferXdr and applies nothing if there are none, so a
+    # build without one produces firmware whose ESRT advertises an update path
+    # that can never succeed. Fail here instead.
+    if [ "${RPI5_FMP}" = "1" ]; then
+        if [ -z "${RPI5_FMP_CERT}" ]; then
+            bbfatal "RPI5_FMP=1 needs RPI5_FMP_CERT set to a DER certificate whose key signs capsules -- FmpDxe rejects every payload without one. See the RPI5_FMP_CERT comment in this recipe for how to make a key."
+        fi
+        if [ ! -r "${RPI5_FMP_CERT}" ]; then
+            bbfatal "RPI5_FMP_CERT '${RPI5_FMP_CERT}' is not readable."
+        fi
+
+        # BinToPcd renders the DER certificate as the XDR-encoded VOID* PCD
+        # FmpDevicePkg expects. Passing it through --pcd is not an option: it is
+        # a multi-hundred-byte binary blob.
+        cert_pcd="${B}/fmp-capsule-cert.pcd"
+        python3 "${S}/BaseTools/Scripts/BinToPcd.py" \
+            -i "${RPI5_FMP_CERT}" -x -o "${cert_pcd}" \
+            -p gFmpDevicePkgTokenSpaceGuid.PcdFmpDevicePkcs7CertBufferXdr
+
+        printf '%s\n' '!include RpiFmpPkg/RpiFmp.dsc.inc' > "${B}/rpifmp-dsc-line.inc"
+        printf '%s\n' '!include RpiFmpPkg/RpiFmp.fdf.inc' > "${B}/rpifmp-fdf-line.inc"
+
+        grep -qF 'RpiFmpPkg/RpiFmp.dsc.inc' "${dsc}" || \
+            sed -i "\|${dsc_marker}|r ${B}/rpifmp-dsc-line.inc" "${dsc}"
+        grep -qF 'RpiFmpPkg/RpiFmp.fdf.inc' "${fdf}" || \
+            sed -i "\|${fdf_marker}|r ${B}/rpifmp-fdf-line.inc" "${fdf}"
+
+        # The certificate PCD goes at the END of the DSC, not at the marker the
+        # other snippets use. BinToPcd emits a bare PCD assignment with no
+        # section header, and the marker sits inside [Components.common] -- an
+        # opened [PcdsFixedAtBuild] there would swallow every component after
+        # it. Appending a fresh section at end of file cannot do that.
+        grep -qF 'PcdFmpDevicePkcs7CertBufferXdr' "${dsc}" || {
+            printf '\n#\n# Capsule signing certificate, appended by the edk2-rpi5-firmware recipe\n# from RPI5_FMP_CERT. FmpDxe authenticates every capsule payload against it.\n#\n[PcdsFixedAtBuild.common]\n' >> "${dsc}"
+            cat "${cert_pcd}" >> "${dsc}"
+        }
+
+        fmp_pcds="--pcd gRpiFmpTokenSpaceGuid.PcdRpi5FirmwareVersion=${RPI5_FMP_VERSION}"
+    else
+        fmp_pcds=""
+    fi
+
     # --- embed the iPXE UNDI/SNP driver, if built -----------------------
     # ipxe-efi's do_deploy publishes bin-arm64-efi/ipxe.efidrv to
     # DEPLOY_DIR_IMAGE; wire it into the DXE firmware volume as a prebuilt
@@ -609,6 +691,7 @@ do_compile() {
         ${profiling_define} \
         ${secure_boot_define} \
         --pcd gEfiMdeModulePkgTokenSpaceGuid.PcdFirmwareVersionString=L"${RPI5_FW_VERSION}" \
+        ${fmp_pcds} \
         ${RPI5_EDK2_EXTRA_FLAGS} \
         -y ${B}/RPI_EFI.report.txt
 

@@ -21,6 +21,7 @@
 [Sources]
   RpiRedfishSyncDxe.c
   RpiRedfishInventory.c
+  RpiRedfishFirmware.c
   RpiRedfishSyncDxe.h
 
 [Packages]
@@ -46,6 +47,7 @@
   UefiRuntimeServicesTableLib
 
 [Protocols]
+  gEfiFirmwareManagementProtocolGuid            ## CONSUMES
   gEdkIIRedfishConfigHandlerProtocolGuid    ## PRODUCES
   gEfiSmbiosProtocolGuid                    ## CONSUMES
   gEfiDiskInfoProtocolGuid                  ## CONSUMES

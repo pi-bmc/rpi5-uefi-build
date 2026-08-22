@@ -619,6 +619,71 @@ ReportMemory (
 }
 
 /**
+  Report what firmware this board runs, as a Redfish SoftwareInventory.
+
+  This is the inventory half of remote updates: it is what tells an operator --
+  or an automated fleet check -- which version a node is on, whether it can be
+  updated at all, and how the last attempt went. The BMC needs those to decide
+  whether to stage a capsule; without them the only way to know a node's
+  firmware version is to boot it and look.
+
+  PATCH rather than POST: the resource is fixed and per-node, so re-reporting
+  the same node updates it rather than accumulating duplicates. Fail-open like
+  everything else here -- a BMC with no UpdateService just 404s.
+
+  @param[in] Service  The Redfish service to report to.
+**/
+STATIC
+VOID
+ReportFirmwareInventory (
+  IN REDFISH_SERVICE  Service
+  )
+{
+  RPI_REDFISH_FIRMWARE_IMAGE  Images[RPI_REDFISH_FIRMWARE_MAX];
+  REDFISH_RESPONSE            Response;
+  EFI_STATUS                  Status;
+  UINTN                       Count;
+  CHAR8                       *Body;
+
+  Status = RpiRedfishCollectFirmware (Images, RPI_REDFISH_FIRMWARE_MAX, &Count);
+  if (EFI_ERROR (Status) || (Count == 0)) {
+    //
+    // Expected on a build without RPI5_FMP: there is no Firmware Management
+    // Protocol to ask, so there is no inventory to report.
+    //
+    DEBUG ((DEBUG_ERROR, "RpiRedfishSync: no firmware inventory to report - %r\n", Status));
+    return;
+  }
+
+  //
+  // Only the first image is reported. The platform publishes exactly one
+  // updatable firmware, and the inventory URI names it; a second producer would
+  // need a resource of its own rather than overwriting this one.
+  //
+  Body   = NULL;
+  Status = RpiRedfishBuildFirmwareInventoryPatch (&Images[0], &Body);
+  if (EFI_ERROR (Status) || (Body == NULL)) {
+    return;
+  }
+
+  ZeroMem (&Response, sizeof (Response));
+  Status = RedfishHttpPatchResource (Service, RPI_REDFISH_FIRMWARE_INVENTORY_URI, Body, &Response);
+  LogResult ("PATCH", RPI_REDFISH_FIRMWARE_INVENTORY_URI, Status, &Response);
+  RedfishHttpFreeResponse (&Response);
+
+  FreePool (Body);
+
+  DEBUG ((
+    DEBUG_ERROR,
+    "RpiRedfishSync: reported firmware '%a' version %a (%u), updateable %a\n",
+    Images[0].Name,
+    Images[0].Version,
+    Images[0].VersionNumber,
+    Images[0].Updateable ? "yes" : "no"
+    ));
+}
+
+/**
   Report the host's local drives to the BMC's Storage subsystem.
 
   Same shape as ReportMemory -- one POST per drive, keyed on SerialNumber --
@@ -970,7 +1035,12 @@ RpiRedfishSync (
   ReportDrives (Service);
 
   //
-  // 2e. First thermal sample + any fan steering the BMC already staged.
+  // 2e. Report the firmware inventory.
+  //
+  ReportFirmwareInventory (Service);
+
+  //
+  // 2f. First thermal sample + any fan steering the BMC already staged.
   //    Before the boot-override step on purpose: an override reboots the
   //    host, and the BMC should still get one thermal reading out of this
   //    boot.

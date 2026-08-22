@@ -1,0 +1,58 @@
+## @file
+#
+#  FmpDeviceLib for the Raspberry Pi 5's own UEFI firmware image, which lives as
+#  a file on the FAT boot partition rather than in a flash part of its own.
+#
+#  Copyright (c) 2026, the pi-bmc contributors.
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+#
+##
+
+[Defines]
+  INF_VERSION    = 0x0001001A
+  BASE_NAME      = Rpi5FmpDeviceLib
+  FILE_GUID      = 9d2b6c41-7f18-4a5e-b3d0-1c8a4e5f6072
+  MODULE_TYPE    = DXE_DRIVER
+  VERSION_STRING = 1.0
+  LIBRARY_CLASS  = FmpDeviceLib|DXE_DRIVER
+
+[Sources]
+  Rpi5FmpDeviceLib.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  MdeModulePkg/MdeModulePkg.dec
+  FmpDevicePkg/FmpDevicePkg.dec
+  ArmPkg/ArmPkg.dec
+  Platform/RaspberryPi/RaspberryPi.dec
+  RpiFmpPkg/RpiFmpPkg.dec
+
+[LibraryClasses]
+  BaseLib
+  BaseMemoryLib
+  DebugLib
+  DevicePathLib
+  MemoryAllocationLib
+  PcdLib
+  UefiBootServicesTableLib
+
+[Guids]
+  gEfiFileInfoGuid                              ## CONSUMES ## GUID
+  gEfiSystemNvDataFvGuid                        ## CONSUMES ## GUID
+  gEfiSystemResourceTableGuid                   ## CONSUMES ## GUID
+
+[Protocols]
+  gEfiSimpleFileSystemProtocolGuid              ## CONSUMES
+  gEfiBlockIoProtocolGuid                       ## CONSUMES
+
+[FeaturePcd]
+  gRpiFmpTokenSpaceGuid.PcdRpi5FmpUpdateSupported
+
+[FixedPcd]
+  gRpiFmpTokenSpaceGuid.PcdRpi5FirmwareVersion
+  gRaspberryPiTokenSpaceGuid.PcdNvStorageVariableBase
+  gArmTokenSpaceGuid.PcdFdBaseAddress
+
+[Pcd]
+  gEfiMdeModulePkgTokenSpaceGuid.PcdFirmwareVersionString

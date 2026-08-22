@@ -47,6 +47,15 @@
 #define RPI_REDFISH_THERMAL_URI       L"/redfish/v1/Chassis/1/Thermal"
 
 //
+// Firmware inventory. UpdateService/FirmwareInventory is where Redfish expects
+// a SoftwareInventory for something the platform can update; the Id is fixed
+// because this board has exactly one updatable firmware image and a BMC needs a
+// stable resource to PATCH against across reboots.
+//
+#define RPI_REDFISH_FIRMWARE_INVENTORY_ID   "BiosFirmware"
+#define RPI_REDFISH_FIRMWARE_INVENTORY_URI  L"/redfish/v1/UpdateService/FirmwareInventory/BiosFirmware"
+
+//
 // Thermal telemetry cadence while the firmware phase lasts (BDS wait, Setup,
 // the shell). 10 s keeps the BMC's view fresh without loading the link.
 //
@@ -312,6 +321,64 @@ EFI_STATUS
 RpiRedfishBuildDrivePost (
   IN  RPI_REDFISH_DRIVE  *Drive,
   OUT CHAR8              **Json
+  );
+
+//
+// Updatable firmware images reported. One on this platform (the UEFI firmware
+// itself); the bound leaves room for a second FMP producer to appear without
+// this overrunning.
+//
+#define RPI_REDFISH_FIRMWARE_MAX  4
+
+//
+// One updatable image, as EFI_FIRMWARE_IMAGE_DESCRIPTOR describes it, reduced
+// to what a Redfish SoftwareInventory carries.
+//
+typedef struct {
+  CHAR8      ImageTypeId[37];                    // ESRT firmware class, 36 chars + NUL
+  CHAR8      Name[RPI_REDFISH_STR_MAX];          // ImageIdName
+  CHAR8      Version[RPI_REDFISH_STR_MAX];       // VersionName, the human-readable one
+  UINT32     VersionNumber;                      // Version, the integer ESRT compares
+  UINT32     LowestSupportedVersion;
+  UINT32     LastAttemptVersion;
+  UINT32     LastAttemptStatus;
+  BOOLEAN    LastAttemptValid;                   // FALSE on descriptor versions below 3
+  BOOLEAN    Updateable;
+} RPI_REDFISH_FIRMWARE_IMAGE;
+
+/**
+  Collect every updatable firmware image this platform publishes through
+  EFI_FIRMWARE_MANAGEMENT_PROTOCOL.
+
+  @param[out] Images  Receives the collected images.
+  @param[in]  Max     Capacity of Images.
+  @param[out] Count   Receives the number written.
+
+  @retval EFI_SUCCESS    Zero or more images were collected.
+  @retval EFI_NOT_FOUND  No Firmware Management Protocol is installed -- the
+                         build has FMP support compiled out.
+**/
+EFI_STATUS
+RpiRedfishCollectFirmware (
+  OUT RPI_REDFISH_FIRMWARE_IMAGE  *Images,
+  IN  UINTN                       Max,
+  OUT UINTN                       *Count
+  );
+
+/**
+  Build the SoftwareInventory PATCH body for one firmware image.
+
+  @param[in]  Image  Image to describe.
+  @param[out] Json   Receives an allocated ASCII JSON body. Caller frees with
+                     FreePool().
+
+  @retval EFI_SUCCESS           Body was built.
+  @retval EFI_OUT_OF_RESOURCES  Allocation failed.
+**/
+EFI_STATUS
+RpiRedfishBuildFirmwareInventoryPatch (
+  IN  RPI_REDFISH_FIRMWARE_IMAGE  *Image,
+  OUT CHAR8                       **Json
   );
 
 #endif // RPI_REDFISH_SYNC_DXE_H_
