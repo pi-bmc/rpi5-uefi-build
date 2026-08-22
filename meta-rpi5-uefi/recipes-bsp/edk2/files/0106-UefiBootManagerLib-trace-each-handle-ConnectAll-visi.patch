@@ -1,0 +1,79 @@
+From: appkins <nbatkins@gmail.com>
+Date: Fri, 22 Aug 2026 15:00:00 -0500
+Subject: [PATCH] UefiBootManagerLib: trace each handle ConnectAll visits
+
+Diagnostic only. BDS stops making progress inside
+PlatformBootManagerAfterConsole's BootDiscoveryPolicyHandler: the boot prompt
+prints, EfiBootManagerConnectAll starts its walk over 296 handles, and
+ConnectController on the third one never returns. Nothing else is emitted
+afterwards -- a busy ConnectController would still be installing protocols --
+so it is blocked rather than working.
+
+Log the handle and its device path before each ConnectController, so the last
+line printed is the controller that did not return, by construction. The
+early handles carry no device path, so also list the protocols each one
+produces: that set is what decides which driver bindings ConnectController
+will offer the handle to, and therefore which Supported() or Start() is the
+one that hangs.
+
+DEBUG_ERROR so it survives whatever the platform sets
+PcdDebugPrintErrorLevel to, and inside DEBUG_CODE so a RELEASE build is
+untouched. The protocol listing is verbose for a healthy walk, but a walk
+that stalls on the third handle only ever emits a dozen lines. Drop this
+patch once the offending controller is identified.
+
+Upstream-Status: Inappropriate [diagnostic]
+Signed-off-by: appkins <nbatkins@gmail.com>
+---
+--- a/MdeModulePkg/Library/UefiBootManagerLib/BmConnect.c
++++ b/MdeModulePkg/Library/UefiBootManagerLib/BmConnect.c
+@@ -38,6 +38,49 @@
+            );
+ 
+     for (Index = 0; Index < HandleCount; Index++) {
++      DEBUG_CODE_BEGIN ();
++      CHAR16    *BmDpText;
++      EFI_GUID  **BmProtocols;
++      UINTN     BmProtocolCount;
++      UINTN     BmProtoIdx;
++
++      BmDpText = ConvertDevicePathToText (
++                   DevicePathFromHandle (HandleBuffer[Index]),
++                   FALSE,
++                   FALSE
++                   );
++      DEBUG ((
++        DEBUG_ERROR,
++        "BmConnectAll[%u/%u]: handle %p %s\n",
++        (UINT32)Index,
++        (UINT32)HandleCount,
++        HandleBuffer[Index],
++        (BmDpText == NULL) ? L"<no device path>" : BmDpText
++        ));
++      if (BmDpText != NULL) {
++        FreePool (BmDpText);
++      }
++
++      //
++      // Early handles carry no device path, so the text above cannot name
++      // them. List what they produce instead -- that is what decides which
++      // driver bindings ConnectController will try.
++      //
++      if (!EFI_ERROR (
++            gBS->ProtocolsPerHandle (
++              HandleBuffer[Index],
++              &BmProtocols,
++              &BmProtocolCount
++              )))
++      {
++        for (BmProtoIdx = 0; BmProtoIdx < BmProtocolCount; BmProtoIdx++) {
++          DEBUG ((DEBUG_ERROR, "    proto %g\n", BmProtocols[BmProtoIdx]));
++        }
++
++        FreePool (BmProtocols);
++      }
++
++      DEBUG_CODE_END ();
+       gBS->ConnectController (HandleBuffer[Index], NULL, NULL, TRUE);
+     }
+ 

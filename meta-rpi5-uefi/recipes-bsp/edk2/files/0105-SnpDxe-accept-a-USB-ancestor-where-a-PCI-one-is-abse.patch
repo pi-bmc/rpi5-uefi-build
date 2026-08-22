@@ -1,0 +1,500 @@
+From: appkins <nbatkins@gmail.com>
+Date: Fri, 22 Aug 2026 15:30:00 -0500
+Subject: [PATCH] SnpDxe: accept a USB ancestor where a PCI one is absent
+
+SimpleNetworkDriverStart refused any UNDI without an EFI_PCI_IO_PROTOCOL in
+its device path ancestry:
+
+    Status = gBS->LocateDevicePath (&gEfiPciIoProtocolGuid, &NiiDevicePath, &Handle);
+    if (EFI_ERROR (Status)) {
+      return Status;
+    }
+
+That rejects a whole class of adapter before any work is done. On a Raspberry
+Pi 5 the same USB CDC-NCM gadget binds on the RP1 xHCI ports, whose device
+path is rooted in PCI because RP1 is a PCIe device, and is refused on the
+BCM2712 DWC2 port, whose host controller publishes a bare vendor-hardware
+device path. The symptom is quiet: Supported() succeeds and logs,
+NetworkCommon publishes its NII, and Start() returns before its first DEBUG
+line, so an EFI_SIMPLE_NETWORK_PROTOCOL never appears and every consumer above
+it -- MNP, ARP, IPv4, TCP, and in this case a Redfish host interface over
+RestEx -- reports only that its own dependency is missing.
+
+Keep PciIo as the default and preferred case, and accept a USB ancestor as the
+alternative. EFI_USB_IO_PROTOCOL exposes no DMA surface at all -- no
+AllocateBuffer, no Map, no Unmap -- and needs none: the USB host controller
+driver owns the bus mastering, bounce buffering included, so a USB UNDI
+performs its own I/O and never asks SNP to translate an address. Finding UsbIo
+in the ancestry is proof that the PciIo services are not required, not a
+substitute for them. A UNDI on neither bus is still refused.
+
+PciIo is used for three things, and each has an answer without it:
+
+  - The CPB/DB/CDB and Tx/Rx allocations. Route them through new
+    SnpAllocateBuffer/SnpFreeBuffer helpers that use AllocateBuffer/FreeBuffer
+    when PciIo is present and page allocation when it is not. A UNDI that
+    performs its own I/O -- any software UNDI, such as the USB network class
+    drivers in MdeModulePkg -- only ever has the CPU touch these structures.
+
+  - The BAR scan that fills MemoryBarIndex and IoBarIndex. Skip it, leaving
+    both at PCI_MAX_BAR. The Io and Mem UNDI callbacks already test for that
+    before use, so they become inert; their ASSERTs are widened to accept the
+    no-PciIo case, which would otherwise deadloop a DEBUG build the first time
+    a UNDI issued one of those callbacks.
+
+  - The Map and Unmap UNDI callbacks. Refuse cleanly instead of dereferencing
+    NULL. A UNDI that asks SNP to translate an address is asking for a DMA
+    mapping this driver cannot provide, and saying so beats faulting.
+
+SimpleNetworkDriverFree already tested Snp->PciIo for NULL before releasing
+the CPB/DB/CDB, so a NULL PciIo was half-anticipated here; it now uses the
+same helper as the allocation path so the fallback is released correctly.
+
+The failed-PciIo path also now closes the device path protocol it opened
+BY_DRIVER before returning, which the original bare return leaked.
+
+Declare MemoryAllocationLib and gEfiUsbIoProtocolGuid in the INF.
+AllocateZeroPool and FreePool were already used and resolved transitively;
+AllocatePages and FreePages make the dependency worth stating.
+
+Behaviour is unchanged for every adapter that has a PCI ancestor: PciIo is
+found on the first lookup, and the same allocator and the same BAR scan run as
+before. The only paths that change are the one that previously failed outright
+and the leak on its way out.
+
+Upstream-Status: Pending
+Signed-off-by: appkins <nbatkins@gmail.com>
+---
+--- a/NetworkPkg/SnpDxe/Snp.h
++++ b/NetworkPkg/SnpDxe/Snp.h
+@@ -27,6 +27,7 @@
+ #include <Library/PrintLib.h>
+ #include <Library/PcdLib.h>
+ 
++#include <Protocol/UsbIo.h>
+ #include <IndustryStandard/Pci.h>
+ #include <IndustryStandard/Acpi.h>
+ 
+@@ -1027,3 +1028,38 @@
+   );
+ 
+ #define SNP_MEM_PAGES(x)  (((x) - 1) / 4096 + 1)
++
++/**
++  Allocate a buffer for the UNDI CPB/DB/CDB or Tx/Rx structures.
++
++  Uses EFI_PCI_IO_PROTOCOL.AllocateBuffer when the UNDI has a PCI ancestor
++  and plain page allocation when it does not. See SimpleNetworkDriverStart
++  for why PciIo is optional.
++
++  @param  Snp     Driver instance.
++  @param  Pages   Number of pages to allocate.
++  @param  Buffer  Receives the allocation.
++
++  @retval EFI_SUCCESS           Allocated.
++  @retval EFI_OUT_OF_RESOURCES  Not allocated.
++**/
++EFI_STATUS
++SnpAllocateBuffer (
++  IN  SNP_DRIVER  *Snp,
++  IN  UINTN       Pages,
++  OUT VOID        **Buffer
++  );
++
++/**
++  Release a buffer obtained from SnpAllocateBuffer.
++
++  @param  Snp     Driver instance.
++  @param  Pages   Number of pages originally requested.
++  @param  Buffer  The allocation to release.
++**/
++VOID
++SnpFreeBuffer (
++  IN SNP_DRIVER  *Snp,
++  IN UINTN       Pages,
++  IN VOID        *Buffer
++  );
+--- a/NetworkPkg/SnpDxe/Snp.c
++++ b/NetworkPkg/SnpDxe/Snp.c
+@@ -240,39 +240,63 @@
+ 
+   @param  Snp   Pointer to SNP_DRIVER structure to be freed.
+ **/
++EFI_STATUS
++SnpAllocateBuffer (
++  IN  SNP_DRIVER  *Snp,
++  IN  UINTN       Pages,
++  OUT VOID        **Buffer
++  )
++{
++  if (Snp->PciIo != NULL) {
++    return Snp->PciIo->AllocateBuffer (
++                         Snp->PciIo,
++                         AllocateAnyPages,
++                         EfiBootServicesData,
++                         Pages,
++                         Buffer,
++                         0
++                         );
++  }
++
++  *Buffer = AllocatePages (Pages);
++  if (*Buffer == NULL) {
++    return EFI_OUT_OF_RESOURCES;
++  }
++
++  return EFI_SUCCESS;
++}
++
++VOID
++SnpFreeBuffer (
++  IN SNP_DRIVER  *Snp,
++  IN UINTN       Pages,
++  IN VOID        *Buffer
++  )
++{
++  if (Snp->PciIo != NULL) {
++    Snp->PciIo->FreeBuffer (Snp->PciIo, Pages, Buffer);
++    return;
++  }
++
++  FreePages (Buffer, Pages);
++}
++
+ VOID
+ SimpleNetworkDriverFree (
+   IN SNP_DRIVER  *Snp
+   )
+ {
+-  EFI_PCI_IO_PROTOCOL  *PciIo;
+-
+   if (Snp != NULL) {
+-    PciIo = Snp->PciIo;
+-    if (PciIo != NULL) {
+-      if (Snp->Cpb != NULL) {
+-        PciIo->FreeBuffer (
+-                 PciIo,
+-                 SNP_MEM_PAGES (EFI_PAGE_SIZE),
+-                 Snp->Cpb
+-                 );
+-      }
+-
+-      if (Snp->Db != NULL) {
+-        PciIo->FreeBuffer (
+-                 PciIo,
+-                 SNP_MEM_PAGES (EFI_PAGE_SIZE),
+-                 Snp->Db
+-                 );
+-      }
+-
+-      if (Snp->Cdb != NULL) {
+-        PciIo->FreeBuffer (
+-                 PciIo,
+-                 SNP_MEM_PAGES (sizeof (PXE_CDB)),
+-                 (VOID *)(UINTN)Snp->Cdb
+-                 );
+-      }
++    if (Snp->Cpb != NULL) {
++      SnpFreeBuffer (Snp, SNP_MEM_PAGES (EFI_PAGE_SIZE), Snp->Cpb);
++    }
++
++    if (Snp->Db != NULL) {
++      SnpFreeBuffer (Snp, SNP_MEM_PAGES (EFI_PAGE_SIZE), Snp->Db);
++    }
++
++    if (Snp->Cdb != NULL) {
++      SnpFreeBuffer (Snp, SNP_MEM_PAGES (sizeof (PXE_CDB)), (VOID *)(UINTN)Snp->Cdb);
+     }
+ 
+     if (Snp->RecycledTxBuf != NULL) {
+@@ -311,6 +335,7 @@
+ {
+   EFI_NETWORK_INTERFACE_IDENTIFIER_PROTOCOL  *Nii;
+   EFI_DEVICE_PATH_PROTOCOL                   *NiiDevicePath;
++  EFI_DEVICE_PATH_PROTOCOL                   *AncestorPath;
+   EFI_STATUS                                 Status;
+   PXE_UNDI                                   *Pxe;
+   SNP_DRIVER                                 *Snp;
+@@ -339,26 +364,65 @@
+     return Status;
+   }
+ 
+-  Status = gBS->LocateDevicePath (
+-                  &gEfiPciIoProtocolGuid,
+-                  &NiiDevicePath,
+-                  &Handle
+-                  );
+-
+-  if (EFI_ERROR (Status)) {
+-    return Status;
++  //
++  // A PCI ancestor is the default and stays the preferred case: a UNDI on a
++  // PCI bus uses its EFI_PCI_IO_PROTOCOL for the CPB/DB/CDB and Tx/Rx
++  // allocations and for the UNDI memory-mapping callbacks.
++  //
++  // A UNDI reached over USB is the accepted alternative. EFI_USB_IO_PROTOCOL
++  // exposes no DMA surface at all -- no AllocateBuffer, no Map, no Unmap --
++  // and needs none: the USB host controller driver owns the bus mastering,
++  // bounce buffering included, so a USB UNDI performs its own I/O and never
++  // asks SNP to translate an address. Finding UsbIo in the ancestry is
++  // therefore proof that the PciIo services are not required here, not a
++  // substitute for them; the allocations fall back to plain pages and the
++  // mapping callbacks refuse.
++  //
++  // A UNDI on neither bus is still refused, exactly as before.
++  //
++  // On a Raspberry Pi 5 this is precisely the difference between the two USB
++  // controllers. A CDC-NCM gadget on an RP1 xHCI port is rooted in PCI,
++  // because RP1 is a PCIe device. The same gadget on the BCM2712 DWC2 port
++  // hangs off a bare vendor-hardware device path, so the PCI lookup fails;
++  // Supported() had already succeeded and NetworkCommon had published its
++  // NII, but Start() returned here and no EFI_SIMPLE_NETWORK_PROTOCOL was
++  // ever produced.
++  //
++  PciIo        = NULL;
++  AncestorPath = NiiDevicePath;
++  Status       = gBS->LocateDevicePath (
++                        &gEfiPciIoProtocolGuid,
++                        &AncestorPath,
++                        &Handle
++                        );
++  if (!EFI_ERROR (Status)) {
++    Status = gBS->OpenProtocol (
++                    Handle,
++                    &gEfiPciIoProtocolGuid,
++                    (VOID **)&PciIo,
++                    This->DriverBindingHandle,
++                    Controller,
++                    EFI_OPEN_PROTOCOL_GET_PROTOCOL
++                    );
+   }
+ 
+-  Status = gBS->OpenProtocol (
+-                  Handle,
+-                  &gEfiPciIoProtocolGuid,
+-                  (VOID **)&PciIo,
+-                  This->DriverBindingHandle,
+-                  Controller,
+-                  EFI_OPEN_PROTOCOL_GET_PROTOCOL
+-                  );
+   if (EFI_ERROR (Status)) {
+-    return Status;
++    PciIo        = NULL;
++    AncestorPath = NiiDevicePath;
++    Status       = gBS->LocateDevicePath (
++                          &gEfiUsbIoProtocolGuid,
++                          &AncestorPath,
++                          &Handle
++                          );
++    if (EFI_ERROR (Status)) {
++      gBS->CloseProtocol (
++             Controller,
++             &gEfiDevicePathProtocolGuid,
++             This->DriverBindingHandle,
++             Controller
++             );
++      return Status;
++    }
+   }
+ 
+   //
+@@ -382,7 +446,11 @@
+     return Status;
+   }
+ 
+-  DEBUG ((DEBUG_INFO, "Start(): UNDI3.1 found\n"));
++  DEBUG ((
++    DEBUG_INFO,
++    "Start(): UNDI3.1 found%a\n",
++    (PciIo == NULL) ? " (USB ancestor, no PciIo)" : ""
++    ));
+ 
+   Pxe = (PXE_UNDI *)(UINTN)(Nii->Id);
+ 
+@@ -486,42 +554,21 @@
+   // -it is OK to allocate one global set of CPB, DB pair for each UNDI
+   // interface as EFI does not multi-task and so SNP will not be re-entered!
+   //
+-  Status = PciIo->AllocateBuffer (
+-                    PciIo,
+-                    AllocateAnyPages,
+-                    EfiBootServicesData,
+-                    SNP_MEM_PAGES (EFI_PAGE_SIZE),
+-                    &Snp->Cpb,
+-                    0
+-                    );
++  Status = SnpAllocateBuffer (Snp, SNP_MEM_PAGES (EFI_PAGE_SIZE), (VOID **)&Snp->Cpb);
+ 
+   if (Status != EFI_SUCCESS) {
+     DEBUG ((DEBUG_NET, "\nCould not allocate CPB structure.\n"));
+     goto ErrorDeleteSnp;
+   }
+ 
+-  Status = PciIo->AllocateBuffer (
+-                    PciIo,
+-                    AllocateAnyPages,
+-                    EfiBootServicesData,
+-                    SNP_MEM_PAGES (EFI_PAGE_SIZE),
+-                    &Snp->Db,
+-                    0
+-                    );
++  Status = SnpAllocateBuffer (Snp, SNP_MEM_PAGES (EFI_PAGE_SIZE), (VOID **)&Snp->Db);
+ 
+   if (Status != EFI_SUCCESS) {
+     DEBUG ((DEBUG_NET, "\nCould not allocate DB structure.\n"));
+     goto ErrorDeleteSnp;
+   }
+ 
+-  Status = PciIo->AllocateBuffer (
+-                    PciIo,
+-                    AllocateAnyPages,
+-                    EfiBootServicesData,
+-                    SNP_MEM_PAGES (sizeof (PXE_CDB)),
+-                    (VOID **)&Snp->Cdb,
+-                    0
+-                    );
++  Status = SnpAllocateBuffer (Snp, SNP_MEM_PAGES (sizeof (PXE_CDB)), (VOID **)&Snp->Cdb);
+ 
+   if (Status != EFI_SUCCESS) {
+     DEBUG ((DEBUG_NET, "\nCould not allocate CDB structure.\n"));
+@@ -543,7 +590,7 @@
+   Snp->IoBarIndex     = PCI_MAX_BAR;
+   FoundMemoryBar      = FALSE;
+   FoundIoBar          = FALSE;
+-  for (BarIndex = 0; BarIndex < PCI_MAX_BAR; BarIndex++) {
++  for (BarIndex = 0; (PciIo != NULL) && (BarIndex < PCI_MAX_BAR); BarIndex++) {
+     Status = PciIo->GetBarAttributes (
+                       PciIo,
+                       BarIndex,
+--- a/NetworkPkg/SnpDxe/Initialize.c
++++ b/NetworkPkg/SnpDxe/Initialize.c
+@@ -37,14 +37,7 @@
+ 
+   Cpb = Snp->Cpb;
+   if (Snp->TxRxBufferSize != 0) {
+-    Status = Snp->PciIo->AllocateBuffer (
+-                           Snp->PciIo,
+-                           AllocateAnyPages,
+-                           EfiBootServicesData,
+-                           SNP_MEM_PAGES (Snp->TxRxBufferSize),
+-                           &Addr,
+-                           0
+-                           );
++    Status = SnpAllocateBuffer (Snp, SNP_MEM_PAGES (Snp->TxRxBufferSize), &Addr);
+ 
+     if (Status != EFI_SUCCESS) {
+       DEBUG (
+@@ -131,11 +124,7 @@
+       );
+ 
+     if (Snp->TxRxBuffer != NULL) {
+-      Snp->PciIo->FreeBuffer (
+-                    Snp->PciIo,
+-                    SNP_MEM_PAGES (Snp->TxRxBufferSize),
+-                    (VOID *)Snp->TxRxBuffer
+-                    );
++      SnpFreeBuffer (Snp, SNP_MEM_PAGES (Snp->TxRxBufferSize), (VOID *)Snp->TxRxBuffer);
+     }
+ 
+     Snp->TxRxBuffer = NULL;
+--- a/NetworkPkg/SnpDxe/Shutdown.c
++++ b/NetworkPkg/SnpDxe/Shutdown.c
+@@ -58,11 +58,7 @@
+   // Free allocated memory.
+   //
+   if (Snp->TxRxBuffer != NULL) {
+-    Snp->PciIo->FreeBuffer (
+-                  Snp->PciIo,
+-                  SNP_MEM_PAGES (Snp->TxRxBufferSize),
+-                  (VOID *)Snp->TxRxBuffer
+-                  );
++    SnpFreeBuffer (Snp, SNP_MEM_PAGES (Snp->TxRxBufferSize), (VOID *)Snp->TxRxBuffer);
+   }
+ 
+   Snp->TxRxBuffer     = NULL;
+--- a/NetworkPkg/SnpDxe/Callback.c
++++ b/NetworkPkg/SnpDxe/Callback.c
+@@ -116,7 +116,7 @@
+ 
+   switch (ReadOrWrite) {
+     case PXE_IO_READ:
+-      ASSERT (Snp->IoBarIndex < PCI_MAX_BAR);
++      ASSERT ((Snp->PciIo == NULL) || (Snp->IoBarIndex < PCI_MAX_BAR));
+       if (Snp->IoBarIndex < PCI_MAX_BAR) {
+         Snp->PciIo->Io.Read (
+                          Snp->PciIo,
+@@ -131,7 +131,7 @@
+       break;
+ 
+     case PXE_IO_WRITE:
+-      ASSERT (Snp->IoBarIndex < PCI_MAX_BAR);
++      ASSERT ((Snp->PciIo == NULL) || (Snp->IoBarIndex < PCI_MAX_BAR));
+       if (Snp->IoBarIndex < PCI_MAX_BAR) {
+         Snp->PciIo->Io.Write (
+                          Snp->PciIo,
+@@ -146,7 +146,7 @@
+       break;
+ 
+     case PXE_MEM_READ:
+-      ASSERT (Snp->MemoryBarIndex < PCI_MAX_BAR);
++      ASSERT ((Snp->PciIo == NULL) || (Snp->MemoryBarIndex < PCI_MAX_BAR));
+       if (Snp->MemoryBarIndex < PCI_MAX_BAR) {
+         Snp->PciIo->Mem.Read (
+                           Snp->PciIo,
+@@ -161,7 +161,7 @@
+       break;
+ 
+     case PXE_MEM_WRITE:
+-      ASSERT (Snp->MemoryBarIndex < PCI_MAX_BAR);
++      ASSERT ((Snp->PciIo == NULL) || (Snp->MemoryBarIndex < PCI_MAX_BAR));
+       if (Snp->MemoryBarIndex < PCI_MAX_BAR) {
+         Snp->PciIo->Mem.Write (
+                           Snp->PciIo,
+@@ -258,6 +258,18 @@
+ 
+   Snp->MapList[Index].VirtualAddress = (EFI_PHYSICAL_ADDRESS)CpuAddr;
+ 
++  if (Snp->PciIo == NULL) {
++    //
++    // No PCI ancestor, so there is nothing to translate through. A software
++    // UNDI performs its own I/O and never issues this callback; refuse rather
++    // than dereference NULL.
++    //
++    DEBUG ((DEBUG_ERROR, "SNP cannot map a buffer without a PCI ancestor.\n"));
++    Snp->MapList[Index].VirtualAddress = 0;
++    *DevAddrPtr                        = 0;
++    return;
++  }
++
+   Status = Snp->PciIo->Map (
+                          Snp->PciIo,
+                          DirectionFlag,
+@@ -315,7 +327,9 @@
+     return;
+   }
+ 
+-  Snp->PciIo->Unmap (Snp->PciIo, Snp->MapList[Index].MapCookie);
++  if (Snp->PciIo != NULL) {
++    Snp->PciIo->Unmap (Snp->PciIo, Snp->MapList[Index].MapCookie);
++  }
+   Snp->MapList[Index].VirtualAddress = 0;
+   Snp->MapList[Index].MapCookie      = NULL;
+   return;
+--- a/NetworkPkg/SnpDxe/SnpDxe.inf
++++ b/NetworkPkg/SnpDxe/SnpDxe.inf
+@@ -61,6 +61,7 @@
+   UefiBootServicesTableLib
+   UefiDriverEntryPoint
+   BaseMemoryLib
++  MemoryAllocationLib
+   DebugLib
+   NetLib
+ 
+@@ -72,6 +73,7 @@
+   gEfiDevicePathProtocolGuid                    ## TO_START
+   gEfiNetworkInterfaceIdentifierProtocolGuid_31 ## TO_START
+   gEfiPciIoProtocolGuid                         ## TO_START
++  gEfiUsbIoProtocolGuid                         ## TO_START
+ 
+ [Pcd]
+   gEfiNetworkPkgTokenSpaceGuid.PcdSnpCreateExitBootServicesEvent   ## CONSUMES

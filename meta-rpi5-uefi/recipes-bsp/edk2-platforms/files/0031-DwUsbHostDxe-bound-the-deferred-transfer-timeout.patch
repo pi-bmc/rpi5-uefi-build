@@ -1,0 +1,58 @@
+From: appkins <nbatkins@gmail.com>
+Date: Sat, 22 Aug 2026 16:05:00 -0500
+Subject: [PATCH] DwUsbHostDxe: bound the deferred transfer timeout
+
+DwHcAsyncInterruptTransfer stamps every deferred request with a one
+second timeout. That number is not a transfer budget, it is a TPL hold
+time: DwHcPeriodicHandler is an EVT_TIMER | EVT_NOTIFY_SIGNAL event
+registered at TPL_NOTIFY with a one millisecond period, and for each due
+request it calls DwHcDeferredTransfer, which arms a timer for
+Req->TimeOut milliseconds and then runs DwHcTransfer synchronously.
+DwHcTransfer raises to TPL_NOTIFY itself and spins in Wait4Chhltd. So
+one endpoint that stops halting its channel can hold TPL_NOTIFY for a
+full second, and nothing at TPL_CALLBACK or TPL_APPLICATION runs for
+the duration.
+
+That went unnoticed while the only deferred endpoints on this platform
+belonged to a keyboard or a mouse, which sit idle and NAK promptly --
+Wait4Chhltd returns XFER_NAK, DwHcTransfer breaks out, and
+DwHcDeferredTransfer swallows the NAK without ever approaching the
+timeout. A CDC-NCM NIC changed that. Its notification endpoint is polled
+on the same deferred list, the link carries real traffic, and the paths
+that do reach the timeout -- XFER_NOT_HALTED from Wait4Bit, and the
+XFER_CSPLIT and XFER_FRMOVRUN retry loops -- became reachable in
+practice. EfiBootManagerConnectAll runs at TPL_APPLICATION, and its
+progress went to a crawl: DEBUG output was visibly cut mid-string by
+notify-level work, which is starvation rather than slow work.
+
+Only interrupt endpoints are ever placed on the deferred list -- EpType
+is set to DWC2_HCCHAR_EPTYPE_INTR a few lines above -- and an interrupt
+transaction is a single short packet. Five milliseconds is three orders
+of magnitude more than one needs and still bounds the worst case at
+something BDS can absorb. A transaction that has not halted by then is
+not going to.
+
+Signed-off-by: appkins <nbatkins@gmail.com>
+---
+--- a/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.c
++++ b/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.c
+@@ -1246,7 +1246,18 @@
+   NewReq->IgnoreAck = FALSE;
+   NewReq->CallbackFunction = CallbackFunction;
+   NewReq->CallbackContext = Context;
+-  NewReq->TimeOut = 1000; /* 1000 ms */
++  /*
++   * DwHcPeriodicHandler runs at TPL_NOTIFY once a millisecond and calls
++   * DwHcDeferredTransfer synchronously, so this value is the longest the
++   * driver can hold TPL_NOTIFY in a single tick -- and nothing at
++   * TPL_CALLBACK or below runs while it does. A second was survivable
++   * while the only deferred endpoints belonged to idle keyboards; once a
++   * CDC-NCM NIC started polling here it was enough to starve BDS. Only
++   * interrupt endpoints are deferred, and their transactions are a single
++   * short packet, so one that has not halted in five milliseconds is not
++   * going to.
++   */
++  NewReq->TimeOut = 5; /* ms */
+ 
+   InsertTailList (&DwHc->DeferredList, &NewReq->List);
+   Status = EFI_SUCCESS;

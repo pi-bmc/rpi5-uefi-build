@@ -1,0 +1,60 @@
+From: appkins <nbatkins@gmail.com>
+Subject: [PATCH] DwUsbHostDxe: stop truncating register addresses in Wait4Bit
+
+Wait4Bit() took its register address as a UINT32:
+
+  Wait4Bit (
+    IN  EFI_EVENT Timeout,
+    IN  UINT32    Reg,
+    ...
+
+Every caller passes DwHc->DwUsbBase + offset, and DwUsbBase is an
+EFI_PHYSICAL_ADDRESS. On BCM2711 and earlier that is 0xFE980000 and the
+conversion is lossless, so the bug never showed. On BCM2712 the core sits
+at 0x10_0048_0000: GRSTCTL is 0x1000480010, and passing it through a
+UINT32 leaves 0x00480010.
+
+PcdSystemMemoryBase is 0x00400000, so that address is not unmapped and it
+does not fault -- it is ordinary DRAM. Every Wait4Bit() poll on this
+platform has been reading and re-reading a word of system memory instead
+of a register:
+
+  - waiting for GRSTCTL.CSFTRST to clear "succeeded" immediately, because
+    bit 0 of that DRAM word happened to be clear;
+  - waiting for GRSTCTL.AHBIDLE to set never succeeded, because bit 31 of
+    it never became set;
+
+which presented as a core that reset but would not go idle. It was not
+the core. Instrumented, the same register the wait had given up on read
+back correctly at the moment of the timeout:
+
+  DwCoreReset: AHBIDLE Timeout! GRSTCTL 80000000 GINTSTS 5400882B ...
+
+GRSTCTL is 0x80000000 there -- AHBIDLE set -- because that DEBUG reads
+MmioRead32 (DwHc->DwUsbBase + GRSTCTL) directly, with no truncating
+parameter in the way. All 78 other register accesses in this driver pass
+the 64-bit expression straight to MmioRead32/MmioWrite32 and were always
+correct; Wait4Bit was the one place an address crossed a UINT32.
+
+The reset was only the first casualty. Wait4Bit also backs the TX and RX
+FIFO flushes, the per-channel halt in DwHcInit(), and Wait4Chhltd() on
+every transfer, so nothing that polls a bit could have worked on this
+platform.
+
+Take the address as UINTN, which is what MmioRead32() takes.
+
+Upstream-Status: Submittable [with an RPi5 platform port]
+Signed-off-by: appkins <nbatkins@gmail.com>
+---
+diff -urN a/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.c b/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.c
+--- a/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.c
++++ b/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.c
+@@ -81,7 +81,7 @@
+ EFI_STATUS
+ Wait4Bit (
+   IN  EFI_EVENT Timeout,
+-  IN  UINT32    Reg,
++  IN  UINTN     Reg,
+   IN  UINT32    Mask,
+   IN  BOOLEAN   Set
+   )

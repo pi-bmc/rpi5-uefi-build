@@ -1,0 +1,107 @@
+From: appkins <nbatkins@gmail.com>
+Subject: [PATCH] DwUsbHostDxe: select UTMI+, not ULPI, and stop setting
+ ULPI_EXT_VBUS_DRV
+
+GUSBCFG.ULPI_UTMI_SEL is a single bit: 0 selects UTMI+, 1 selects ULPI.
+DwCoreInit() was writing it as
+
+  UsbCfg |= CONFIG_DWC2_PHY_TYPE << DWC2_GUSBCFG_ULPI_UTMI_SEL_OFFSET;
+
+and DwcHw.h defines DWC2_PHY_TYPE_UTMI as 1, so configuring the driver for
+a UTMI+ PHY set the bit and selected ULPI.
+
+On the BCM2712 core behind the Pi 5 USB-C port this is not academic.
+GHWCFG2 reads 0x228ddd50, whose HSPhyType field is 1 -- UTMI+ only, with
+no ULPI implemented -- so the old write aimed the core at an interface the
+silicon does not have.
+
+ULPI_EXT_VBUS_DRV is dropped for the same reason: it tells a ULPI PHY to
+drive VBUS externally, and configures nothing on a UTMI+ core.
+
+The reference for both is the downstream Raspberry Pi kernel, which is the
+only stack known to drive this port correctly. dwc2_hs_phy_init() in
+drivers/usb/dwc2/core.c branches on the PHY type rather than shifting it
+into the field:
+
+  case DWC2_PHY_TYPE_PARAM_UTMI:
+        usbcfg &= ~(GUSBCFG_ULPI_UTMI_SEL | GUSBCFG_PHYIF16);
+        if (hsotg->params.phy_utmi_width == 16)
+                usbcfg |= GUSBCFG_PHYIF16;
+
+and resets the core afterwards ("Reset after setting the PHY parameters"),
+which is why the second DwCoreReset() below stays where it is.
+
+The values were measured, not inferred. A Raspberry Pi 5 Model B running
+Raspberry Pi OS (6.18.34+rpt-rpi-2712) on the same VideoCore firmware
+(timestamp 1779807685), with "dtoverlay=dwc2,dr_mode=host", brings this
+core up cleanly and enumerates a high-speed mass storage device on the
+USB-C port. Its registers read:
+
+  GUSBCFG = 0x20001707   -- bit 4 (ULPI_UTMI_SEL) clear, bit 20 clear
+  GAHBCFG = 0x00000031
+  GRSTCTL = 0x80000000   -- AHBIDLE set
+  HPRT0   = 0x00001005   -- powered, connected, enabled, high speed
+  GSNPSID = 0x4f54280a
+  GHWCFG2 = 0x228ddd50
+
+and debugfs reports phy_type 1 (UTMI+), phy_utmi_width 8,
+phy_ulpi_ext_vbus 0.
+
+Two deltas against that reference remain deliberately unaddressed here,
+since neither bears on the core reset: GUSBCFG.TOUTCAL, which the kernel
+sets to 7 in dwc2_core_host_init(), and HNPCAP/SRPCAP, which this driver
+clears and the kernel leaves set.
+
+Upstream-Status: Submittable [with an RPi5 platform port]
+Signed-off-by: appkins <nbatkins@gmail.com>
+---
+diff -urN a/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.c b/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.c
+--- a/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.c
++++ b/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.c
+@@ -1549,12 +1549,42 @@
+ 
+   UsbCfg = MmioRead32 (DwHc->DwUsbBase + GUSBCFG);
+ 
+-  UsbCfg |= DWC2_GUSBCFG_ULPI_EXT_VBUS_DRV;
+   UsbCfg &= ~DWC2_GUSBCFG_TERM_SEL_DL_PULSE;
+ 
+-  UsbCfg &= ~(DWC2_GUSBCFG_ULPI_UTMI_SEL | DWC2_GUSBCFG_PHYIF);
+-  UsbCfg |= CONFIG_DWC2_PHY_TYPE << DWC2_GUSBCFG_ULPI_UTMI_SEL_OFFSET;
+-  UsbCfg &= ~DWC2_GUSBCFG_DDRSEL;
++  //
++  // Select the PHY interface this core actually has.
++  //
++  // GUSBCFG.ULPI_UTMI_SEL is one bit: 0 selects UTMI+, 1 selects ULPI. It
++  // was being written as CONFIG_DWC2_PHY_TYPE << ULPI_UTMI_SEL_OFFSET, and
++  // DWC2_PHY_TYPE_UTMI is 1 -- so asking for UTMI+ set the bit and selected
++  // ULPI. GHWCFG2 on the BCM2712 core reads 0x228ddd50, whose HSPhyType
++  // field is 1: UTMI+ only, no ULPI implemented. The old write aimed the
++  // core at an interface this silicon does not have.
++  //
++  // ULPI_EXT_VBUS_DRV goes with it -- it tells a ULPI PHY to drive VBUS
++  // externally, and configures nothing on a UTMI+ core.
++  //
++  // The reference is the downstream Raspberry Pi kernel, the only stack
++  // known to drive this port correctly. dwc2_hs_phy_init() branches on the
++  // PHY type instead of shifting it into the field:
++  //
++  //   case DWC2_PHY_TYPE_PARAM_UTMI:
++  //         usbcfg &= ~(GUSBCFG_ULPI_UTMI_SEL | GUSBCFG_PHYIF16);
++  //
++  // Measured on a Pi 5 Model B running Raspberry Pi OS 6.18.34+rpt-rpi-2712
++  // with the same VideoCore firmware, where this core resets cleanly and
++  // enumerates a high-speed device on the USB-C port:
++  //
++  //   GUSBCFG = 0x20001707   GRSTCTL = 0x80000000 (AHBIDLE set)
++  //   GAHBCFG = 0x00000031   HPRT0   = 0x00001005
++  //   GSNPSID = 0x4f54280a   GHWCFG2 = 0x228ddd50
++  //
++  UsbCfg &= ~(DWC2_GUSBCFG_ULPI_UTMI_SEL | DWC2_GUSBCFG_PHYIF |
++              DWC2_GUSBCFG_ULPI_EXT_VBUS_DRV | DWC2_GUSBCFG_DDRSEL);
++
++ #if CONFIG_DWC2_PHY_TYPE == DWC2_PHY_TYPE_ULPI
++  UsbCfg |= DWC2_GUSBCFG_ULPI_UTMI_SEL;
++ #endif
+ 
+   MmioWrite32 (DwHc->DwUsbBase + GUSBCFG, UsbCfg);
+ 

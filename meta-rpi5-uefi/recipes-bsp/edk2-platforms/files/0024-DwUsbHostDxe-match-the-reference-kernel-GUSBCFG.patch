@@ -1,0 +1,159 @@
+From: appkins <nbatkins@gmail.com>
+Subject: [PATCH] DwUsbHostDxe: match the reference kernel's GUSBCFG exactly
+
+Two register settings still differed from the only stack known to drive
+this core correctly, the downstream Raspberry Pi kernel. Neither affects
+the core reset, so they were left out of the two preceding patches; with
+those landed, close them.
+
+GUSBCFG.TOUTCAL. dwc2_core_host_init() opens by writing TOUTCAL(7)
+(drivers/usb/dwc2/hcd.c), and says why: the PHY clock count programmed
+there is added to the high/full speed interpacket timeout, to absorb the
+delay a given PHY introduces in generating the linestate condition. This
+driver left the field at 0. The reference reads GUSBCFG = 0x20001707 --
+the low three bits are TOUTCAL, and they are 7. It is written here at the
+head of DwHcInit(), which is where dwc2_core_host_init() writes it,
+immediately before PCGCTL is cleared.
+
+GUSBCFG.HNPCAP/SRPCAP. This driver cleared both unconditionally.
+dwc2_gusbcfg_init() clears them and then re-asserts whichever the core
+reports it supports, switching on GHWCFG2.OTG_MODE:
+
+  usbcfg &= ~(GUSBCFG_HNPCAP | GUSBCFG_SRPCAP);
+  switch (hsotg->hw_params.op_mode) {
+  case GHWCFG2_OP_MODE_HNP_SRP_CAPABLE:
+          if (... hnp_support && ... srp_support)
+                  usbcfg |= GUSBCFG_HNPCAP;
+          fallthrough;
+  case GHWCFG2_OP_MODE_SRP_ONLY_CAPABLE:
+  case GHWCFG2_OP_MODE_SRP_CAPABLE_DEVICE:
+  case GHWCFG2_OP_MODE_SRP_CAPABLE_HOST:
+          if (... srp_support)
+                  usbcfg |= GUSBCFG_SRPCAP;
+          break;
+  }
+
+On this core GHWCFG2 reads 0x228ddd50, so OTG_MODE is 0 -- HNP and SRP
+capable -- and the reference has both bits set. The kernel's
+otg_caps.hnp_support and otg_caps.srp_support both read 1 there, so both
+are taken as wanted here. The GHWCFG2 OTG_MODE encodings are added to
+DwcHw.h, mirroring hw.h.
+
+The host RX FIFO depth was 242 words short. dwc2_set_bcm_params() sets
+host_rx_fifo_size = 774 for every brcm,bcm2835-usb core; this driver
+computed (516 + DWC2_MAX_CHANNELS) = 532. GNPTXFSIZ and HPTXFSIZ derive
+their start addresses from it, so all three FIFO registers were off. With
+774 they read 0x00000306, 0x01000306 and 0x02000406, which is what the
+reference reads.
+
+GAHBCFG was checked and deliberately not changed. This driver writes 0x30
+and the reference reads 0x31; the difference is bit 0, GLBL_INTR_EN, which
+must stay clear because nothing here services an interrupt -- this driver
+polls. HBSTLEN (INCR16) and DMA_EN already agree.
+
+Reference values, measured on a Raspberry Pi 5 Model B running Raspberry
+Pi OS 6.18.34+rpt-rpi-2712 on VideoCore firmware timestamp 1779807685,
+with "dtoverlay=dwc2,dr_mode=host", where the core enumerates a
+high-speed device on the USB-C port:
+
+  GUSBCFG = 0x20001707   GAHBCFG = 0x00000031
+  GRSTCTL = 0x80000000   HPRT0   = 0x00001005
+  GSNPSID = 0x4f54280a   GHWCFG2 = 0x228ddd50
+
+Upstream-Status: Submittable [with an RPi5 platform port]
+Signed-off-by: appkins <nbatkins@gmail.com>
+---
+diff -urN a/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwcHw.h b/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwcHw.h
+--- a/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwcHw.h
++++ b/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwcHw.h
+@@ -387,6 +387,13 @@
+ #define DWC2_HWCFG1_EP_DIR15_OFFSET                     30
+ #define DWC2_HWCFG2_OP_MODE_MASK                        (0x7 << 0)
+ #define DWC2_HWCFG2_OP_MODE_OFFSET                      0
++#define DWC2_HWCFG2_OP_MODE_HNP_SRP_CAPABLE             0
++#define DWC2_HWCFG2_OP_MODE_SRP_ONLY_CAPABLE            1
++#define DWC2_HWCFG2_OP_MODE_NO_HNP_SRP_CAPABLE          2
++#define DWC2_HWCFG2_OP_MODE_SRP_CAPABLE_DEVICE          3
++#define DWC2_HWCFG2_OP_MODE_NO_SRP_CAPABLE_DEVICE       4
++#define DWC2_HWCFG2_OP_MODE_SRP_CAPABLE_HOST            5
++#define DWC2_HWCFG2_OP_MODE_NO_SRP_CAPABLE_HOST         6
+ #define DWC2_HWCFG2_ARCHITECTURE_SLAVE_ONLY             (0x0 << 3)
+ #define DWC2_HWCFG2_ARCHITECTURE_EXT_DMA                (0x1 << 3)
+ #define DWC2_HWCFG2_ARCHITECTURE_INT_DMA                (0x2 << 3)
+@@ -746,7 +753,15 @@
+ 
+ #define DWC2_DMA_BURST_SIZE              32      /* DMA burst len */
+ #define DWC2_MAX_CHANNELS                16      /* Max # of EPs */
+-#define DWC2_HOST_RX_FIFO_SIZE           (516 + DWC2_MAX_CHANNELS)
++//
++// Host RX FIFO depth, in 32-bit words. dwc2_set_bcm_params() sets
++// host_rx_fifo_size = 774 for every brcm,bcm2835-usb core, which is all of
++// them on this family; the computed (516 + channels) = 532 here was 242
++// words short of that. GNPTXFSIZ and HPTXFSIZ take their start addresses
++// from this value, so the three FIFO registers land on the reference's
++// 0x00000306 / 0x01000306 / 0x02000406 once it is right.
++//
++#define DWC2_HOST_RX_FIFO_SIZE           774
+ #define DWC2_HOST_NPERIO_TX_FIFO_SIZE    0x100   /* nPeriodic TX FIFO */
+ #define DWC2_HOST_PERIO_TX_FIFO_SIZE     0x200   /* Periodic TX FIFO */
+ #define DWC2_MAX_TRANSFER_SIZE           65535
+diff -urN a/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.c b/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.c
+--- a/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.c
++++ b/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.c
+@@ -1393,6 +1393,14 @@
+   UINT32 Hprt0 = 0;
+   INT32  i, Status, NumChannels;
+ 
++  //
++  // HS/FS timeout calibration, maximum value. dwc2_core_host_init() opens
++  // with the same write, for the same reason: the number of PHY clocks
++  // programmed here is added to the interpacket timeout to absorb the
++  // delay a given PHY introduces in generating the linestate condition.
++  //
++  MmioOr32 (DwHc->DwUsbBase + GUSBCFG, DWC2_GUSBCFG_TOUTCAL_MASK);
++
+   MmioWrite32 (DwHc->DwUsbBase + PCGCCTL, 0);
+ 
+   InitFslspClkSel (DwHc);
+@@ -1608,7 +1616,40 @@
+   AhbCfg |= DWC2_GAHBCFG_DMAENABLE | DWC2_GAHBCFG_WAIT_AXI_WRITES;
+ 
+   MmioWrite32 (DwHc->DwUsbBase + GAHBCFG, AhbCfg);
+-  MmioAnd32 (DwHc->DwUsbBase + GUSBCFG, ~(DWC2_GUSBCFG_HNPCAP | DWC2_GUSBCFG_SRPCAP));
++
++  //
++  // HNP/SRP capability, derived from the core's own GHWCFG2.OTG_MODE the
++  // way dwc2_gusbcfg_init() does it: clear both, then re-assert whichever
++  // the core reports it can do. Both capabilities are taken as wanted,
++  // matching otg_caps.hnp_support/srp_support, which the reference kernel
++  // reports as 1 on this hardware.
++  //
++  // Clearing them unconditionally, as this driver used to, leaves GUSBCFG
++  // disagreeing with a core whose GHWCFG2 reads 0x228ddd50 -- OTG_MODE 0,
++  // HNP and SRP capable -- where the reference has both bits set.
++  //
++  UsbCfg = MmioRead32 (DwHc->DwUsbBase + GUSBCFG);
++  UsbCfg &= ~(DWC2_GUSBCFG_HNPCAP | DWC2_GUSBCFG_SRPCAP);
++
++  switch ((MmioRead32 (DwHc->DwUsbBase + GHWCFG2) & DWC2_HWCFG2_OP_MODE_MASK) >>
++          DWC2_HWCFG2_OP_MODE_OFFSET)
++  {
++    case DWC2_HWCFG2_OP_MODE_HNP_SRP_CAPABLE:
++      UsbCfg |= DWC2_GUSBCFG_HNPCAP;
++    //
++    // Fall through: an HNP-capable core is SRP-capable too.
++    //
++    case DWC2_HWCFG2_OP_MODE_SRP_ONLY_CAPABLE:
++    case DWC2_HWCFG2_OP_MODE_SRP_CAPABLE_DEVICE:
++    case DWC2_HWCFG2_OP_MODE_SRP_CAPABLE_HOST:
++      UsbCfg |= DWC2_GUSBCFG_SRPCAP;
++      break;
++
++    default:
++      break;
++  }
++
++  MmioWrite32 (DwHc->DwUsbBase + GUSBCFG, UsbCfg);
+ 
+   //
+   // Force host mode. The Pi 3 straps the OTG ID pin to host, but on the

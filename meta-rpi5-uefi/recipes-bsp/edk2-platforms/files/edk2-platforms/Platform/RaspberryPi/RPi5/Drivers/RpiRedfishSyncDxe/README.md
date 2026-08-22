@@ -37,7 +37,7 @@ performs the exchange (all fail-open — a dead BMC never blocks booting):
 | 2 | `PATCH /redfish/v1/Systems/1` (identity + `BootProgress`) | SmbiosEepromMirrorDxe |
 | 2b | `POST /redfish/v1/Systems/1/Memory` per module | — (new) |
 | 2c | `POST /redfish/v1/Systems/1/Storage/1/Drives` per drive | BlkInfoMirrorDxe |
-| 2d | `PATCH`+`GET /redfish/v1/Chassis/1/Thermal` (thermal telemetry + fan steering, then every 10 s) | — (new) |
+| 2d | `PATCH`+`GET /redfish/v1/Chassis/1/Thermal` (thermal telemetry + fan steering, once per boot) | — (new) |
 | 3 | `GET /redfish/v1/Systems/1` → apply one-time boot override | EEPROM BootNext/BootOrder writes |
 
 The override is acknowledged (`BootSourceOverrideEnabled: "Disabled"`)
@@ -58,17 +58,24 @@ and reads the resource back for steering: an integer
 `Oem.PiBmc.FanOverrideLevel` (0..4) in the BMC's representation pins the
 fan to that level through `RPI_FAN_PROTOCOL` (ActiveCoolerDxe); removing
 the property (or any non-integer value) releases it back to the FanPolicy
-variable / automatic loop. Both legs repeat every 10 s for as long as the
-firmware phase lasts (BDS wait, Setup, the shell) and stop themselves the
-first time both fail. Fail-open: a BMC without the Chassis handler just
-404s and the host keeps regulating its own fan.
+variable / automatic loop.
+
+Both legs run **once**, as part of the host-interface exchange. There is no
+periodic refresh: the exchange is synchronous HTTP, and a timer driving it
+would have to run at TPL_CALLBACK, where a blocking request starves BDS at
+TPL_APPLICATION -- a 10 s cadence measurably stalled the boot. The BMC gets
+one reading and one chance to steer per boot; anything finer belongs to the
+OS, which owns the thermal loop from ExitBootServices onwards.
+
+Fail-open: a BMC without the Chassis handler just 404s and the host keeps
+regulating its own fan.
 
 ## BIOS attributes
 
 Every configurable Setup question on the platform is exposed at
 `/redfish/v1/Systems/1/Bios`, with allowable values, defaults and menu
 paths in the BiosAttributeRegistry. The mechanism is one `*Map.uni` file
-per formset: a `#string` in the `x-UEFI-redfish-Bios.v1_0_9` language whose
+per formset: a `#string` in the `x-UEFI-redfish-Bios.v1_1_0` language whose
 value is the attribute's schema path. `RedfishPlatformConfigDxe` harvests
 those from the HII database and the Bios feature driver publishes them.
 A question with no such string is invisible to Redfish — there is no

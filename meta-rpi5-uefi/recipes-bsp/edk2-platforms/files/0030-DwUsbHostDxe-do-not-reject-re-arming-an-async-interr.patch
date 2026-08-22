@@ -1,0 +1,92 @@
+From: appkins <nbatkins@gmail.com>
+Date: Fri, 22 Aug 2026 13:00:00 -0500
+Subject: [PATCH] DwUsbHostDxe: do not reject re-arming an async interrupt
+ endpoint
+
+A CDC-NCM gadget produced no NIC on the Pi 5's USB-C port while the same
+gadget produced one on the RP1 xHCI ports, even though its HID and mass
+storage functions bound correctly over DWC2. Instrumenting the bind chain
+put the failure at the last step:
+
+  NCMDIAG: MacAddress=Success DA:C0:FF:EE:10:02
+  NCMDIAG: MaxBulkSize=Success size=65535
+  NCMDIAG: AsyncInterrupt=Invalid Parameter interval=16
+  ASSERT [NetworkCommon] DriverBinding.c(375)
+
+The polling interval is 16 ms, well inside the accepted 1..255, and the
+endpoint is a valid interrupt IN. What DwHcAsyncInterruptTransfer actually
+objected to was that the endpoint already had a deferred request:
+
+    FoundReq = DwHcFindDeferredTransfer (DwHc, DeviceAddress, EndPointAddress);
+    if (IsNewTransfer) {
+      if (FoundReq != NULL) {
+        Status = EFI_INVALID_PARAMETER;
+
+No other EDK2 host controller driver does this. EhcAsyncInterruptTransfer and
+XhcAsyncInterruptTransfer both validate DataLength, DataToggle and
+PollingInterval on the IsNewTransfer path and then create the transfer; the
+only lookup either performs is on the !IsNewTransfer path, to delete. The
+class drivers in MdeModulePkg are written against that contract.
+
+NetworkCommon relies on it. DriverBindingStart arms the CDC notification
+endpoint with IsNewTransfer = TRUE and the driver contains no cancelling
+call at all -- not in DriverBindingStop, not anywhere -- so a second Start on
+the same interface re-arms rather than re-registers. And a second Start is
+not an anomaly here, it is how UsbCdcNcm is built: UsbBusDxe creates
+interface handles in order, so when the CDC control interface (1) is
+connected the CDC data interface (2) has no handle yet, IsUsbCdcData fails,
+and Start registers a gEfiUsbIoProtocolGuid notify and returns. When the data
+interface appears the notify fires, ConnectController runs Start again, this
+time successfully, and NetworkCommon then binds and arms the endpoint a
+second time. On EHCI and XHCI that is silently fine. Here it returned an
+error, which NetworkCommon passes to ASSERT_EFI_ERROR -- fatal in DEBUG, and
+in RELEASE a NIC left with a notification endpoint that was never armed.
+
+HID and mass storage never re-register, which is why they were unaffected on
+the same port and the same device.
+
+Retire the stale request and honour the new one, matching EHCI and XHCI.
+
+Upstream-Status: Pending
+Signed-off-by: appkins <nbatkins@gmail.com>
+---
+--- a/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.c
++++ b/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.c
+@@ -1142,8 +1142,35 @@
+ 
+   if (IsNewTransfer) {
+     if (FoundReq != NULL) {
+-      Status = EFI_INVALID_PARAMETER;
+-      goto Done;
++      //
++      // Re-registering an endpoint that already has a deferred request is
++      // not an error. Neither EhcAsyncInterruptTransfer nor
++      // XhcAsyncInterruptTransfer has any duplicate test on the
++      // IsNewTransfer path -- they validate DataLength, DataToggle and
++      // PollingInterval and then create the transfer -- and the class
++      // drivers in MdeModulePkg are written against that behaviour.
++      //
++      // NetworkCommon is the case that matters here: DriverBindingStart
++      // arms the CDC notification endpoint with IsNewTransfer = TRUE and
++      // there is no matching cancel anywhere in the driver, not even in
++      // DriverBindingStop. UsbCdcNcm's Start runs more than once by design
++      // -- the first pass cannot pair the CDC control interface with its
++      // data interface, because UsbBusDxe connects interfaces in order and
++      // the data interface has no handle yet, so it registers a protocol
++      // notify and retries -- so the second pass arrives here and was
++      // rejected. That is why a CDC-NCM gadget produced a NIC on the RP1
++      // xHCI ports and none on the BCM2712 DWC2 port, while HID and mass
++      // storage, which never re-register, worked on both.
++      //
++      // Retire the stale request and honour the new one.
++      //
++      DEBUG ((DEBUG_INFO,
++        "%a: replacing deferred request for device %d endpoint 0x%02x\n",
++        __func__, DeviceAddress, EndPointAddress));
++      RemoveEntryList (&FoundReq->List);
++      FreePool (FoundReq->Data);
++      FreePool (FoundReq);
++      FoundReq = NULL;
+     }
+ 
+     if (DataLength == 0) {

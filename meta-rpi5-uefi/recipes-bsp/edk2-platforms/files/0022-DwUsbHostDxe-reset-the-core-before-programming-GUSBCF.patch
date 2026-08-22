@@ -1,0 +1,112 @@
+From: appkins <nbatkins@gmail.com>
+Subject: [PATCH] DwUsbHostDxe: reset the core before programming GUSBCFG
+
+On the BCM2712 core behind the Pi 5 USB-C port, the first core soft reset
+completes -- GRSTCTL.CSFTRST clears -- and then GRSTCTL.AHBIDLE never
+asserts. The driver spends its whole reset deadline on that bit and
+declines the controller, so no EFI_USB2_HC_PROTOCOL is published and
+nothing on the port can enumerate:
+
+  DwUsbHostDxe: DWC2 core at 0x1000480000, GSNPSID 0x4F54280A
+  DwCoreReset: AHBIDLE Timeout!
+  DwCoreReset failed
+  DwCoreInit failed
+  DwUsbHostDxe: controller reset failed: Time out
+
+The core is demonstrably alive and powered: GSNPSID reads back a valid
+Synopsys ID (rev 2.80a) and the soft reset itself retires, neither of
+which happens on an unpowered block. The VideoCore firmware is newer than
+the rpi-eeprom release that brings the DWC PHY up, and the device tree
+node is enabled -- so the usual suspects are all excluded.
+
+What remains is the order of the first two register operations.
+dwc2_driver_probe() in Linux runs dwc2_check_core_version(), then
+dwc2_core_reset(), then dwc2_get_hwparams(), and its comment states the
+reason: "Reset before dwc2_get_hwparams() then it could get power-on real
+reset value form registers." GUSBCFG is untouched when that reset runs.
+
+This driver descends from u-boot's dwc_otg_core_init(), which instead sets
+GUSBCFG.ULPI_EXT_VBUS_DRV and clears GUSBCFG.TERM_SEL_DL_PULSE first, and
+resets afterwards. ULPI_EXT_VBUS_DRV configures a ULPI interface; the
+BCM2712 core has a UTMI+ PHY (usb@480000 carries phys = <&usbphy>, a
+usb-nop-xceiv), so the bit describes hardware that is not there -- and it
+is written over whatever state the boot ROM left, because rpiboot drives
+this same core as a gadget before EDK2 runs.
+
+Do what Linux does: reset first, then read GUSBCFG back at its power-on
+value and program it. The PHY interface selection still needs a reset to
+take effect, so that second reset stays; the count is unchanged at two,
+the first has just moved ahead of the first write.
+
+The two DwCoreReset() failure messages are renamed to say which one
+failed, since "DwCoreReset failed" and "DwCoreReset 2 failed" no longer
+describe their positions.
+
+Upstream-Status: Submittable [with an RPi5 platform port]
+Signed-off-by: appkins <nbatkins@gmail.com>
+---
+diff -urN a/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.c b/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.c
+--- a/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.c
++++ b/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.c
+@@ -1520,28 +1520,52 @@
+     return EFI_DEVICE_ERROR;
+   }
+ 
+-  UsbCfg = MmioRead32 (DwHc->DwUsbBase + GUSBCFG);
+-
+-  UsbCfg |= DWC2_GUSBCFG_ULPI_EXT_VBUS_DRV;
+-  UsbCfg &= ~DWC2_GUSBCFG_TERM_SEL_DL_PULSE;
+-
+-  MmioWrite32 (DwHc->DwUsbBase + GUSBCFG, UsbCfg);
+-
++  //
++  // Reset the core before programming GUSBCFG, not after.
++  //
++  // Linux goes dwc2_check_core_version() -> dwc2_core_reset() ->
++  // dwc2_get_hwparams(), and says why the reset comes first: "Reset before
++  // dwc2_get_hwparams() then it could get power-on real reset value form
++  // registers." Nothing has written GUSBCFG at that point.
++  //
++  // This driver inherited u-boot's order instead, which sets
++  // GUSBCFG.ULPI_EXT_VBUS_DRV -- a ULPI-interface bit -- and only then
++  // resets. The BCM2712 core behind the USB-C port has a UTMI+ PHY
++  // (usb@480000 carries phys = <&usbphy>, a usb-nop-xceiv), so those ULPI
++  // bits describe an interface that is not present, and they are written
++  // over whatever state the boot ROM's rpiboot gadget left in the core.
++  // The reset that follows never reports GRSTCTL.AHBIDLE on this part, and
++  // the driver spends its entire deadline on a bit that does not move.
++  //
++  // Resetting first costs nothing on the boards where the old order worked:
++  // a core leaving soft reset has GUSBCFG at its power-on value, which is
++  // precisely what the writes below then modify.
++  //
+   Status = DwCoreReset (DwHc, Timeout);
+   if (Status != EFI_SUCCESS) {
+-    DEBUG ((DEBUG_ERROR, "DwCoreReset failed\n"));
++    DEBUG ((DEBUG_ERROR, "DwCoreReset (initial) failed\n"));
+     return Status;
+   }
+ 
++  UsbCfg = MmioRead32 (DwHc->DwUsbBase + GUSBCFG);
++
++  UsbCfg |= DWC2_GUSBCFG_ULPI_EXT_VBUS_DRV;
++  UsbCfg &= ~DWC2_GUSBCFG_TERM_SEL_DL_PULSE;
++
+   UsbCfg &= ~(DWC2_GUSBCFG_ULPI_UTMI_SEL | DWC2_GUSBCFG_PHYIF);
+   UsbCfg |= CONFIG_DWC2_PHY_TYPE << DWC2_GUSBCFG_ULPI_UTMI_SEL_OFFSET;
+   UsbCfg &= ~DWC2_GUSBCFG_DDRSEL;
+ 
+   MmioWrite32 (DwHc->DwUsbBase + GUSBCFG, UsbCfg);
+ 
++  //
++  // The PHY interface selection only takes effect across a reset, so the
++  // second one stays where it was. Two resets in total, as before -- the
++  // first has simply moved ahead of the first register write.
++  //
+   Status = DwCoreReset (DwHc, Timeout);
+   if (Status != EFI_SUCCESS) {
+-    DEBUG ((DEBUG_ERROR, "DwCoreReset 2 failed\n"));
++    DEBUG ((DEBUG_ERROR, "DwCoreReset (after PHY select) failed\n"));
+     return Status;
+   }
+ 

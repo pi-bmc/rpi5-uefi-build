@@ -150,7 +150,23 @@ SRC_URI = "git://github.com/tianocore/edk2-platforms.git;protocol=https;branch=m
            file://0018-RPi5-enable-FMP-capsule-processing.patch \
            file://0019-RaspberryPi-declare-the-Secure-Boot-toggle-formset-GU.patch \
            file://0020-FdtDxe-pick-the-OS-devicetree-by-board-revision.patch \
+           file://0022-DwUsbHostDxe-reset-the-core-before-programming-GUSBCF.patch \
+           file://0023-DwUsbHostDxe-select-UTMI-not-ULPI.patch \
+           file://0024-DwUsbHostDxe-match-the-reference-kernel-GUSBCFG.patch \
+           file://0026-DwUsbHostDxe-stop-truncating-addresses-in-Wait4Bit.patch \
+           file://0028-RpiFirmwareDxe-power-state-reply-is-advisory.patch \
+           file://0029-DwUsbHostDxe-report-the-real-port-speed.patch \
+           file://0030-DwUsbHostDxe-do-not-reject-re-arming-an-async-interr.patch \
+           file://0031-DwUsbHostDxe-bound-the-deferred-transfer-timeout.patch \
+           file://0032-DwUsbHostDxe-optimize-the-transfer-hot-path.patch \
            "
+
+# Diagnostics, DEBUG builds only. 0033 counts transfers, halt reasons and
+# time spent inside DwUsbHostDxe, and reports a line every five seconds. The
+# accounting itself is cheap, but it reads the performance counter twice per
+# transfer on a path that runs at TPL_NOTIFY, and a production image has no
+# reader for the numbers. It applies on top of 0032 and must stay last.
+SRC_URI += "${@bb.utils.contains('RPI5_BUILD_TARGET', 'DEBUG', 'file://0033-DIAG-DwUsbHostDxe-account-for-time-spent-in-the-driv.patch', '', d)}"
 
 # Upstream master, 2026-08-21. Moved here from the retired NumberOneGit fork's
 # merge-base (80ee8b861, 2024-03-13) when the edk2 recipe took

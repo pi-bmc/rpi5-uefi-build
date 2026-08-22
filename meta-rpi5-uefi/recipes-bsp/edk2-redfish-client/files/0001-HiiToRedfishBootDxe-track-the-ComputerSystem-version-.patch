@@ -1,0 +1,89 @@
+From: appkins <nbatkins@gmail.com>
+Date: Sat, 22 Aug 2026 20:10:00 -0500
+Subject: [PATCH] HiiToRedfishBootDxe: track the ComputerSystem version this
+ platform builds
+
+A feature driver compiles its schema version in as RESOURCE_SCHEMA_FULL
+and looks up HII questions by that exact configure-language string.
+RPi5 builds Features/ComputerSystem/v1_13_0, whose ComputerSystemCommon.h
+declares:
+
+  #define RESOURCE_SCHEMA_FULL  "x-UEFI-redfish-ComputerSystem.v1_13_0"
+
+HiiToRedfishBootDxe still publishes its questions in
+x-UEFI-redfish-ComputerSystem.v1_5_0, so nothing the feature driver asks
+for matches. The failure is silent in the sense that matters: every
+lookup returns EFI_NOT_FOUND individually, and the log fills with
+per-property misses that read like an incomplete BMC rather than a
+version skew inside the firmware.
+
+That costs the platform its boot order. HiiToRedfishBootDxe is the only
+backing for ComputerSystem's Boot/BootOrder array -- it builds an ordered
+list from EfiBootManagerGetLoadOptions(), tags each entry Boot%04x, and
+rewrites the real BootOrder variable on submit. ComputerSystemDxe
+resolves every Boot/* property by configure-language lookup alone, so
+with the tags mismatched the BMC can still enumerate boot options
+through BootOptionCollectionDxe, which reads the boot manager directly,
+but cannot reorder them persistently. BootSourceOverride{Enabled,Mode,
+Target} go the same way.
+
+Retag the map and the header constant together; they have to agree, and
+the header is what the driver compares against at runtime.
+
+This tracks the version RPi5.fdf builds. A platform on the v1_5_0
+feature driver wants this patch dropped rather than adjusted -- the two
+have to move as a pair.
+
+Signed-off-by: appkins <nbatkins@gmail.com>
+---
+--- a/RedfishClientPkg/HiiToRedfishBootDxe/HiiToRedfishBootDxe.h
++++ b/RedfishClientPkg/HiiToRedfishBootDxe/HiiToRedfishBootDxe.h
+@@ -36,7 +36,7 @@
+ 
+ extern UINT8  HiiToRedfishBootVfrBin[];
+ 
+-#define COMPUTER_SYSTEM_SCHEMA_VERSION  "x-UEFI-redfish-ComputerSystem.v1_5_0"
++#define COMPUTER_SYSTEM_SCHEMA_VERSION  "x-UEFI-redfish-ComputerSystem.v1_13_0"
+ #define COMPUTER_SYSTEM_BOOT_BOOTORDER  L"/Systems/{1}/Boot/BootOrder"
+ 
+ #pragma pack(1)
+--- a/RedfishClientPkg/HiiToRedfishBootDxe/HiiToRedfishBootDxeMap.uni
++++ b/RedfishClientPkg/HiiToRedfishBootDxe/HiiToRedfishBootDxeMap.uni
+@@ -9,21 +9,21 @@
+ **/
+ 
+ /=#
+-#langdef   x-UEFI-redfish-ComputerSystem.v1_5_0 "ComputerSystem.v1_5_0"
++#langdef   x-UEFI-redfish-ComputerSystem.v1_13_0 "ComputerSystem.v1_13_0"
+ 
+-#string STR_BOOT_SOURCE_OVERRIDE_ENABLED       #language x-UEFI-redfish-ComputerSystem.v1_5_0   "/Systems/{1}/Boot/BootSourceOverrideEnabled"
+-#string STR_BOOT_SOURCE_OVERRIDE_MODE          #language x-UEFI-redfish-ComputerSystem.v1_5_0   "/Systems/{1}/Boot/BootSourceOverrideMode"
+-#string STR_BOOT_SOURCE_OVERRIDE_TARGET        #language x-UEFI-redfish-ComputerSystem.v1_5_0   "/Systems/{1}/Boot/BootSourceOverrideTarget"
++#string STR_BOOT_SOURCE_OVERRIDE_ENABLED       #language x-UEFI-redfish-ComputerSystem.v1_13_0   "/Systems/{1}/Boot/BootSourceOverrideEnabled"
++#string STR_BOOT_SOURCE_OVERRIDE_MODE          #language x-UEFI-redfish-ComputerSystem.v1_13_0   "/Systems/{1}/Boot/BootSourceOverrideMode"
++#string STR_BOOT_SOURCE_OVERRIDE_TARGET        #language x-UEFI-redfish-ComputerSystem.v1_13_0   "/Systems/{1}/Boot/BootSourceOverrideTarget"
+ 
+-#string STR_DISABLED                           #language x-UEFI-redfish-ComputerSystem.v1_5_0   "Disabled"
+-#string STR_ONCE                               #language x-UEFI-redfish-ComputerSystem.v1_5_0   "Once"
+-#string STR_CONTINUOUS                         #language x-UEFI-redfish-ComputerSystem.v1_5_0   "Continuous"
+-#string STR_UEFI                               #language x-UEFI-redfish-ComputerSystem.v1_5_0   "UEFI"
+-#string STR_LEGACY                             #language x-UEFI-redfish-ComputerSystem.v1_5_0   "Legacy"
+-#string STR_TARGET_NONE                        #language x-UEFI-redfish-ComputerSystem.v1_5_0   "None"
+-#string STR_TARGET_PXE                         #language x-UEFI-redfish-ComputerSystem.v1_5_0   "Pxe"
+-#string STR_TARGET_USB                         #language x-UEFI-redfish-ComputerSystem.v1_5_0   "Usb"
+-#string STR_TARGET_HDD                         #language x-UEFI-redfish-ComputerSystem.v1_5_0   "Hdd"
+-#string STR_TARGET_BIOS_SETUP                  #language x-UEFI-redfish-ComputerSystem.v1_5_0   "BiosSetup"
+-#string STR_TARGET_UEFI                        #language x-UEFI-redfish-ComputerSystem.v1_5_0   "UefiTarget"
+-#string STR_TARGET_UEFI_HTTP                   #language x-UEFI-redfish-ComputerSystem.v1_5_0   "UefiHttp"
++#string STR_DISABLED                           #language x-UEFI-redfish-ComputerSystem.v1_13_0   "Disabled"
++#string STR_ONCE                               #language x-UEFI-redfish-ComputerSystem.v1_13_0   "Once"
++#string STR_CONTINUOUS                         #language x-UEFI-redfish-ComputerSystem.v1_13_0   "Continuous"
++#string STR_UEFI                               #language x-UEFI-redfish-ComputerSystem.v1_13_0   "UEFI"
++#string STR_LEGACY                             #language x-UEFI-redfish-ComputerSystem.v1_13_0   "Legacy"
++#string STR_TARGET_NONE                        #language x-UEFI-redfish-ComputerSystem.v1_13_0   "None"
++#string STR_TARGET_PXE                         #language x-UEFI-redfish-ComputerSystem.v1_13_0   "Pxe"
++#string STR_TARGET_USB                         #language x-UEFI-redfish-ComputerSystem.v1_13_0   "Usb"
++#string STR_TARGET_HDD                         #language x-UEFI-redfish-ComputerSystem.v1_13_0   "Hdd"
++#string STR_TARGET_BIOS_SETUP                  #language x-UEFI-redfish-ComputerSystem.v1_13_0   "BiosSetup"
++#string STR_TARGET_UEFI                        #language x-UEFI-redfish-ComputerSystem.v1_13_0   "UefiTarget"
++#string STR_TARGET_UEFI_HTTP                   #language x-UEFI-redfish-ComputerSystem.v1_13_0   "UefiHttp"

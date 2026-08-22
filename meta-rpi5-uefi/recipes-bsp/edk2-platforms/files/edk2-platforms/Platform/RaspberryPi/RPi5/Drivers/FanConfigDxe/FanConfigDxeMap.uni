@@ -3,9 +3,9 @@
  *  x-UEFI-redfish configure-language map for the Active Cooler formset.
  *
  *  RedfishPlatformConfigDxe harvests these strings from the HII database:
- *  each question prompt labeled in the x-UEFI-redfish-Bios.v1_0_9 language
+ *  each question prompt labeled in the x-UEFI-redfish-Bios.v1_1_0 language
  *  becomes a BIOS attribute at /redfish/v1/Systems/1/Bios (published by
- *  the edk2-redfish-client Bios v1_0_9 feature driver, with allowable
+ *  the edk2-redfish-client Bios v1_1_0 feature driver, with allowable
  *  values in the BiosAttributeRegistry), named by the last segment of the
  *  configure-language path. Option strings in the same language are the
  *  enum value names the BMC reads and writes for oneof questions - kept
@@ -23,21 +23,21 @@
  **/
 
 /=#
-#langdef   x-UEFI-redfish-Bios.v1_0_9 "Bios.v1_0_9"
+#langdef   x-UEFI-redfish-Bios.v1_1_0 "Bios.v1_1_0"
 
-#string STR_MODE_PROMPT          #language x-UEFI-redfish-Bios.v1_0_9   "/Bios/Attributes/FanMode"
-#string STR_LEVEL_PROMPT         #language x-UEFI-redfish-Bios.v1_0_9   "/Bios/Attributes/FanFixedLevel"
-#string STR_TRIP1_PROMPT         #language x-UEFI-redfish-Bios.v1_0_9   "/Bios/Attributes/FanTrip1C"
-#string STR_TRIP2_PROMPT         #language x-UEFI-redfish-Bios.v1_0_9   "/Bios/Attributes/FanTrip2C"
-#string STR_TRIP3_PROMPT         #language x-UEFI-redfish-Bios.v1_0_9   "/Bios/Attributes/FanTrip3C"
-#string STR_TRIP4_PROMPT         #language x-UEFI-redfish-Bios.v1_0_9   "/Bios/Attributes/FanTrip4C"
+#string STR_MODE_PROMPT          #language x-UEFI-redfish-Bios.v1_1_0   "/Bios/Attributes/FanMode"
+#string STR_LEVEL_PROMPT         #language x-UEFI-redfish-Bios.v1_1_0   "/Bios/Attributes/FanFixedLevel"
+#string STR_TRIP1_PROMPT         #language x-UEFI-redfish-Bios.v1_1_0   "/Bios/Attributes/FanTrip1C"
+#string STR_TRIP2_PROMPT         #language x-UEFI-redfish-Bios.v1_1_0   "/Bios/Attributes/FanTrip2C"
+#string STR_TRIP3_PROMPT         #language x-UEFI-redfish-Bios.v1_1_0   "/Bios/Attributes/FanTrip3C"
+#string STR_TRIP4_PROMPT         #language x-UEFI-redfish-Bios.v1_1_0   "/Bios/Attributes/FanTrip4C"
 
-#string STR_MODE_AUTO            #language x-UEFI-redfish-Bios.v1_0_9   "Automatic"
-#string STR_MODE_FIXED           #language x-UEFI-redfish-Bios.v1_0_9   "FixedSpeed"
-#string STR_MODE_CUSTOM          #language x-UEFI-redfish-Bios.v1_0_9   "CustomTripPoints"
+#string STR_MODE_AUTO            #language x-UEFI-redfish-Bios.v1_1_0   "Automatic"
+#string STR_MODE_FIXED           #language x-UEFI-redfish-Bios.v1_1_0   "FixedSpeed"
+#string STR_MODE_CUSTOM          #language x-UEFI-redfish-Bios.v1_1_0   "CustomTripPoints"
 
-#string STR_LEVEL_0              #language x-UEFI-redfish-Bios.v1_0_9   "Level0"
-#string STR_LEVEL_1              #language x-UEFI-redfish-Bios.v1_0_9   "Level1"
-#string STR_LEVEL_2              #language x-UEFI-redfish-Bios.v1_0_9   "Level2"
-#string STR_LEVEL_3              #language x-UEFI-redfish-Bios.v1_0_9   "Level3"
-#string STR_LEVEL_4              #language x-UEFI-redfish-Bios.v1_0_9   "Level4"
+#string STR_LEVEL_0              #language x-UEFI-redfish-Bios.v1_1_0   "Level0"
+#string STR_LEVEL_1              #language x-UEFI-redfish-Bios.v1_1_0   "Level1"
+#string STR_LEVEL_2              #language x-UEFI-redfish-Bios.v1_1_0   "Level2"
+#string STR_LEVEL_3              #language x-UEFI-redfish-Bios.v1_1_0   "Level3"
+#string STR_LEVEL_4              #language x-UEFI-redfish-Bios.v1_1_0   "Level4"

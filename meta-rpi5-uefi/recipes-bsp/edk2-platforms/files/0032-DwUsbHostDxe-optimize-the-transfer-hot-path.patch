@@ -1,0 +1,217 @@
+From: appkins <nbatkins@gmail.com>
+Date: Sat, 22 Aug 2026 17:30:00 -0500
+Subject: [PATCH] DwUsbHostDxe: optimize the transfer hot path
+
+Three costs sat on the path every USB transaction takes, and all three
+are paid at TPL_NOTIFY, where nothing else on the system can run.
+
+Wait4Chhltd opened with MicroSecondDelay (100) before waiting for the
+channel to halt, and ran another after the wait before reading HCINT.
+Neither is necessary. HCINT is written by the same hardware event that
+raises CHHLTD, so the bits are already valid once Wait4Bit returns. The
+reference driver does not delay on either side: u-boot's
+wait_for_chhltd calls wait_for_bit_le32 on CHHLTD and reads HCINT
+immediately after, and the only udelay/mdelay calls in that driver are
+in core reset and port power. 200 us on every transaction is a fifth of
+each tick on an endpoint polled once a millisecond by the periodic
+handler, spent in a busy wait that nothing below TPL_NOTIFY can
+interrupt.
+
+Wait4Bit called gBS->CheckEvent once per register read. CheckEvent is a
+boot service that raises to TPL_HIGH_LEVEL, walks the event and
+restores; it costs far more than the MmioRead32 it was guarding, so the
+deadline rather than the hardware set the pace of the loop. Check it
+once every DWC2_POLLS_PER_TIMEOUT_CHECK reads instead. A millisecond
+timeout is still noticed within microseconds of expiry, and the loop now
+converges at the speed the controller can actually answer.
+
+DwHcDeferredTransfer created a timeout event, armed it, and closed it on
+every call -- a pool allocation, an event list insertion and a matching
+teardown, a thousand times a second for each armed endpoint. Deferred
+transfers only ever run from DwHcPeriodicHandler at TPL_NOTIFY, one at a
+time, and nothing below TPL_NOTIFY can preempt them, so they cannot
+overlap and one event per controller suffices. Create it in
+CreateDwUsbHc, re-arm it per tick, close it in DestroyDwUsbHc.
+
+That last change needs care that the old code got for free by throwing
+the event away each time. TimerForTransfer is TimerRelative, so a
+transfer that finishes early leaves the timer armed; if it then fires,
+the event carries a signal into the next tick and the first Wait4Bit
+there reports a timeout immediately, cutting a healthy transfer short.
+Cancel the timer and drain the event on the way out.
+
+No functional change is intended beyond the timing.
+
+Signed-off-by: appkins <nbatkins@gmail.com>
+---
+--- a/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.c
++++ b/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.c
+@@ -47,6 +47,12 @@
+ #define TimerForTransfer TimerRelative
+ 
+ /*
++ * How many register reads Wait4Bit performs between consulting its timeout
++ * event. See the comment there.
++ */
++#define DWC2_POLLS_PER_TIMEOUT_CHECK  64
++
++/*
+  * https://www.quicklogic.com/assets/pdf/data-sheets/QL-Hi-Speed-USB-2.0-OTG-Controller-Data-Sheet.pdf
+  */
+ 
+@@ -87,8 +93,9 @@
+   )
+ {
+   UINT32 Value;
++  UINTN  PollsLeft = DWC2_POLLS_PER_TIMEOUT_CHECK;
+ 
+-  do {
++  for (;;) {
+     Value = MmioRead32 (Reg);
+     if (!Set) {
+       Value = ~Value;
+@@ -97,9 +104,23 @@
+     if ((Value & Mask) == Mask) {
+       return EFI_SUCCESS;
+     }
+-  } while (EFI_ERROR (gBS->CheckEvent (Timeout)));
+ 
+-  return EFI_TIMEOUT;
++    /*
++     * gBS->CheckEvent is a boot service: it raises to TPL_HIGH_LEVEL, walks
++     * the event and restores, which costs far more than the single register
++     * read it is guarding. Consulting it after every read let the deadline
++     * rather than the hardware set the pace of this loop, on a path that
++     * runs for every USB transaction the controller performs. Checking once
++     * per DWC2_POLLS_PER_TIMEOUT_CHECK reads still notices a millisecond
++     * timeout within microseconds of its expiry.
++     */
++    if (--PollsLeft == 0) {
++      PollsLeft = DWC2_POLLS_PER_TIMEOUT_CHECK;
++      if (!EFI_ERROR (gBS->CheckEvent (Timeout))) {
++        return EFI_TIMEOUT;
++      }
++    }
++  }
+ }
+ 
+ CHANNEL_HALT_REASON
+@@ -117,14 +138,26 @@
+   UINT32  Hcint, Hctsiz;
+   UINT32  HcintCompHltAck = DWC2_HCINT_XFERCOMP;
+ 
+-  MicroSecondDelay (100);
++  /*
++   * There were two unconditional MicroSecondDelay (100) calls here, one
++   * before waiting for the channel to halt and one before reading the
++   * interrupt status afterwards. Neither is needed: HCINT is written by
++   * the same hardware event that raises CHHLTD, so once Wait4Bit has seen
++   * CHHLTD the remaining bits are already valid. The reference driver
++   * agrees -- u-boot's wait_for_chhltd waits on CHHLTD and reads HCINT
++   * straight after, with no delay on either side.
++   *
++   * They were not free. 200 us went by on every transaction the controller
++   * ran, which on an endpoint polled once a millisecond from the
++   * TPL_NOTIFY periodic handler is a fifth of every tick spent in a busy
++   * wait that nothing below TPL_NOTIFY can interrupt.
++   */
+   Status = Wait4Bit (Timeout, DwHc->DwUsbBase + HCINT (Channel),
+                      DWC2_HCINT_CHHLTD, 1);
+   if (EFI_ERROR (Status)) {
+     return XFER_NOT_HALTED;
+   }
+ 
+-  MicroSecondDelay (100);
+   Hcint = MmioRead32 (DwHc->DwUsbBase + HCINT (Channel));
+ 
+   ASSERT ((Hcint & DWC2_HCINT_CHHLTD) != 0);
+@@ -468,19 +501,21 @@
+   )
+ {
+   EFI_STATUS Status;
+-  EFI_EVENT TimeoutEvt = NULL;
+-
+-  Status = gBS->CreateEvent (EVT_TIMER, 0, NULL, NULL, &TimeoutEvt);
+-  ASSERT_EFI_ERROR (Status);
+-  if (EFI_ERROR (Status)) {
+-    goto Exit;
+-  }
++  EFI_EVENT  TimeoutEvt = Req->DwHc->DeferredTimeoutEvent;
+ 
++  /*
++   * This runs from DwHcPeriodicHandler at TPL_NOTIFY, once a millisecond
++   * for every armed endpoint, and nothing below TPL_NOTIFY can preempt it
++   * -- so a single timeout event per controller can be re-armed here
++   * rather than one being created and destroyed on every tick. The pool
++   * allocation, event list insertion and matching teardown that cost paid
++   * for were happening a thousand times a second per endpoint.
++   */
+   Status = gBS->SetTimer (TimeoutEvt, TimerForTransfer,
+                   EFI_TIMER_PERIOD_MILLISECONDS (Req->TimeOut));
+   ASSERT_EFI_ERROR (Status);
+   if (EFI_ERROR (Status)) {
+-    goto Exit;
++    return;
+   }
+ 
+   Req->TransferResult = EFI_USB_NOERROR;
+@@ -505,9 +540,15 @@
+          Req->CallbackContext,
+          Req->TransferResult);
+ Exit:
+-  if (TimeoutEvt != NULL) {
+-    gBS->CloseEvent (TimeoutEvt);
+-  }
++  /*
++   * TimerForTransfer is TimerRelative, so a transfer that completed early
++   * leaves the timer still armed. Cancel it, then drain any signal it has
++   * already raised: this event outlives the call now, and a stale signal
++   * carried into the next tick would make the first Wait4Bit there report
++   * a timeout at once and cut a healthy transfer short.
++   */
++  gBS->SetTimer (TimeoutEvt, TimerCancel, 0);
++  gBS->CheckEvent (TimeoutEvt);
+ }
+ 
+ /**
+@@ -1783,6 +1824,10 @@
+     gBS->RestoreTPL (PreviousTpl);
+   }
+ 
++  if (DwHc->DeferredTimeoutEvent != NULL) {
++    gBS->CloseEvent (DwHc->DeferredTimeoutEvent);
++  }
++
+   if (DwHc->ExitBootServiceEvent != NULL) {
+     gBS->CloseEvent (DwHc->ExitBootServiceEvent);
+   }
+@@ -1949,6 +1994,13 @@
+     return Status;
+   }
+ 
++  Status = gBS->CreateEvent (EVT_TIMER, 0, NULL, NULL,
++                  &DwHc->DeferredTimeoutEvent);
++  if (Status != EFI_SUCCESS) {
++    DEBUG ((DEBUG_ERROR, "CreateDwUsbHc: DeferredTimeoutEvent: %r\n", Status));
++    return Status;
++  }
++
+   Status = gBS->CreateEvent (
+                   EVT_TIMER | EVT_NOTIFY_SIGNAL,
+                   TPL_NOTIFY,
+--- a/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.h
++++ b/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.h
+@@ -105,6 +105,13 @@
+ 
+   EFI_EVENT                       PeriodicEvent;
+ 
++  /*
++   * Re-armed by DwHcDeferredTransfer on every tick. One per controller is
++   * enough: deferred transfers only ever run from the TPL_NOTIFY periodic
++   * handler, one at a time, so they cannot overlap.
++   */
++  EFI_EVENT                       DeferredTimeoutEvent;
++
+   EFI_PHYSICAL_ADDRESS            DwUsbBase;
+   UINT8                           *StatusBuffer;
+ 

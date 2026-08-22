@@ -20,6 +20,6 @@
  **/
 
 /=#
-#langdef   x-UEFI-redfish-Bios.v1_0_9 "Bios.v1_0_9"
+#langdef   x-UEFI-redfish-Bios.v1_1_0 "Bios.v1_1_0"
 
-#string STR_SECURE_BOOT_PROMPT   #language x-UEFI-redfish-Bios.v1_0_9   "/Bios/Attributes/SecureBoot"
+#string STR_SECURE_BOOT_PROMPT   #language x-UEFI-redfish-Bios.v1_1_0   "/Bios/Attributes/SecureBoot"

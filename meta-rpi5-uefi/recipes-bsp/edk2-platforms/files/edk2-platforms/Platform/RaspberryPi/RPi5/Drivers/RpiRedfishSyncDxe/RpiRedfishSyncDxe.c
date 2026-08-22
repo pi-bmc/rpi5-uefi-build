@@ -21,8 +21,8 @@
     2b-2d. POST Processors /        -- inventory the BMC cannot see in band
            Memory / Drives             (successor of BlkInfoMirrorDxe).
     2e. PATCH+GET Chassis/1/Thermal -- SoC temperature + fan state up, BMC fan
-                                       steering down (RPI_FAN_PROTOCOL); then
-                                       every 10 s for as long as BDS lasts.
+                                       steering down (RPI_FAN_PROTOCOL). Once,
+                                       as part of this exchange: see below.
     3. GET  /redfish/v1/Systems/1   -- reads back the BMC's requested one-time
                                        boot override, acknowledges it, and boots
                                        the matching option in this same boot
@@ -44,8 +44,6 @@
 
 STATIC EFI_HANDLE       mImageHandle    = NULL;
 STATIC BOOLEAN          mSyncDone       = FALSE;
-STATIC REDFISH_SERVICE  mThermalService = NULL;
-STATIC EFI_EVENT        mThermalTimer   = NULL;
 
 /**
   Log an HTTP status code alongside the URI it came from.
@@ -899,50 +897,6 @@ PollFanOverride (
 }
 
 /**
-  Periodic thermal telemetry: keep the BMC's temperature/fan view fresh
-  and honour its steering while the firmware phase lasts (BDS wait, the
-  Setup browser, the shell). Stops itself the first time BOTH legs fail:
-  the service handle this rides was created for the one-shot exchange, and
-  a link that has gone away is not coming back within this boot phase --
-  better silent than banging a dead (or freed) service every 10 s.
-
-  The event dies with boot services, so a successful OS handoff needs no
-  cleanup here.
-
-  @param[in] Event    The timer event.
-  @param[in] Context  Unused.
-**/
-STATIC
-VOID
-EFIAPI
-ThermalTick (
-  IN EFI_EVENT  Event,
-  IN VOID       *Context
-  )
-{
-  EFI_STATUS  PatchStatus;
-  EFI_STATUS  PollStatus;
-
-  if (mThermalService == NULL) {
-    return;
-  }
-
-  PatchStatus = ReportThermal (mThermalService);
-  PollStatus  = PollFanOverride (mThermalService);
-
-  if (EFI_ERROR (PatchStatus) && EFI_ERROR (PollStatus)) {
-    DEBUG ((
-      DEBUG_ERROR,
-      "RpiRedfishSync: thermal telemetry stopped (%r / %r)\n",
-      PatchStatus,
-      PollStatus
-      ));
-    gBS->SetTimer (mThermalTimer, TimerCancel, 0);
-    mThermalService = NULL;
-  }
-}
-
-/**
   Perform the host-interface exchange against the discovered Redfish service.
 
   @param[in] ServiceInfo  Discovered Redfish service information.
@@ -1059,25 +1013,6 @@ RpiRedfishSync (
   }
 
   RedfishHttpFreeResponse (&Response);
-
-  //
-  // Keep the thermal view fresh from here on. Only reached when no boot
-  // override fired (ApplyMatchedOption resets and never returns), i.e. the
-  // host is proceeding into BDS wait / Setup / a normal boot.
-  //
-  mThermalService = Service;
-  Status          = gBS->CreateEvent (
-                           EVT_TIMER | EVT_NOTIFY_SIGNAL,
-                           TPL_CALLBACK,
-                           ThermalTick,
-                           NULL,
-                           &mThermalTimer
-                           );
-  if (!EFI_ERROR (Status)) {
-    Status = gBS->SetTimer (mThermalTimer, TimerPeriodic, RPI_REDFISH_THERMAL_PERIOD);
-  }
-
-  DEBUG ((DEBUG_ERROR, "RpiRedfishSync: thermal telemetry timer - %r\n", Status));
 
   //
   // Deliberately no RedfishCleanupService (Service) here.

@@ -1,0 +1,161 @@
+From: appkins <nbatkins@gmail.com>
+Date: Sat, 22 Aug 2026 16:00:00 -0500
+Subject: [PATCH] UsbCdcNcm: deliver one Ethernet frame per NTB datagram
+
+UsbEthNcmReceive summed the lengths of every datagram in a received NTB
+and, if the total came to less than one Ethernet frame, copied them all
+into the caller's buffer back to back:
+
+  if (TotalLength < USB_ETHERNET_FRAME_SIZE) {
+    for (Index = 0; Index < UsbEthDriver->TotalDatagram; Index++) {
+      CopyMem ((UINT8 *)Packet + TotalLength, ..., Datagram->DatagramLength);
+      TotalLength += Datagram->DatagramLength;
+    }
+    *PacketLength             = TotalLength;
+    UsbEthDriver->NowDatagram = UsbEthDriver->TotalDatagram;
+  }
+
+Each datagram in an NDP16 table is a distinct Ethernet frame; NCM
+aggregation exists so that several frames can share one bulk transfer,
+not so that they can be spliced into one. Two 60-byte TCP segments
+arriving in a single NTB were handed up as one 120-byte frame: the
+second segment vanished and the first was reported over-long. The
+caller in NetworkCommon/PxeFunction.c takes *PacketLength at face value
+and passes the result straight to SNP, so there is no layer above that
+can recover the lost frame.
+
+The threshold made the fault selective in the worst possible way. Bulk
+traffic, whose datagrams sum past 0x5F2, took the correct one-frame-at-
+a-time path; only small back-to-back packets were aggregated and
+corrupted. That is exactly the traffic a TCP connection produces when it
+starts losing segments, so the fault sustained itself: dropped segments
+provoked retransmissions and duplicate ACKs, those are small packets,
+and the gadget batched them into NTBs that triggered the bug again.
+
+On a Raspberry Pi 5 talking Redfish to a BMC over a CDC-NCM gadget the
+connection wedged within seconds of coming up, and TcpDxe settled into
+
+  TcpInput: sequence acceptance test failed for segment of TCB 3A60DC18
+  TcpInput: Discard a packet
+
+repeating without end. TcpInput answers every unacceptable segment with
+an ACK and does not rate-limit them (RFC 1122 4.2.2.20), so once the
+receive window had stalled both ends stayed busy indefinitely. Because
+the DWC2 host controller polls its deferred endpoints from a TPL_NOTIFY
+timer, a link that is never idle also starves everything below
+TPL_NOTIFY, and BDS slowed to a crawl.
+
+Return the first datagram and let the existing continuation path walk
+the remainder out of the buffer on subsequent calls, which is what that
+path was already written to do.
+
+While here, validate the NDP16 table before deriving a datagram count
+from it. Length is a UINT16 read off the wire and the count is computed
+as (Length - 8) / 4 - 1, which underflows to 255 when Length is 8; the
+driver would then walk 255 datagrams' worth of whatever followed. A
+table that describes any datagrams at all is at least 12 bytes and a
+whole number of words. Handle a well-formed but empty table too: the
+count reaches zero for Length 12, and incrementing NowDatagram past
+TotalDatagram leaves the two counters permanently unequal, stranding
+the driver in the continuation path against a buffer holding nothing.
+Both cases now report EFI_NOT_READY, which PxeUndiReceive already maps
+to PXE_STATCODE_NO_DATA.
+
+Signed-off-by: appkins <nbatkins@gmail.com>
+---
+--- a/MdeModulePkg/Bus/Usb/UsbNetwork/UsbCdcNcm/UsbNcmFunction.c
++++ b/MdeModulePkg/Bus/Usb/UsbNetwork/UsbCdcNcm/UsbNcmFunction.c
+@@ -225,15 +225,12 @@
+   USB_ETHERNET_DRIVER          *UsbEthDriver;
+   EFI_USB_IO_PROTOCOL          *UsbIo;
+   UINT32                       TransStatus;
+-  UINT8                        Index;
+   UINTN                        BulkDataLength;
+-  UINTN                        TotalLength;
+   USB_NCM_TRANSFER_HEADER_16   *Nth;
+   USB_NCM_DATAGRAM_POINTER_16  *Ndp;
+   USB_NCM_DATA_GRAM            *Datagram;
+ 
+   UsbEthDriver = USB_ETHERNET_DEV_FROM_THIS (This);
+-  TotalLength  = 0;
+ 
+   if (UsbEthDriver->TotalDatagram == UsbEthDriver->NowDatagram) {
+     Status = gBS->HandleProtocol (
+@@ -266,35 +263,53 @@
+       return Status;
+     }
+ 
+-    Nth                         = (USB_NCM_TRANSFER_HEADER_16 *)UsbEthDriver->BulkBuffer;
+-    Ndp                         = (USB_NCM_DATAGRAM_POINTER_16 *)((UINT8 *)UsbEthDriver->BulkBuffer + Nth->NdpIndex);
+-    Datagram                    = (USB_NCM_DATA_GRAM *)((UINT8 *)Ndp + sizeof (USB_NCM_DATAGRAM_POINTER_16));
++    Nth      = (USB_NCM_TRANSFER_HEADER_16 *)UsbEthDriver->BulkBuffer;
++    Ndp      = (USB_NCM_DATAGRAM_POINTER_16 *)((UINT8 *)UsbEthDriver->BulkBuffer + Nth->NdpIndex);
++    Datagram = (USB_NCM_DATA_GRAM *)((UINT8 *)Ndp + sizeof (USB_NCM_DATAGRAM_POINTER_16));
++
++    //
++    // An NDP16 table is an 8-byte header, one 4-byte entry per datagram and
++    // a 4-byte null terminator, so a table that carries anything at all is
++    // at least 12 bytes long and a whole number of words. Check that before
++    // deriving a count from it: the expression below underflows to 255 when
++    // Length is 8, and every later call would then walk this buffer as if
++    // it held 255 frames.
++    //
++    if ((Ndp->Length < 12) || ((Ndp->Length % 4) != 0)) {
++      UsbEthDriver->TotalDatagram = 0;
++      UsbEthDriver->NowDatagram   = 0;
++      return EFI_NOT_READY;
++    }
++
+     UsbEthDriver->TotalDatagram = (UINT8)((Ndp->Length - 8) / 4 - 1);
+ 
+-    for (Index = 0; Index < UsbEthDriver->TotalDatagram; Index++) {
+-      TotalLength += Datagram->DatagramLength;
+-      Datagram     = (USB_NCM_DATA_GRAM *)((UINT8 *)Datagram + sizeof (USB_NCM_DATA_GRAM));
++    //
++    // A well-formed NTB may still carry no datagrams. Report no data rather
++    // than advancing NowDatagram past TotalDatagram, which would leave the
++    // two counters permanently unequal and strand the driver in the
++    // continuation path below, re-reading a buffer that holds nothing.
++    //
++    if (UsbEthDriver->TotalDatagram == 0) {
++      UsbEthDriver->NowDatagram = 0;
++      return EFI_NOT_READY;
+     }
+ 
+-    if (TotalLength < USB_ETHERNET_FRAME_SIZE) {
+-      Datagram = (USB_NCM_DATA_GRAM *)((UINT8 *)Ndp + sizeof (USB_NCM_DATAGRAM_POINTER_16));
++    //
++    // One NTB can carry several datagrams and each one is a separate
++    // Ethernet frame, so deliver only the first here; the continuation path
++    // below walks the rest out of the same buffer on subsequent calls.
++    // This driver used to concatenate them into the caller's buffer
++    // whenever they summed to less than one frame, which yields a single
++    // oversized frame in which every datagram after the first is lost. On a
++    // link that mostly carries small packets -- a Redfish host interface
++    // over CDC-NCM, say -- that discards TCP segments about as fast as the
++    // peer retransmits them, stalling the receive window and leaving both
++    // ends in an ACK storm.
++    //
++    UsbEthDriver->NowDatagram++;
+ 
+-      TotalLength = 0;
+-      for (Index = 0; Index < UsbEthDriver->TotalDatagram; Index++) {
+-        CopyMem ((UINT8 *)Packet + TotalLength, (UINT8 *)UsbEthDriver->BulkBuffer + Datagram->DatagramIndex, Datagram->DatagramLength);
+-        TotalLength += Datagram->DatagramLength;
+-        Datagram     = (USB_NCM_DATA_GRAM *)((UINT8 *)Datagram + sizeof (USB_NCM_DATA_GRAM));
+-      }
+-
+-      *PacketLength             = TotalLength;
+-      UsbEthDriver->NowDatagram = UsbEthDriver->TotalDatagram;
+-    } else {
+-      UsbEthDriver->NowDatagram++;
+-
+-      Datagram = (USB_NCM_DATA_GRAM *)((UINT8 *)Ndp + sizeof (USB_NCM_DATAGRAM_POINTER_16));
+-      CopyMem (Packet, (UINT8 *)UsbEthDriver->BulkBuffer + Datagram->DatagramIndex, Datagram->DatagramLength);
+-      *PacketLength = Datagram->DatagramLength;
+-    }
++    CopyMem (Packet, (UINT8 *)UsbEthDriver->BulkBuffer + Datagram->DatagramIndex, Datagram->DatagramLength);
++    *PacketLength = Datagram->DatagramLength;
+ 
+     return Status;
+   } else {

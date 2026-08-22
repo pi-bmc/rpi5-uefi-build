@@ -1,0 +1,80 @@
+From: appkins <nbatkins@gmail.com>
+Subject: [PATCH] RpiFirmwareDxe: the power-state reply is advisory, not a result
+
+RpiFirmwareSetPowerState() compared the state the firmware echoed back
+against the state that was asked for, and turned any disagreement into
+EFI_DEVICE_ERROR. On BCM2712 that fires on every boot:
+
+  RpiFirmwareSetPowerState: failed to enable power for device 3
+  Couldn't power on USB: Device Error (continuing)
+
+Nothing failed. The legacy device-id power interface is inert on this SoC:
+it accepts the request, answers the transaction successfully, and reports
+every device in that id space as off. Measured with vcmailbox on a
+Raspberry Pi 5 Model B, VideoCore firmware timestamp 1779807685:
+
+  GET_POWER_STATE dev 3 (USB HCD) -> 0x00000000
+  GET_POWER_STATE dev 0 (SD card) -> 0x00000000
+  SET_POWER_STATE dev 3, state 1  -> 0x00000000
+  SET_POWER_STATE dev 3, state 3  -> 0x00000000
+
+Device 0 is the SD controller the board is booting from, so "off" there is
+plainly not a description of the hardware. Bit 1 of a reply means "device
+does not exist" and is clear throughout, so not even that distinguishes
+the cases -- the field simply carries no information on this part. The
+WAIT bit makes no difference either, which rules out the one way this
+driver's request differs from the kernel's.
+
+Linux does not consult it: rpi_firmware_property() checks the transaction
+and the buffer response code, and stops there. Do the same. A genuine
+mailbox failure is still caught by the check above this one, which is
+unchanged; the disagreement is now a DEBUG_INFO note.
+
+This also silences DwUsbHostDxe, whose best-effort SetPowerState() call
+was reporting Device Error for a call that did what it could, and
+ConfigDxe's SDHCI call, which has the same reply on this SoC.
+
+Upstream-Status: Submittable [with an RPi5 platform port]
+Signed-off-by: appkins <nbatkins@gmail.com>
+---
+diff -urN a/Platform/RaspberryPi/Drivers/RpiFirmwareDxe/RpiFirmwareDxe.c b/Platform/RaspberryPi/Drivers/RpiFirmwareDxe/RpiFirmwareDxe.c
+--- a/Platform/RaspberryPi/Drivers/RpiFirmwareDxe/RpiFirmwareDxe.c
++++ b/Platform/RaspberryPi/Drivers/RpiFirmwareDxe/RpiFirmwareDxe.c
+@@ -444,11 +444,34 @@
+     Status = EFI_DEVICE_ERROR;
+   }
+ 
++  //
++  // The state field of the reply is advisory, not a result.
++  //
++  // On BCM2712 it reads back zero for every device in this legacy id space,
++  // including device 0 -- the SD controller, which is demonstrably running.
++  // Deriving an error from it therefore reports a failure that did not
++  // happen. Linux never looks at it: rpi_firmware_property() checks the
++  // transaction and the buffer response code, and nothing else.
++  //
++  // Measured with vcmailbox on a Raspberry Pi 5 Model B, VideoCore firmware
++  // timestamp 1779807685:
++  //
++  //   GET_POWER_STATE dev 3 (USB HCD) -> 0x00000000
++  //   GET_POWER_STATE dev 0 (SD card) -> 0x00000000
++  //   SET_POWER_STATE dev 3, state 1  -> 0x00000000
++  //   SET_POWER_STATE dev 3, state 3  -> 0x00000000
++  //
++  // Bit 1 of a reply means "device does not exist", and it is clear in all
++  // of those: the firmware reports the device as present and off, for
++  // hardware that is present and working. Note the disagreement and carry
++  // on -- a real mailbox failure is still caught above, by the transaction
++  // status and the buffer response code.
++  //
+   if (!EFI_ERROR (Status) &&
+       PowerState ^ (Cmd->TagBody.PowerState & RPI_MBOX_POWER_STATE_ENABLE)) {
+-    DEBUG ((DEBUG_ERROR, "%a: failed to %sable power for device %d\n",
+-      __func__, PowerState ? "en" : "dis", DeviceId));
+-    Status = EFI_DEVICE_ERROR;
++    DEBUG ((DEBUG_INFO,
++      "%a: device %d reports power state 0x%x after a request to %sable\n",
++      __func__, DeviceId, Cmd->TagBody.PowerState, PowerState ? "en" : "dis"));
+   }
+   ReleaseSpinLock (&mMailboxLock);
+ 

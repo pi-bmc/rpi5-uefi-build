@@ -1,0 +1,112 @@
+From: appkins <nbatkins@gmail.com>
+Date: Fri, 22 Aug 2026 12:00:00 -0500
+Subject: [PATCH] DwUsbHostDxe: report the real port speed and stop splitting on
+ the root port
+
+DwHcGetRootHubPortStatus never read HPRT0.PRTSPD. DWC2_HPRT0_PRTSPD_MASK is
+defined in DwcHw.h and referenced by no .c file in the driver; the function
+set USB_PORT_STAT_HIGH_SPEED unconditionally, so every device on the root
+port was reported to UsbBusDxe as high speed no matter what the core had
+actually negotiated.
+
+On BCM283x this was invisible: the DWC2 there is behind the on-board hub, so
+the root port always trains at high speed and the hardcoded answer happened
+to be right. The Pi 5 exposes the core directly on the USB-C connector, where
+a full- or low-speed device trains the port at its own speed and the reported
+value becomes a lie -- UsbBusDxe then picks transfer sizes and timings for a
+link that is not there.
+
+Reporting the speed honestly is not sufficient on its own. DwHcTransfer turns
+on split transactions for any low- or full-speed device, which is correct only
+when the device sits behind a high-speed hub's transaction translator. A
+device directly on the root port has no TT, and DwOtgHcInit would program
+HCSPLT from a zeroed translator (hub address 0, port 0). Until now that path
+was unreachable, because the speed was always reported as high; fixing the
+speed makes it reachable, so gate splitting on there actually being a
+translator. UsbBusDxe always passes a non-NULL pointer -- USB_DEVICE embeds
+the struct by value -- so the meaningful test is TranslatorHubAddress != 0,
+device address 0 never being a valid hub address.
+
+The one-shot DEBUG_ERROR reports the negotiated speed once per change rather
+than on every poll, so a port that trains at the wrong speed says so in the
+log instead of being inferred from downstream transfer failures.
+
+Upstream-Status: Pending
+Signed-off-by: appkins <nbatkins@gmail.com>
+---
+--- a/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.c
++++ b/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.c
+@@ -305,8 +305,9 @@
+ 
+   do {
+   RestartXfer:
+-    if (DeviceSpeed == EFI_USB_SPEED_LOW ||
+-        DeviceSpeed == EFI_USB_SPEED_FULL) {
++    if ((DeviceSpeed == EFI_USB_SPEED_LOW ||
++         DeviceSpeed == EFI_USB_SPEED_FULL) &&
++        (Translator != NULL) && (Translator->TranslatorHubAddress != 0)) {
+       Split.Splitting = TRUE;
+       Split.SplitStart = TRUE;
+       Split.Tries = 0;
+@@ -653,6 +654,8 @@
+   return Status;
+ }
+ 
++STATIC UINT32 mLastPortSpeed = 0xFFFFFFFF;
++
+ EFI_STATUS
+ EFIAPI
+ DwHcGetRootHubPortStatus (
+@@ -663,6 +666,7 @@
+ {
+   DWUSB_OTGHC_DEV *DwHc;
+   UINT32          Hprt0;
++  UINT32          PortSpeed;
+ 
+   if (PortNumber > DWC2_HC_PORT) {
+     return EFI_INVALID_PARAMETER;
+@@ -702,7 +706,31 @@
+     PortStatus->PortStatus |= USB_PORT_STAT_POWER;
+   }
+ 
+-  PortStatus->PortStatus |= USB_PORT_STAT_HIGH_SPEED;
++  //
++  // Report the speed the core actually negotiated. HPRT0.PRTSPD is
++  // authoritative after the port reset completes; hardcoding high speed
++  // told UsbBusDxe the wrong thing for every full- and low-speed device,
++  // which then sized transfers and picked timings for a link that is not
++  // there. 0 = high, 1 = full, 2 = low (DWC2 databook, HPRT0.PRTSPD).
++  //
++  PortSpeed = (Hprt0 & DWC2_HPRT0_PRTSPD_MASK) >> DWC2_HPRT0_PRTSPD_OFFSET;
++  switch (PortSpeed) {
++  case DWC2_HPRT0_PRTSPD_HIGH:
++    PortStatus->PortStatus |= USB_PORT_STAT_HIGH_SPEED;
++    break;
++  case DWC2_HPRT0_PRTSPD_LOW:
++    PortStatus->PortStatus |= USB_PORT_STAT_LOW_SPEED;
++    break;
++  default:
++    break;                    /* full speed sets neither bit */
++  }
++
++  if ((Hprt0 & DWC2_HPRT0_PRTCONNSTS) && (PortSpeed != mLastPortSpeed)) {
++    mLastPortSpeed = PortSpeed;
++    DEBUG ((DEBUG_ERROR, "DwUsbHostDxe: port speed %a (HPRT0 %08x)\n",
++      (PortSpeed == DWC2_HPRT0_PRTSPD_HIGH) ? "high" :
++      (PortSpeed == DWC2_HPRT0_PRTSPD_LOW)  ? "low" : "full", Hprt0));
++  }
+ 
+   if (Hprt0 & DWC2_HPRT0_PRTENCHNG) {
+     //              PortStatus->PortChangeStatus |= USB_PORT_STAT_C_ENABLE;
+--- a/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwcHw.h
++++ b/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwcHw.h
+@@ -530,6 +530,9 @@
+ #define DWC2_HPRT0_PRTTSTCTL_OFFSET                     13
+ #define DWC2_HPRT0_PRTSPD_MASK                          (0x3 << 17)
+ #define DWC2_HPRT0_PRTSPD_OFFSET                        17
++#define DWC2_HPRT0_PRTSPD_HIGH                          0
++#define DWC2_HPRT0_PRTSPD_FULL                          1
++#define DWC2_HPRT0_PRTSPD_LOW                           2
+ #define DWC2_HAINT_CH0                                  (1 << 0)
+ #define DWC2_HAINT_CH0_OFFSET                           0
+ #define DWC2_HAINT_CH1                                  (1 << 1)

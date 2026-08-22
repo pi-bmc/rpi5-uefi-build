@@ -430,9 +430,9 @@
   RedfishEventLib|RedfishClientPkg/Library/RedfishEventLib/RedfishEventLib.inf
   RedfishVersionLib|RedfishClientPkg/Library/RedfishVersionLib/RedfishVersionLib.inf
   RedfishAddendumLib|RedfishClientPkg/Library/RedfishAddendumLib/RedfishAddendumLib.inf
-  ComputerSystemV1_5_0Lib|RedfishClientPkg/ConverterLib/edk2library/ComputerSystem/v1_5_0/Lib.inf
+  ComputerSystemV1_13_0Lib|RedfishClientPkg/ConverterLib/edk2library/ComputerSystem/v1_13_0/Lib.inf
   ComputerSystemCollectionLib|RedfishClientPkg/ConverterLib/edk2library/ComputerSystemCollection/Lib.inf
-  BiosV1_0_9Lib|RedfishClientPkg/ConverterLib/edk2library/Bios/v1_0_9/Lib.inf
+  BiosV1_1_0Lib|RedfishClientPkg/ConverterLib/edk2library/Bios/v1_1_0/Lib.inf
   AttributeRegistryV1_3_6Lib|RedfishClientPkg/ConverterLib/edk2library/AttributeRegistry/v1_3_6/Lib.inf
   BootOptionCollectionLib|RedfishClientPkg/ConverterLib/edk2library/BootOptionCollection/Lib.inf
   BootOptionV1_0_4Lib|RedfishClientPkg/ConverterLib/edk2library/BootOption/v1_0_4/Lib.inf
@@ -639,7 +639,7 @@
     <LibraryClasses>
       NULL|MdeModulePkg/Library/LzmaCustomDecompressLib/LzmaCustomDecompressLib.inf
       PeilessSecMeasureLib|SecurityPkg/Library/PeilessSecMeasureLib/PeilessSecMeasureLibNull.inf
-  }  
+  }
 #
   # DXE
   #
@@ -949,11 +949,19 @@
   # "HII to Redfish (Boot)" Setup page it adds, because it is the ONLY backing
   # for ComputerSystem's Boot/BootOrder array: it builds an ordered list from
   # EfiBootManagerGetLoadOptions(), tags each entry Boot%04x in the
-  # x-UEFI-redfish-ComputerSystem.v1_5_0 language, and rewrites the real
+  # x-UEFI-redfish-ComputerSystem.v1_13_0 language, and rewrites the real
   # BootOrder variable on submit. ComputerSystemDxe resolves every Boot/*
   # property by configure-language lookup alone, so without this driver the
   # BMC can enumerate boot options through BootOptionCollectionDxe (which
   # reads the boot manager directly) but cannot persistently reorder them.
+  #
+  # That v1_13_0 tag comes from a patch in the edk2-redfish-client recipe.
+  # Upstream still ships v1_5_0, which matched the v1_5_0 feature driver this
+  # platform used to build. A feature driver looks its HII questions up by the
+  # exact configure-language string it was compiled with, so the ComputerSystem
+  # version below and HiiToRedfishBootDxe's tags have to move as a pair -- a
+  # skew between them costs the boot order and reports itself only as a run of
+  # per-property "No match HII statement" misses.
   #
   # Its BootSourceOverride{Enabled,Mode,Target} questions are a different
   # matter, and worth knowing about: they map to the same
@@ -970,18 +978,18 @@
   RedfishClientPkg/RedfishETagDxe/RedfishETagDxe.inf
   RedfishClientPkg/RedfishConfigLangMapDxe/RedfishConfigLangMapDxe.inf
   RedfishClientPkg/HiiToRedfishBootDxe/HiiToRedfishBootDxe.inf
-  RedfishClientPkg/Features/ComputerSystem/v1_5_0/Dxe/ComputerSystemDxe.inf
+  RedfishClientPkg/Features/ComputerSystem/v1_13_0/Dxe/ComputerSystemDxe.inf
   RedfishClientPkg/Features/ComputerSystemCollectionDxe/ComputerSystemCollectionDxe.inf
-  RedfishClientPkg/Features/Bios/v1_0_9/Dxe/BiosDxe.inf
+  RedfishClientPkg/Features/Bios/v1_1_0/Dxe/BiosDxe.inf
   RedfishClientPkg/Features/BiosAttributeRegistry/v1_3_6/BiosAttributeRegistryDxe.inf
   RedfishClientPkg/Features/BootOptionCollection/BootOptionCollectionDxe.inf
   RedfishClientPkg/Features/BootOption/v1_0_4/Dxe/BootOptionDxe.inf
   RedfishClientPkg/Features/SecureBoot/v1_1_0/Dxe/SecureBootDxe.inf
   RedfishClientPkg/Features/Memory/V1_7_1/Dxe/MemoryDxe.inf
   RedfishClientPkg/Features/MemoryCollectionDxe/MemoryCollectionDxe.inf
-  RedfishClientPkg/Converter/ComputerSystem/v1_5_0/RedfishComputerSystem_V1_5_0_Dxe.inf
+  RedfishClientPkg/Converter/ComputerSystem/v1_13_0/RedfishComputerSystem_V1_13_0_Dxe.inf
   RedfishClientPkg/Converter/ComputerSystemCollection/RedfishComputerSystemCollection_Dxe.inf
-  RedfishClientPkg/Converter/Bios/v1_0_9/RedfishBios_V1_0_9_Dxe.inf
+  RedfishClientPkg/Converter/Bios/v1_1_0/RedfishBios_V1_1_0_Dxe.inf
   RedfishClientPkg/Converter/AttributeRegistry/v1_3_6/RedfishAttributeRegistry_V1_3_6_Dxe.inf
   RedfishClientPkg/Converter/BootOptionCollection/RedfishBootOptionCollection_Dxe.inf
   RedfishClientPkg/Converter/BootOption/v1_0_4/RedfishBootOption_V1_0_4_Dxe.inf

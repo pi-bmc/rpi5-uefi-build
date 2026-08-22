@@ -4,9 +4,9 @@
  *  Protocol formset.
  *
  *  RedfishPlatformConfigDxe harvests these strings from the HII database:
- *  the question prompt labeled in the x-UEFI-redfish-Bios.v1_0_9 language
+ *  the question prompt labeled in the x-UEFI-redfish-Bios.v1_1_0 language
  *  becomes a BIOS attribute at /redfish/v1/Systems/1/Bios (published by
- *  the edk2-redfish-client Bios v1_0_9 feature driver, with its allowable
+ *  the edk2-redfish-client Bios v1_1_0 feature driver, with its allowable
  *  values in the BiosAttributeRegistry), named by the last segment of the
  *  configure-language path.
  *
@@ -19,6 +19,6 @@
  **/
 
 /=#
-#langdef   x-UEFI-redfish-Bios.v1_0_9 "Bios.v1_0_9"
+#langdef   x-UEFI-redfish-Bios.v1_1_0 "Bios.v1_1_0"
 
-#string STR_ENABLE_PROTOCOL_PROMPT   #language x-UEFI-redfish-Bios.v1_0_9   "/Bios/Attributes/MemoryAttributeProtocol"
+#string STR_ENABLE_PROTOCOL_PROMPT   #language x-UEFI-redfish-Bios.v1_1_0   "/Bios/Attributes/MemoryAttributeProtocol"

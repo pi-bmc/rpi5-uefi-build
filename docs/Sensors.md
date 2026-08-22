@@ -54,7 +54,7 @@ Approach | Runs Pre-OS? | Runs Post-OS? | Complexity | Notes -------------------
 3. OP-TEE (Secure World @ S-EL1 / S-EL0) — The Architecturally Correct Firmware Approach
 If you need the service to run independently of the host OS and survive even if Linux crashes or is compromised, OP-TEE is designed for this.
 
-#### How it works:
+#### How it works
 
 Peripheral Partitioning: You configure the SoC firewall / TrustZone Controller (TZPC/TZASC) so that the specific
 communication bus (e.g., I2C or UART) is configured as Secure-only. The Linux kernel will not have access to it, preventing bus contention.

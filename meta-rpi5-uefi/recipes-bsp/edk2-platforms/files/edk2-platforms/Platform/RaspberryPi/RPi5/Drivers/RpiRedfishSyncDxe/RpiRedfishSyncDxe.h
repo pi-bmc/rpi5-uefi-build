@@ -56,12 +56,6 @@
 #define RPI_REDFISH_FIRMWARE_INVENTORY_URI  L"/redfish/v1/UpdateService/FirmwareInventory/BiosFirmware"
 
 //
-// Thermal telemetry cadence while the firmware phase lasts (BDS wait, Setup,
-// the shell). 10 s keeps the BMC's view fresh without loading the link.
-//
-#define RPI_REDFISH_THERMAL_PERIOD    100000000ULL   // 10 s, in 100 ns units
-
-//
 // Boot progress state reported at the point the config handler runs: DXE is
 // complete and BDS is selecting a boot option. This is the DSP2046
 // BootProgressTypes value for that moment.

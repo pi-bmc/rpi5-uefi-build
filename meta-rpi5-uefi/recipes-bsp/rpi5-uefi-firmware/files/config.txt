@@ -26,8 +26,10 @@ usb_max_current_enable=1
 # Force maximum CPU speed.
 force_turbo=1
 
-[pi5]
+# Enable USB-C Host
 dtoverlay=dwc2,dr_mode=host
+
+[pi5]
 usb_max_current_enable=1
 # Keep the dedicated 3-pin debug UART up: the UEFI console is hardwired to
 # it (PL011 @ 0x107d001000, 115200 8N1, PcdSerialRegisterBase in RPi5.dsc)

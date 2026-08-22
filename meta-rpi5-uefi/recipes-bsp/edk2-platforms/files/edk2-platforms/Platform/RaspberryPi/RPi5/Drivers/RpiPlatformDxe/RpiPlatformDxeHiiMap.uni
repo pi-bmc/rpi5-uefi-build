@@ -3,9 +3,9 @@
  *  x-UEFI-redfish configure-language map for the RPi5 platform formset.
  *
  *  RedfishPlatformConfigDxe harvests these strings from the HII database:
- *  each question prompt labeled in the x-UEFI-redfish-Bios.v1_0_9 language
+ *  each question prompt labeled in the x-UEFI-redfish-Bios.v1_1_0 language
  *  becomes a BIOS attribute at /redfish/v1/Systems/1/Bios (published by
- *  the edk2-redfish-client Bios v1_0_9 feature driver, with allowable
+ *  the edk2-redfish-client Bios v1_1_0 feature driver, with allowable
  *  values in the BiosAttributeRegistry), named by the last segment of the
  *  configure-language path. Option strings in the same language are the
  *  enum value names the BMC reads and writes for oneof questions - kept
@@ -27,44 +27,44 @@
  **/
 
 /=#
-#langdef   x-UEFI-redfish-Bios.v1_0_9 "Bios.v1_0_9"
+#langdef   x-UEFI-redfish-Bios.v1_1_0 "Bios.v1_1_0"
 
 //
 // System table mode.
 //
-#string STR_SYSTEM_TABLE_MODE_PROMPT                    #language x-UEFI-redfish-Bios.v1_0_9   "/Bios/Attributes/SystemTableMode"
-#string STR_SYSTEM_TABLE_MODE_ACPI                      #language x-UEFI-redfish-Bios.v1_0_9   "Acpi"
-#string STR_SYSTEM_TABLE_MODE_FDT                       #language x-UEFI-redfish-Bios.v1_0_9   "DeviceTree"
-#string STR_SYSTEM_TABLE_MODE_ACPI_FDT                  #language x-UEFI-redfish-Bios.v1_0_9   "AcpiAndDeviceTree"
+#string STR_SYSTEM_TABLE_MODE_PROMPT                    #language x-UEFI-redfish-Bios.v1_1_0   "/Bios/Attributes/SystemTableMode"
+#string STR_SYSTEM_TABLE_MODE_ACPI                      #language x-UEFI-redfish-Bios.v1_1_0   "Acpi"
+#string STR_SYSTEM_TABLE_MODE_FDT                       #language x-UEFI-redfish-Bios.v1_1_0   "DeviceTree"
+#string STR_SYSTEM_TABLE_MODE_ACPI_FDT                  #language x-UEFI-redfish-Bios.v1_1_0   "AcpiAndDeviceTree"
 
 //
 // ACPI - SD.
 //
-#string STR_ACPI_SD_COMPAT_MODE_PROMPT                  #language x-UEFI-redfish-Bios.v1_0_9   "/Bios/Attributes/AcpiSdCompatMode"
-#string STR_ACPI_SD_COMPAT_BRCMSTB_BAYTRAIL             #language x-UEFI-redfish-Bios.v1_0_9   "BrcmstbAndBaytrail"
-#string STR_ACPI_SD_COMPAT_FULL_BAYTRAIL                #language x-UEFI-redfish-Bios.v1_0_9   "FullBaytrail"
+#string STR_ACPI_SD_COMPAT_MODE_PROMPT                  #language x-UEFI-redfish-Bios.v1_1_0   "/Bios/Attributes/AcpiSdCompatMode"
+#string STR_ACPI_SD_COMPAT_BRCMSTB_BAYTRAIL             #language x-UEFI-redfish-Bios.v1_1_0   "BrcmstbAndBaytrail"
+#string STR_ACPI_SD_COMPAT_FULL_BAYTRAIL                #language x-UEFI-redfish-Bios.v1_1_0   "FullBaytrail"
 
-#string STR_ACPI_SD_LIMIT_UHS_PROMPT                    #language x-UEFI-redfish-Bios.v1_0_9   "/Bios/Attributes/AcpiSdLimitUhs"
+#string STR_ACPI_SD_LIMIT_UHS_PROMPT                    #language x-UEFI-redfish-Bios.v1_1_0   "/Bios/Attributes/AcpiSdLimitUhs"
 
 //
 // ACPI - PCIe.
 //
-#string STR_ACPI_PCIE_ECAM_COMPAT_MODE_PROMPT           #language x-UEFI-redfish-Bios.v1_0_9   "/Bios/Attributes/AcpiPcieEcamCompatMode"
-#string STR_ACPI_PCIE_ECAM_COMPAT_MODE_NXPMX6_DEN0115   #language x-UEFI-redfish-Bios.v1_0_9   "NxpMx6AndDen0115"
-#string STR_ACPI_PCIE_ECAM_COMPAT_MODE_NXPMX6_GRAVITON  #language x-UEFI-redfish-Bios.v1_0_9   "NxpMx6AndGraviton"
-#string STR_ACPI_PCIE_ECAM_COMPAT_MODE_DEN0115          #language x-UEFI-redfish-Bios.v1_0_9   "Den0115"
-#string STR_ACPI_PCIE_ECAM_COMPAT_MODE_NXPMX6           #language x-UEFI-redfish-Bios.v1_0_9   "NxpMx6"
-#string STR_ACPI_PCIE_ECAM_COMPAT_MODE_GRAVITON         #language x-UEFI-redfish-Bios.v1_0_9   "Graviton"
+#string STR_ACPI_PCIE_ECAM_COMPAT_MODE_PROMPT           #language x-UEFI-redfish-Bios.v1_1_0   "/Bios/Attributes/AcpiPcieEcamCompatMode"
+#string STR_ACPI_PCIE_ECAM_COMPAT_MODE_NXPMX6_DEN0115   #language x-UEFI-redfish-Bios.v1_1_0   "NxpMx6AndDen0115"
+#string STR_ACPI_PCIE_ECAM_COMPAT_MODE_NXPMX6_GRAVITON  #language x-UEFI-redfish-Bios.v1_1_0   "NxpMx6AndGraviton"
+#string STR_ACPI_PCIE_ECAM_COMPAT_MODE_DEN0115          #language x-UEFI-redfish-Bios.v1_1_0   "Den0115"
+#string STR_ACPI_PCIE_ECAM_COMPAT_MODE_NXPMX6           #language x-UEFI-redfish-Bios.v1_1_0   "NxpMx6"
+#string STR_ACPI_PCIE_ECAM_COMPAT_MODE_GRAVITON         #language x-UEFI-redfish-Bios.v1_1_0   "Graviton"
 
-#string STR_ACPI_PCIE_32_BIT_BAR_SPACE_SIZE_MB_PROMPT   #language x-UEFI-redfish-Bios.v1_0_9   "/Bios/Attributes/AcpiPcie32BitBarSpaceSizeMB"
+#string STR_ACPI_PCIE_32_BIT_BAR_SPACE_SIZE_MB_PROMPT   #language x-UEFI-redfish-Bios.v1_1_0   "/Bios/Attributes/AcpiPcie32BitBarSpaceSizeMB"
 
 //
 // PCIe1 controller. STR_ENABLED is this checkbox's prompt and is not
 // reused anywhere else in this formset.
 //
-#string STR_ENABLED                                     #language x-UEFI-redfish-Bios.v1_0_9   "/Bios/Attributes/Pcie1Enabled"
+#string STR_ENABLED                                     #language x-UEFI-redfish-Bios.v1_1_0   "/Bios/Attributes/Pcie1Enabled"
 
-#string STR_PCIE_LINK_SPEED_PROMPT                      #language x-UEFI-redfish-Bios.v1_0_9   "/Bios/Attributes/Pcie1MaxLinkSpeed"
-#string STR_PCIE_LINK_SPEED_GEN1                        #language x-UEFI-redfish-Bios.v1_0_9   "Gen1"
-#string STR_PCIE_LINK_SPEED_GEN2                        #language x-UEFI-redfish-Bios.v1_0_9   "Gen2"
-#string STR_PCIE_LINK_SPEED_GEN3                        #language x-UEFI-redfish-Bios.v1_0_9   "Gen3"
+#string STR_PCIE_LINK_SPEED_PROMPT                      #language x-UEFI-redfish-Bios.v1_1_0   "/Bios/Attributes/Pcie1MaxLinkSpeed"
+#string STR_PCIE_LINK_SPEED_GEN1                        #language x-UEFI-redfish-Bios.v1_1_0   "Gen1"
+#string STR_PCIE_LINK_SPEED_GEN2                        #language x-UEFI-redfish-Bios.v1_1_0   "Gen2"
+#string STR_PCIE_LINK_SPEED_GEN3                        #language x-UEFI-redfish-Bios.v1_1_0   "Gen3"

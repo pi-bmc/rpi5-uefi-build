@@ -58,6 +58,8 @@ SRC_URI = "gitsm://github.com/tianocore/edk2.git;protocol=https;branch=master;de
            file://0102-RedfishConfigHandler-quiesce-the-Redfish-stack-after.patch \
            file://0103-UefiBootManagerLib-do-not-enumerate-USB-NICs-as-boot.patch \
            file://0104-JsonLib-fix-RELEASE-build-of-lex_unget_unsave.patch \
+           file://0105-SnpDxe-accept-a-USB-ancestor-where-a-PCI-one-is-abse.patch \
+           file://0107-UsbCdcNcm-deliver-one-Ethernet-frame-per-NTB-datagra.patch \
            file://secureboot-keys \
            file://usbnet-dsc-snippet.inc \
            file://usbnet-fdf-snippet.fdf.inc \
@@ -65,6 +67,14 @@ SRC_URI = "gitsm://github.com/tianocore/edk2.git;protocol=https;branch=master;de
            file://profiling-fdf-snippet.fdf.inc \
            ${SECUREBOOT_MS_CERTS} \
            "
+
+# Diagnostics, DEBUG builds only. 0106 logs every handle
+# EfiBootManagerConnectAll visits along with its device path and protocol
+# GUIDs -- thousands of lines at 115200 baud, which is minutes of pure
+# serial time and would dominate a production boot. It touches
+# UefiBootManagerLib, which nothing else here patches, so appending it
+# after the series above is safe.
+SRC_URI += "${@bb.utils.contains('RPI5_BUILD_TARGET', 'DEBUG', 'file://0106-UefiBootManagerLib-trace-each-handle-ConnectAll-visi.patch', '', d)}"
 
 # Microsoft's Secure Boot CA certificates, fetched rather than vendored.
 #

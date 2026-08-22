@@ -1,0 +1,215 @@
+From: appkins <nbatkins@gmail.com>
+Date: Sat, 22 Aug 2026 18:15:00 -0500
+Subject: [PATCH] DIAG: DwUsbHostDxe: account for time spent in the driver
+
+DIAGNOSTIC PATCH -- REMOVE BEFORE SHIPPING.
+
+Boot manager enumeration is fast when the Redfish host interface runs on
+the RP1 XHCI ports and slow when the same gadget, the same CDC-NCM class
+driver and the same network stack run on the USB-C port behind DWC2. The
+host controller driver is the only variable, but reasoning alone cannot
+say which part of it is expensive: both drivers poll at TPL_NOTIFY on a
+1 ms timer (XHC_ASYNC_TIMER_INTERVAL matches DwHc->PeriodicEvent), so
+the cadence is not the difference. What differs is the work per tick --
+XHCI reads completion rings the hardware has already filled by DMA,
+while DWC2 performs each transfer itself by busy-waiting on registers.
+
+Measure that instead of guessing at it. Four things are counted, all
+reset every DWC2_STAT_REPORT_TICKS, and reported in one line:
+
+  ticks vs wall clock  The handler is armed at 1 ms, so 5000 ticks
+                       should take 5000 ms. The shortfall is time the
+                       driver's own timer base lost to something holding
+                       TPL_NOTIFY, including itself.
+
+  busy / max / tkmax   Microseconds spent inside DwHcTransfer, the worst
+                       single transfer, and the worst single tick. A
+                       transfer approaching its timeout shows up here as
+                       a large max; a tick far above the sum of its
+                       transfers means the cost is elsewhere.
+
+  max endpoint         Which endpoint owned that worst transfer, as
+                       (EpType << 8) | EpAddress, so the number can be
+                       attributed rather than merely observed.
+
+  halt histogram       Wait4Chhltd outcomes: not-halted, error, csplit,
+                       nak, stall, frame-overrun, done. This is the one
+                       that discriminates. Frame overrun and csplit both
+                       branch to RestartChannel with no retry counter, so
+                       either can spin until the timeout expires without
+                       ever reporting an error upward.
+
+One line per five seconds is about 100 characters, which is under 9 ms
+of serial time -- small enough not to disturb what it is measuring, on a
+console where the existing trace is already the dominant cost.
+
+Also log each deferred request as it is armed, with its polling interval
+and timeout, so the report can be read against what is actually on the
+list rather than against an assumption about it.
+
+Signed-off-by: appkins <nbatkins@gmail.com>
+---
+--- a/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.c
++++ b/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.c
+@@ -53,6 +53,15 @@
+ #define DWC2_POLLS_PER_TIMEOUT_CHECK  64
+ 
+ /*
++ * DIAGNOSTIC. Periodic handler ticks between statistics reports. The handler
++ * is armed at 1 ms, so this is nominally five seconds -- and the gap between
++ * that nominal figure and the wall clock the report prints alongside it is
++ * itself the measurement: it says how much of the driver's own timer base is
++ * being lost to something holding TPL_NOTIFY.
++ */
++#define DWC2_STAT_REPORT_TICKS  5000
++
++/*
+  * https://www.quicklogic.com/assets/pdf/data-sheets/QL-Hi-Speed-USB-2.0-OTG-Controller-Data-Sheet.pdf
+  */
+ 
+@@ -334,6 +343,9 @@
+ 
+   EFI_TPL Tpl = gBS->RaiseTPL (TPL_NOTIFY);
+ 
++  /* DIAGNOSTIC */
++  UINT64 StatStart = GetPerformanceCounter ();
++
+   *TransferResult = EFI_USB_NOERROR;
+ 
+   do {
+@@ -396,6 +408,11 @@
+ 
+     Ret = Wait4Chhltd (DwHc, Timeout, Channel, &Sub, Pid, IgnoreAck, &Split);
+ 
++    /* DIAGNOSTIC */
++    if (Ret < ARRAY_SIZE (DwHc->StatHalt)) {
++      DwHc->StatHalt[Ret]++;
++    }
++
+     if (Ret == XFER_NOT_HALTED) {
+       *TransferResult = EFI_USB_ERR_TIMEOUT;
+       MmioOr32 (DwHc->DwUsbBase + HCCHAR (Channel), DWC2_HCCHAR_CHDIS);
+@@ -464,6 +481,18 @@
+ 
+   *DataLength = Done;
+ 
++  /* DIAGNOSTIC */
++  {
++    UINT64 StatNs = GetTimeInNanoSecond (GetPerformanceCounter () - StatStart);
++
++    DwHc->StatXfers++;
++    DwHc->StatNsTotal += StatNs;
++    if (StatNs > DwHc->StatNsMax) {
++      DwHc->StatNsMax = StatNs;
++      DwHc->StatNsMaxEp = (UINT32)((EpType << 8) | EpAddress);
++    }
++  }
++
+   gBS->RestoreTPL (Tpl);
+ 
+   ASSERT (!EFI_ERROR (Status) || *TransferResult != EFI_USB_NOERROR);
+@@ -1300,6 +1329,10 @@
+    */
+   NewReq->TimeOut = 5; /* ms */
+ 
++  DEBUG ((DEBUG_ERROR,
++    "DWC2: arm deferred dev=%u ep=0x%x interval=%u timeout=%ums\n",
++    DeviceAddress, EndPointAddress, PollingInterval, (UINT32)NewReq->TimeOut));
++
+   InsertTailList (&DwHc->DeferredList, &NewReq->List);
+   Status = EFI_SUCCESS;
+ 
+@@ -1900,6 +1933,8 @@
+   LIST_ENTRY *Entry;
+   LIST_ENTRY *NextEntry;
+   DWUSB_OTGHC_DEV *DwHc = Context;
++  UINT64 StatStart = GetPerformanceCounter ();   /* DIAGNOSTIC */
++  UINT64 StatNs;
+ 
+   DwHc->CurrentFrame += FramesPassed (DwHc);
+   Frame = DwHc->CurrentFrame;
+@@ -1910,9 +1945,52 @@
+ 
+     if (Frame >= Req->TargetFrame) {
+       Req->TargetFrame = Frame + Req->FrameInterval;
++      DwHc->StatDeferred++;                      /* DIAGNOSTIC */
+       DwHcDeferredTransfer (Req);
+     }
+   }
++
++  /* DIAGNOSTIC */
++  StatNs = GetTimeInNanoSecond (GetPerformanceCounter () - StatStart);
++  DwHc->StatTickNsTotal += StatNs;
++  if (StatNs > DwHc->StatTickNsMax) {
++    DwHc->StatTickNsMax = StatNs;
++  }
++
++  if (++DwHc->StatTicks >= DWC2_STAT_REPORT_TICKS) {
++    UINT64 WallNs = GetTimeInNanoSecond (
++                      GetPerformanceCounter () - DwHc->StatWallStart);
++
++    DEBUG ((DEBUG_ERROR,
++      "DWC2: %utk/%ums xfer=%u def=%u busy=%uus max=%uus(ep%04x) tkmax=%uus"
++      " | nh=%u er=%u cs=%u nak=%u st=%u fo=%u dn=%u\n",
++      (UINT32)DwHc->StatTicks,
++      (UINT32)(WallNs / 1000000),
++      (UINT32)DwHc->StatXfers,
++      (UINT32)DwHc->StatDeferred,
++      (UINT32)(DwHc->StatTickNsTotal / 1000),
++      (UINT32)(DwHc->StatNsMax / 1000),
++      DwHc->StatNsMaxEp,
++      (UINT32)(DwHc->StatTickNsMax / 1000),
++      (UINT32)DwHc->StatHalt[XFER_NOT_HALTED],
++      (UINT32)DwHc->StatHalt[XFER_ERROR],
++      (UINT32)DwHc->StatHalt[XFER_CSPLIT],
++      (UINT32)DwHc->StatHalt[XFER_NAK],
++      (UINT32)DwHc->StatHalt[XFER_STALL],
++      (UINT32)DwHc->StatHalt[XFER_FRMOVRUN],
++      (UINT32)DwHc->StatHalt[XFER_DONE]));
++
++    ZeroMem (DwHc->StatHalt, sizeof (DwHc->StatHalt));
++    DwHc->StatTicks       = 0;
++    DwHc->StatXfers       = 0;
++    DwHc->StatDeferred    = 0;
++    DwHc->StatNsTotal     = 0;
++    DwHc->StatNsMax       = 0;
++    DwHc->StatNsMaxEp     = 0;
++    DwHc->StatTickNsTotal = 0;
++    DwHc->StatTickNsMax   = 0;
++    DwHc->StatWallStart   = GetPerformanceCounter ();
++  }
+ }
+ 
+ EFI_STATUS
+@@ -2012,6 +2090,8 @@
+     return Status;
+   }
+ 
++  DwHc->StatWallStart = GetPerformanceCounter ();   /* DIAGNOSTIC */
++
+   Status = gBS->SetTimer (DwHc->PeriodicEvent, TimerPeriodic,
+                   EFI_TIMER_PERIOD_MILLISECONDS (1));
+   if (Status != EFI_SUCCESS) {
+--- a/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.h
++++ b/Platform/RaspberryPi/Drivers/DwUsbHostDxe/DwUsbHostDxe.h
+@@ -127,6 +127,20 @@
+    * 125us frames;
+    */
+   UINT16                          LastMicroFrame;
++
++  /*
++   * DIAGNOSTIC. Reset every DWC2_STAT_REPORT_TICKS by DwHcPeriodicHandler.
++   */
++  UINT64                          StatTicks;
++  UINT64                          StatXfers;
++  UINT64                          StatDeferred;
++  UINT64                          StatNsTotal;
++  UINT64                          StatNsMax;
++  UINT32                          StatNsMaxEp;
++  UINT64                          StatTickNsTotal;
++  UINT64                          StatTickNsMax;
++  UINT64                          StatWallStart;
++  UINT64                          StatHalt[8];
+ } DWUSB_OTGHC_DEV;
+ 
+ extern EFI_COMPONENT_NAME_PROTOCOL  gComponentName;

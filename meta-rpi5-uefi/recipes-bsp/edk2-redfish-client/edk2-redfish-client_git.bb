@@ -3,8 +3,7 @@ DESCRIPTION = "RedfishClientPkg -- the standard Redfish feature layer that sits 
                top of edk2's RedfishPkg host-interface core. Staged into \
                ${datadir}/edk2/edk2-redfish-client as one of the edk2 recipe's \
                PACKAGES_PATH roots. RPi5.dsc/.fdf list the feature drivers and schema \
-               converters built out of it directly, unconditionally. Unpatched by this \
-               layer."
+               converters built out of it directly, unconditionally."
 HOMEPAGE = "https://github.com/tianocore/edk2-redfish-client"
 
 # Identical BSD-2-Clause-Patent text to edk2's License.txt, under a different
@@ -14,7 +13,15 @@ LIC_FILES_CHKSUM = "file://LICENSE;md5=2b415520383f7964e96700ae12b4570a"
 
 PV = "202605+git${SRCPV}"
 
-SRC_URI = "git://github.com/tianocore/edk2-redfish-client.git;protocol=https;branch=main;destsuffix=edk2-redfish-client"
+FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
+
+# The one patch here keeps HiiToRedfishBootDxe's configure-language tags on the
+# same ComputerSystem version RPi5.fdf builds a feature driver for. A feature
+# driver looks its HII questions up by that exact string, so the two have to be
+# bumped together or the platform silently loses its boot order.
+SRC_URI = "git://github.com/tianocore/edk2-redfish-client.git;protocol=https;branch=main;destsuffix=edk2-redfish-client \
+           file://0001-HiiToRedfishBootDxe-track-the-ComputerSystem-version-.patch \
+           "
 
 # edk2-redfish-client tracks edk2 MASTER. The window below was measured
 # (2026-08-17) against the master commit the edk2 recipe pinned at the time,
