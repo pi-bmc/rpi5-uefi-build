@@ -54,12 +54,6 @@ local_conf_header:
     PARALLEL_MAKE = "-j ${@oe.utils.cpu_count()}"
     # Disable interactive prompts
     CONNECTIVITY_CHECK_URIS = ""
-    # Embed the iPXE UNDI/SNP driver (built by the ipxe-efi recipe) into the
-    # DXE firmware volume, since RP1's onboard Ethernet has no edk2 driver of
-    # its own. This enables PXE boot from an add-on PCIe or USB NIC that iPXE
-    # recognises -- NOT the onboard RJ45 jack. Set to "0" for a plain,
-    # unmodified RPi5.fdf build.
-    # RPI5_IPXE = "1"
     # RELEASE (default), DEBUG or NOOPT. Bring-up used DEBUG for the serial
     # DEBUG() stream and the 0xAF freed-pool fill; flip back when chasing
     # crashes.

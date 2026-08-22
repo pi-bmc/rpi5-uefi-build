@@ -41,7 +41,6 @@ refused even then).
 | Recipe | Upstream | Produces |
 | --- | --- | --- |
 | `meta-rpi5-uefi/recipes-bsp/arm-trusted-firmware/arm-trusted-firmware_git.bb` | `ARM-software/arm-trusted-firmware`, pinned commit (see caveat below) | `bl31.bin` |
-| `meta-rpi5-uefi/recipes-bsp/ipxe/ipxe-efi_git.bb` | `ipxe/ipxe` master | `ipxe.efidrv`, `ipxe.efi` |
 | `meta-rpi5-uefi/recipes-bsp/edk2-platforms/edk2-platforms_git.bb` | `tianocore/edk2-platforms` `master`, pinned + this layer's RPi5 port | patched source tree, staged into the sysroot |
 | `meta-rpi5-uefi/recipes-bsp/edk2-non-osi/edk2-non-osi_git.bb` | `tianocore/edk2-non-osi` `master`, pinned | source tree, staged into the sysroot |
 | `meta-rpi5-uefi/recipes-bsp/edk2-redfish-client/edk2-redfish-client_git.bb` | `tianocore/edk2-redfish-client` `main`, pinned | source tree, staged into the sysroot |
@@ -60,12 +59,7 @@ The `edk2-rpi5-firmware` recipe builds
 `edk2-platforms/Platform/RaspberryPi/RPi5/RPi5.dsc`/`.fdf`, with
 `arm-trusted-firmware`'s `bl31.bin` embedded as the FD's region-0 payload
 (via `-D TFA_BUILD_ARTIFACTS=...`, the same mechanism
-`worproject`/`NumberOneGit`'s own `build.sh` uses) and, if `RPI5_IPXE = "1"`
-(the default), the iPXE driver embedded as an extra DXE driver FFS file
-inserted into `RPi5.fdf` at build time -- see that recipe's `do_compile()`
-for exactly how and why (a `sed`-based insertion, not a patch file, since the
-upstream file's exact current whitespace isn't reliably knowable ahead of
-time).
+`worproject`/`NumberOneGit`'s own `build.sh` uses).
 
 All `SRCREV`s are pinned to the exact commits `NumberOneGit/rpi5-uefi`'s own
 git tree points at, i.e. what that project's own published images are built
@@ -73,13 +67,14 @@ from.
 
 ## Three things worth flagging up front
 
-**"IPMI recipe" → iPXE.** The task that produced this repo asked for an
-"IPMI recipe that builds an efi rom ... to enable ethernet/PXE" -- there's no
-such thing as an EDK2-embeddable IPMI ROM for this purpose, but that
-description exactly matches `../nuc-bios-build`'s actual `ipxe-efi_git.bb`
-recipe (an EFI ROM built from iPXE, embedded in the firmware to give the
-UEFI PXE/HTTP boot stack a NIC driver). Read as "iPXE", which is what
-`meta-rpi5-uefi/recipes-bsp/ipxe/ipxe-efi_git.bb` builds.
+**"IPMI recipe" → iPXE → native driver (historical).** The task that produced
+this repo asked for an "IPMI recipe that builds an efi rom ... to enable
+ethernet/PXE". There's no such thing as an EDK2-embeddable IPMI ROM for that
+purpose; the description matched `../nuc-bios-build`'s `ipxe-efi_git.bb` (an
+EFI ROM built from iPXE, embedded to give the UEFI PXE/HTTP boot stack a NIC
+driver), so this layer shipped one for a while. It has since been removed:
+iPXE never recognised RP1's Ethernet MAC, so it could not drive the onboard
+jack, and `Rp1GemDxe` now does that natively. See "Onboard Ethernet" below.
 
 **`arm-trusted-firmware` branch substitution, sort of.** The task specified
 `https://github.com/ARM-software/arm-trusted-firmware.git` branch `rpi5`.
@@ -91,17 +86,19 @@ recipe keeps the URL exactly as given, using `nobranch=1` + a pinned `SRCREV`
 instead of `branch=rpi5`. No fork substitution was actually needed here --
 just pin-by-commit instead of pin-by-branch.
 
-**iPXE does *not* drive RP1's onboard Ethernet.** RP1 (the RPi5 southbridge
-with the onboard RJ45's MAC) has no PCI/USB-recognisable identity iPXE's
-driver table knows about -- it's Raspberry Pi silicon with a Linux driver
-only a couple of years old. Embedding iPXE gives the firmware's PXE/HTTP boot
-stack a NIC driver for whatever iPXE *does* recognise: a PCIe NIC on the RPi5's
-M.2/PCIe FPC connector, or a supported USB Ethernet dongle (iPXE's own
-`DRIVERS_rpi` group -- `smsc95xx`/`lan78xx` -- already exists upstream for the
-USB-Ethernet chips RPi3B+/4 use, and is included in this unrestricted build
-too). It does **not** make the onboard jack usable in UEFI. This matches the
-task's own "*This should enable ethernet/PXE*" hedge -- it does, but only for
-add-on NICs.
+**Onboard Ethernet is a native driver, not iPXE.** RP1 -- the RPi5 southbridge
+carrying the onboard RJ45's MAC -- has no PCI/USB-recognisable identity iPXE's
+driver table knows about; it is Raspberry Pi silicon with a Linux driver only a
+couple of years old. `Rp1GemDxe` (see below) is a from-scratch EDK2 SNP driver
+for it, so the onboard jack PXE/HTTP-boots through NetworkPkg's own
+`UefiPxeBcDxe` exactly as the Pi 4's does through `BcmGenetDxe`.
+
+iPXE was removed once that landed. The only coverage it still offered was
+add-on NICs -- a PCIe card on the M.2/FPC connector, or a USB dongle from its
+driver table -- and USB NICs are deliberately kept out of boot-option
+enumeration here (patches `0005` and `0103`), because that port is the BMC's
+host-interface link. If you need to network-boot from a PCIe add-in card, iPXE
+is the thing to bring back; `git log` has the recipe.
 
 ## Local drivers (pi-bmc port)
 
@@ -137,8 +134,6 @@ driver set needs.
 
 Set any of these in `kas.yml`'s `local_conf_header` (or `local.conf`):
 
-- `RPI5_IPXE` (default `"0"` since the native Rp1GemDxe covers onboard
-  PXE) -- embed the iPXE driver for add-on PCIe/USB NICs.
 - `RPI5_USBNET` (default `"1"`) -- wire edk2's USB CDC-ECM/NCM/RNDIS
   drivers into the build; the Redfish host interface has no link without it.
 - `RPI5_REDFISH_MAC` / `RPI5_REDFISH_USER` / `RPI5_REDFISH_PASSWORD` -- the

@@ -13,8 +13,7 @@ DESCRIPTION = "Builds Platform/RaspberryPi/RPi5/RPi5.dsc against UPSTREAM \
                sysroot: edk2-platforms (which carries the RPi5 port and its patch \
                series), edk2-non-osi and edk2-redfish-client. TF-A's bl31.bin (see the \
                arm-trusted-firmware recipe) is embedded as the FD.RPI_EFI region-0 \
-               payload, and, if RPI5_IPXE is enabled, an iPXE UNDI/SNP driver (see the \
-               ipxe-efi recipe) rides along as a prebuilt DXE driver."
+               payload."
 HOMEPAGE = "https://github.com/tianocore/edk2"
 
 # edk2's own License.txt. Each of the three sibling source-tree recipes
@@ -29,7 +28,6 @@ LIC_FILES_CHKSUM = "file://License.txt;md5=2b415520383f7964e96700ae12b4570a"
 # recipes-bsp/edk2-non-osi, recipes-bsp/edk2-redfish-client.
 DEPENDS = "edk2-platforms edk2-non-osi edk2-redfish-client"
 DEPENDS += "acpica-native arm-trusted-firmware util-linux-native"
-DEPENDS += "${@bb.utils.contains('RPI5_IPXE', '1', 'ipxe-efi', '', d)}"
 # do_compile validates the Secure Boot key files are DER X.509 before
 # handing them to the FDF -- see the RPI5_SECURE_BOOT_DEFAULT_KEYS block.
 DEPENDS += "${@bb.utils.contains('RPI5_SECURE_BOOT_DEFAULT_KEYS', '1', 'openssl-native', '', d)}"
@@ -55,7 +53,6 @@ PV = "202602+git${SRCPV}"
 # carries the ordering notes for it.
 SRC_URI = "gitsm://github.com/tianocore/edk2.git;protocol=https;branch=master;destsuffix=git \
            file://config.txt \
-           file://ipxe-fdf-snippet.fdf.inc \
            file://0001-EDK2-Sd-Mmc-v4.patch \
            file://0100-UsbNetwork-assume-media-on-a-point-to-point-gadget.patch \
            file://0101-RedfishDiscoverDxe-skip-the-IPv6-discovery-leg.patch \
@@ -162,13 +159,6 @@ inherit deploy
 S = "${UNPACKDIR}/git"
 
 do_compile[depends] += "arm-trusted-firmware:do_deploy"
-do_compile[depends] += "${@bb.utils.contains('RPI5_IPXE', '1', 'ipxe-efi:do_deploy', '', d)}"
-
-# iPXE embedding, now OFF by default: the onboard RJ45 PXE/HTTP-boots
-# natively via Rp1GemDxe + NetworkPkg's own UefiPxeBcDxe, so
-# iPXE's only remaining coverage is add-on NICs (a PCIe card on the FPC, or
-# a USB dongle from iPXE's driver table). Set to "1" to embed it for those.
-RPI5_IPXE ??= "0"
 
 # Wire edk2's own USB CDC-ECM/NCM/RNDIS class drivers (present in the
 # pinned tree, not in RPi5.dsc) into the build, so a USB Ethernet gadget on
@@ -351,11 +341,6 @@ RPI5_FMP_CERT_DAYS ??= "7300"
 RPI5_EDK2_EXTRA_FLAGS ??= ""
 
 do_configure[noexec] = "1"
-
-# The GUID below is only used to identify this one prebuilt-driver FFS file
-# within RPi5.fdf; it has no meaning outside this build (freshly generated,
-# not reused from anywhere else).
-IPXE_DRIVER_FILE_GUID = "c3e36d1a-8f42-4b3e-9a5d-2f6c7b8e9a10"
 
 # Generate the capsule signing keypair, once, if it is not already there.
 #
@@ -630,23 +615,6 @@ do_compile() {
         bbfatal "the capsule signing certificate did not reach ${dsc}. Without it FmpDxe has no key to authenticate against and no capsule can ever be applied."
 
     fmp_pcds="--pcd gRpiFmpTokenSpaceGuid.PcdRpi5FirmwareVersion=${RPI5_FMP_VERSION}"
-
-    # --- embed the iPXE UNDI/SNP driver, if built -----------------------
-    # ipxe-efi's do_deploy publishes bin-arm64-efi/ipxe.efidrv to
-    # DEPLOY_DIR_IMAGE; wire it into the DXE firmware volume as a prebuilt
-    # driver FFS file, right after the point where RPi5.fdf pulls in edk2's
-    # own NetworkPkg PXE/HTTP stack. Covers add-on PCIe/USB NICs iPXE
-    # recognises; the onboard RJ45 is Rp1GemDxe's job -- always built in, the
-    # way RPi4 always builds in BcmGenetDxe.
-    if [ "${RPI5_IPXE}" = "1" ]; then
-        snippet="${B}/ipxe-fdf-snippet.fdf.inc"
-        sed \
-            -e "s|@IPXE_DRIVER_FILE_GUID@|${IPXE_DRIVER_FILE_GUID}|" \
-            -e "s|@IPXE_EFIDRV_PATH@|${DEPLOY_DIR_IMAGE}/ipxe.efidrv|" \
-            "${WORKDIR}/ipxe-fdf-snippet.fdf.inc" > "${snippet}"
-        grep -qF "${IPXE_DRIVER_FILE_GUID}" "${fdf}" || \
-            sed -i "\|${fdf_marker}|r ${snippet}" "${fdf}"
-    fi
 
     # --- Secure Boot -----------------------------------------------------
     # SECURE_BOOT_ENABLE swaps RPi5.dsc onto the real AuthVariableLib and
