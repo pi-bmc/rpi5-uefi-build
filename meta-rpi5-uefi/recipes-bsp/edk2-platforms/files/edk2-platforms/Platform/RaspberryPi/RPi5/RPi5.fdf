@@ -57,9 +57,21 @@ FILE = $(TFA_BUILD_BL31)
 #
 # UEFI image
 #
-0x00020000|0x00390000
+0x00020000|0x00310000
 gArmTokenSpaceGuid.PcdFvBaseAddress|gArmTokenSpaceGuid.PcdFvSize
 FV = FVMAIN_COMPACT
+
+!if $(RPI5_OPTEE) == TRUE
+#
+# OP-TEE (BL32). BL31 (SPD=opteed, patched rpi5 TF-A) copies this region
+# to the secure DRAM carve-out at 0x1D000000 and enters it before BL33;
+# the offset/size pair is hardcoded there as
+# RPI5_OPTEE_IMAGE_OFFSET/RPI5_OPTEE_IMAGE_MAX_SIZE -- move all of them
+# together.
+#
+0x00330000|0x00080000
+FILE = $(TFA_BUILD_BL32)
+!endif
 
 #
 # Variables (0x20000 overall).
@@ -367,6 +379,9 @@ READ_LOCK_STATUS   = TRUE
   INF Platform/RaspberryPi/RPi5/Drivers/PowerButtonDxe/PowerButtonDxe.inf
   INF Platform/RaspberryPi/RPi5/Drivers/ActiveCoolerDxe/ActiveCoolerDxe.inf
   INF Platform/RaspberryPi/RPi5/Drivers/FanConfigDxe/FanConfigDxe.inf
+!if $(RPI5_OPTEE) == TRUE
+  INF Platform/RaspberryPi/RPi5/Drivers/RpiOpteeSensorDxe/RpiOpteeSensorDxe.inf
+!endif
 !if $(SECURE_BOOT_ENABLE) == TRUE
   INF Platform/RaspberryPi/Drivers/SecureBootToggleDxe/SecureBootToggleDxe.inf
 !endif

@@ -1,0 +1,43 @@
+#/** @file
+#
+#  EDK2 -> OP-TEE late-initialization handshake for the BMC sensor push
+#  service: waits for Rp1BusDxe (PCIe enumerated, RP1 BAR assigned),
+#  muxes GPIO2/3 to I2C1 and hands the BAR to the sensor pTA.
+#
+#  Copyright (c) 2026, pi-bmc contributors
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+#
+#**/
+
+[Defines]
+  INF_VERSION                    = 0x0001001A
+  BASE_NAME                      = RpiOpteeSensorDxe
+  FILE_GUID                      = e89b2391-f107-409f-b9c9-7c0d511492de
+  MODULE_TYPE                    = DXE_DRIVER
+  VERSION_STRING                 = 1.0
+  ENTRY_POINT                    = RpiOpteeSensorInitialize
+
+[Sources]
+  RpiOpteeSensorDxe.c
+
+[Packages]
+  ArmPkg/ArmPkg.dec
+  MdePkg/MdePkg.dec
+  Platform/RaspberryPi/RPi5/RPi5.dec
+  Silicon/RaspberryPi/RpiSiliconPkg/RpiSiliconPkg.dec
+
+[LibraryClasses]
+  BaseLib
+  BaseMemoryLib
+  DebugLib
+  OpteeLib
+  Rp1GpioLib
+  UefiBootServicesTableLib
+  UefiDriverEntryPoint
+
+[Protocols]
+  gRp1BusProtocolGuid           ## CONSUMES
+
+[Depex]
+  TRUE

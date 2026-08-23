@@ -31,6 +31,10 @@
   gRpiRedfishTokenSpaceGuid = { 0x7c3e8f52, 0x1b9a, 0x4d07, { 0xa6, 0x54, 0x2e, 0x91, 0xc8, 0x3f, 0x7b, 0x24 } }
   gRpiFmpTokenSpaceGuid     = { 0x62075a6a, 0xc3dd, 0x4b7d, { 0xa1, 0x18, 0x4b, 0x72, 0xe0, 0x47, 0x57, 0xfc } }
 
+  ## OP-TEE (BL32) integration: carve-out geometry and the sensor-service
+  #  contract (see Drivers/RpiOpteeSensorDxe and the optee-os recipe).
+  gRpiOpteeTokenSpaceGuid   = { 0xec2aa848, 0xe5f0, 0x45f5, { 0x82, 0xca, 0x70, 0x46, 0x97, 0x56, 0x1c, 0x9c } }
+
 [Protocols]
   ## Fan speed/policy control published by ActiveCoolerDxe and consumed by
   #  FanConfigDxe's Setup page.
@@ -58,3 +62,16 @@
   ## Integer firmware version FmpDeviceGetVersion reports and ESRT publishes.
   #  The recipe overrides it from RPI5_FMP_VERSION.
   gRpiFmpTokenSpaceGuid.PcdRpi5FirmwareVersion|202602|UINT32|0x00000001
+
+  ## OP-TEE secure DRAM carve-out. Defaults describe "no OP-TEE" (size 0 =
+  #  carve nothing, patch no DT nodes); RPi5.dsc sets the real geometry under
+  #  RPI5_OPTEE. Values must match OP-TEE's plat-rpi5 conf.mk
+  #  (CFG_TZDRAM_START/SIZE, CFG_SHMEM_START/SIZE -- SHM sits immediately
+  #  above TZDRAM) and the TF-A rpi5 BL32 defines.
+  gRpiOpteeTokenSpaceGuid.PcdOpteeTzdramBase|0x00000000|UINT64|0x00000001
+  gRpiOpteeTokenSpaceGuid.PcdOpteeTzdramSize|0x00000000|UINT32|0x00000002
+  gRpiOpteeTokenSpaceGuid.PcdOpteeShmSize|0x00000000|UINT32|0x00000003
+
+  ## GIC SPI number OP-TEE raises for async notifications (Linux "optee"
+  #  DT node interrupts property). SPI 200 is unused on BCM2712.
+  gRpiOpteeTokenSpaceGuid.PcdOpteeNotifSpi|200|UINT32|0x00000004

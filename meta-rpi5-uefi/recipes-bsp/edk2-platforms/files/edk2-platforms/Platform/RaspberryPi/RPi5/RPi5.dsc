@@ -34,11 +34,21 @@
   DEFINE INCLUDE_TFTP_COMMAND    = FALSE
   DEFINE DEBUG_PRINT_ERROR_LEVEL = 0x8000004F
 
+  #
+  # OP-TEE (BL32) integration: embeds tee-raw.bin in the FD (see RPi5.fdf),
+  # reserves the secure DRAM carve-out, and runs the EDK2->OP-TEE late
+  # initialization handshake for the BMC sensor service
+  # (RpiOpteeSensorDxe). Requires the TF-A build with SPD=opteed; the
+  # firmware recipe keeps the two in step via its RPI5_OPTEE knob.
+  #
+  DEFINE RPI5_OPTEE              = TRUE
+
 !ifndef TFA_BUILD_ARTIFACTS
   #
   # Default TF-A binary checked into edk2-non-osi.
   #
   DEFINE TFA_BUILD_BL31 = Platform/RaspberryPi/$(PLATFORM_NAME)/TrustedFirmware/bl31.bin
+  DEFINE TFA_BUILD_BL32 = Platform/RaspberryPi/$(PLATFORM_NAME)/TrustedFirmware/tee-raw.bin
 !else
   #
   # Usually we use the checked-in binaries, but for developers working
@@ -46,6 +56,7 @@
   # operations ends up being very helpful.
   #
   DEFINE TFA_BUILD_BL31 = $(TFA_BUILD_ARTIFACTS)/bl31.bin
+  DEFINE TFA_BUILD_BL32 = $(TFA_BUILD_ARTIFACTS)/tee-raw.bin
 !endif
 
   #
@@ -135,6 +146,7 @@
   DmaLib|EmbeddedPkg/Library/NonCoherentDmaLib/NonCoherentDmaLib.inf
   TimeBaseLib|EmbeddedPkg/Library/TimeBaseLib/TimeBaseLib.inf
   ArmSmcLib|MdePkg/Library/ArmSmcLib/ArmSmcLib.inf
+  OpteeLib|ArmPkg/Library/OpteeLib/OpteeLib.inf
   ArmTransferListLib|ArmPkg/Library/ArmTransferListLib/ArmTransferListLib.inf
   ArmGenericTimerCounterLib|ArmPkg/Library/ArmGenericTimerPhyCounterLib/ArmGenericTimerPhyCounterLib.inf
 
@@ -508,6 +520,20 @@
   gArmTokenSpaceGuid.PcdSystemMemorySize|0x3fc00000
 
   gRaspberryPiTokenSpaceGuid.PcdFdtSize|0x20000
+
+!if $(RPI5_OPTEE) == TRUE
+  #
+  # OP-TEE secure DRAM carve-out: TZDRAM [0x1D000000, 0x1F000000) + static
+  # SHM [0x1F000000, 0x1F400000), matching plat-rpi5 conf.mk and the TF-A
+  # BL32 defines. RaspberryPiMem.c punches the hole out of "System RAM
+  # < 1GB" (TZDRAM unmapped like the GPU carve-out, SHM mapped WB +
+  # reserved for OpteeLib); FdtDxe mirrors it as /reserved-memory/optee.
+  # The dec defaults (all zero) describe "no OP-TEE".
+  #
+  gRpiOpteeTokenSpaceGuid.PcdOpteeTzdramBase|0x1D000000
+  gRpiOpteeTokenSpaceGuid.PcdOpteeTzdramSize|0x02000000
+  gRpiOpteeTokenSpaceGuid.PcdOpteeShmSize|0x00400000
+!endif
 
   gEmbeddedTokenSpaceGuid.PcdPrePiCpuIoSize|40
 
@@ -950,6 +976,14 @@
   Platform/RaspberryPi/RPi5/Drivers/PowerButtonDxe/PowerButtonDxe.inf
   Platform/RaspberryPi/RPi5/Drivers/ActiveCoolerDxe/ActiveCoolerDxe.inf
   Platform/RaspberryPi/RPi5/Drivers/FanConfigDxe/FanConfigDxe.inf
+!if $(RPI5_OPTEE) == TRUE
+  #
+  # The EDK2->OP-TEE late initialization handshake: once Rp1BusDxe is up
+  # (PCIe enumerated, RP1 BAR assigned) it muxes GPIO2/3 to I2C1 and
+  # hands the BAR to the OP-TEE sensor pTA over the static SHM.
+  #
+  Platform/RaspberryPi/RPi5/Drivers/RpiOpteeSensorDxe/RpiOpteeSensorDxe.inf
+!endif
 !if $(SECURE_BOOT_ENABLE) == TRUE
   #
   # The Setup checkbox (and therefore the /Bios/Attributes/SecureBoot Redfish

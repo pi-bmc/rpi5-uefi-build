@@ -25,6 +25,7 @@
   ArmPlatformPkg/ArmPlatformPkg.dec
   Silicon/Broadcom/Bcm283x/Bcm283x.dec
   Platform/RaspberryPi/RaspberryPi.dec
+  Platform/RaspberryPi/RPi5/RPi5.dec
 
 [LibraryClasses]
   ArmLib
@@ -56,6 +57,9 @@
   gArmTokenSpaceGuid.PcdSystemMemorySize
   gRaspberryPiTokenSpaceGuid.PcdNvStorageEventLogSize
   gRaspberryPiTokenSpaceGuid.PcdNvStorageVariableBase
+  gRpiOpteeTokenSpaceGuid.PcdOpteeTzdramBase
+  gRpiOpteeTokenSpaceGuid.PcdOpteeTzdramSize
+  gRpiOpteeTokenSpaceGuid.PcdOpteeShmSize
   gRaspberryPiTokenSpaceGuid.PcdFwMailboxBaseAddress
 
 [Ppis]

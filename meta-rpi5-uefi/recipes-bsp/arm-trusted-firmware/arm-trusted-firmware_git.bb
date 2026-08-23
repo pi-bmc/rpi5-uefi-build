@@ -22,7 +22,9 @@ HOMEPAGE = "https://github.com/ARM-software/arm-trusted-firmware"
 LICENSE = "BSD-3-Clause"
 LIC_FILES_CHKSUM = "file://docs/license.rst;md5=6ed7bace7b0bc63021c6eba7b524039e"
 
-SRC_URI = "git://github.com/ARM-software/arm-trusted-firmware.git;protocol=https;nobranch=1"
+SRC_URI = "git://github.com/ARM-software/arm-trusted-firmware.git;protocol=https;nobranch=1 \
+           file://0001-rpi5-support-OP-TEE-as-BL32-via-SPD-opteed.patch \
+           "
 # Pinned to the exact commit NumberOneGit/rpi5-uefi's .gitmodules records for
 # this submodule (branch 'rpi5', now deleted upstream -- see DESCRIPTION).
 SRCREV = "000fe221b859ee82a4e2f8bf2c96f0086a772c89"
@@ -48,6 +50,15 @@ do_configure[noexec] = "1"
 TFA_DEBUG ??= "0"
 TFA_BUILD_TYPE = "${@'debug' if d.getVar('TFA_DEBUG') == '1' else 'release'}"
 
+# OP-TEE (BL32) support: SPD=opteed plus the preloaded-BL32 patch above
+# (BL31 copies tee-raw.bin from FD offset 0x330000 to 0x1D000000 -- see
+# the optee-os recipe and RPi5.fdf, and keep RPI5_OPTEE consistent
+# across this recipe, edk2-non-osi and rpi5-uefi-firmware). With
+# RPI5_OPTEE=0 no SPD is built and the patch's SPD_opteed-guarded code
+# compiles out.
+RPI5_OPTEE ??= "1"
+TFA_SPD_ARG = "${@'SPD=opteed' if d.getVar('RPI5_OPTEE') == '1' else ''}"
+
 do_compile() {
     # TF-A's own Makefile computes CC/AS/LD etc. from CROSS_COMPILE; leave
     # bitbake's exported cross CFLAGS/LDFLAGS out of it the same way the
@@ -61,6 +72,7 @@ do_compile() {
         RPI3_PRELOADED_DTB_BASE=0x3E0000 \
         SUPPORT_VFP=1 \
         SMC_PCI_SUPPORT=1 \
+        ${TFA_SPD_ARG} \
         DEBUG=${TFA_DEBUG} \
         CROSS_COMPILE="${TARGET_PREFIX}" \
         all

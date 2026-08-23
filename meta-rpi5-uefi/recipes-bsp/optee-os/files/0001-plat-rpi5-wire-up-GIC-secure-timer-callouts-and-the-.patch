@@ -1,0 +1,132 @@
+From: pi-bmc <nbatkins@gmail.com>
+Subject: [PATCH] plat-rpi5: wire up GIC, secure-timer callouts and the BMC
+ sensor service
+
+The upstream rpi5 platform is console-only. The pi-bmc sensor push
+service needs: the GIC-400 probed (TF-A keeps ownership of the
+distributor), the secure physical timer as a native interrupt driving
+the callout service, async notifications to the normal world on the
+otherwise-unused SPI 200 (INTID 232), static+dynamic shared memory, and
+the two service sources (rp1_i2c.c, bmc_sensor_pta.c -- shipped as
+overlay files by the optee-os recipe) in the build. The shared-memory
+window also moves adjacent to TZDRAM so the firmware carves a single
+[0x1D000000, 0x1F400000) hole out of RAM.
+
+---
+diff --git a/core/arch/arm/plat-rpi5/conf.mk b/core/arch/arm/plat-rpi5/conf.mk
+index 4bc9635..f3d2f89 100644
+--- a/core/arch/arm/plat-rpi5/conf.mk
++++ b/core/arch/arm/plat-rpi5/conf.mk
+@@ -6,7 +6,11 @@ $(call force,CFG_WITH_LPAE,y)
+ $(call force,CFG_AUTO_MAX_PA_BITS,y)
+ $(call force,CFG_LPAE_ADDR_SPACE_BITS,40)
+ 
+-CFG_SHMEM_START     ?= 0x08000000
++# pi-bmc: shared memory moved adjacent to TZDRAM so the firmware carves a
++# single [0x1D000000, 0x1F400000) hole out of the below-1GB RAM (upstream
++# default was 0x08000000). Must match the TF-A rpi5 BL32 defines, the EDK2
++# RaspberryPiMem.c carve-out and the reserved-memory/optee DT node.
++CFG_SHMEM_START     ?= 0x1F000000
+ CFG_SHMEM_SIZE      ?= 0x00400000
+ CFG_TZDRAM_START    ?= 0x1D000000
+ CFG_TZDRAM_SIZE     ?= 0x02000000
+@@ -19,3 +23,21 @@ $(call force,CFG_SECURE_TIME_SOURCE_CNTPCT,y)
+ $(call force,CFG_WITH_ARM_TRUSTED_FW,y)
+ 
+ CFG_NUM_THREADS ?= 4
++
++# pi-bmc BMC sensor push service: GIC-400 access (TF-A keeps ownership;
++# we group-0 the secure timer PPI and raise the notification SPI), async
++# notifications to the normal world on SPI 200 (INTID 232 -- unused by
++# any BCM2712 peripheral per the shipped DTB), and the secure-timer
++# callout service that paces the sampler. CFG_CALLOUT follows
++# CFG_CORE_ASYNC_NOTIF automatically.
++$(call force,CFG_GIC,y)
++CFG_CORE_ASYNC_NOTIF ?= y
++CFG_CORE_ASYNC_NOTIF_GIC_INTID ?= 232
++
++# EDK2's OpteeLib talks over the static (reserved) SHM; Linux prefers
++# dynamic SHM. Keep both enabled.
++CFG_CORE_RESERVED_SHM ?= y
++CFG_CORE_DYN_SHM ?= y
++
++# Pure pTA service; no user-mode TAs and no secure storage needed.
++CFG_WITH_USER_TA ?= n
+diff --git a/core/arch/arm/plat-rpi5/main.c b/core/arch/arm/plat-rpi5/main.c
+index 32b8014..e828c77 100644
+--- a/core/arch/arm/plat-rpi5/main.c
++++ b/core/arch/arm/plat-rpi5/main.c
+@@ -4,14 +4,48 @@
+  */
+ 
+ #include <console.h>
++#include <drivers/gic.h>
+ #include <drivers/pl011.h>
++#include <initcall.h>
++#include <kernel/boot.h>
++#include <kernel/interrupt.h>
++#include <kernel/timer.h>
++#include <mm/core_memprot.h>
+ #include <platform_config.h>
+ 
+ register_phys_mem_pgdir(MEM_AREA_IO_NSEC,
+ 			CONSOLE_UART_BASE, PL011_REG_SIZE);
+ 
++/* GIC-400; TF-A owns the distributor, we probe and use it */
++register_phys_mem_pgdir(MEM_AREA_IO_SEC, GICD_BASE, GIC_DIST_REG_SIZE);
++register_phys_mem_pgdir(MEM_AREA_IO_SEC, GICC_BASE, GIC_CPU_REG_SIZE);
++
+ static struct pl011_data console_data __nex_bss;
+ 
++void boot_primary_init_intc(void)
++{
++	gic_init(GICC_BASE, GICD_BASE);
++}
++
++void boot_secondary_init_intc(void)
++{
++	gic_init_per_cpu();
++}
++
++/*
++ * The callout service (BMC sensor sampler pacing) runs off the secure
++ * physical timer, taken as a native group-0 interrupt.
++ */
++static TEE_Result init_callout_service(void)
++{
++	timer_init_callout_service(interrupt_get_main_chip(),
++				   IT_SEC_PHY_TIMER);
++
++	return TEE_SUCCESS;
++}
++
++nex_early_init(init_callout_service);
++
+ void plat_console_init(void)
+ {
+ 	pl011_init(&console_data, CONSOLE_UART_BASE, CONSOLE_UART_CLK_IN_HZ,
+diff --git a/core/arch/arm/plat-rpi5/platform_config.h b/core/arch/arm/plat-rpi5/platform_config.h
+index 913fe5a..142ca13 100644
+--- a/core/arch/arm/plat-rpi5/platform_config.h
++++ b/core/arch/arm/plat-rpi5/platform_config.h
+@@ -19,4 +19,11 @@
+ #define DRAM0_BASE		0x00000000
+ #define DRAM0_SIZE		0x200000000
+ 
++/* GIC-400 (SoC bus 0x7fff9000/0x7fffa000 behind the 0x10_00000000 window) */
++#define GICD_BASE		0x107fff9000ULL
++#define GICC_BASE		0x107fffa000ULL
++
++/* Secure physical timer PPI, drives the callout service */
++#define IT_SEC_PHY_TIMER	29
++
+ #endif /* PLATFORM_CONFIG_H */
+diff --git a/core/arch/arm/plat-rpi5/sub.mk b/core/arch/arm/plat-rpi5/sub.mk
+index 8ddc2fd..2986693 100644
+--- a/core/arch/arm/plat-rpi5/sub.mk
++++ b/core/arch/arm/plat-rpi5/sub.mk
+@@ -1,2 +1,4 @@
+ global-incdirs-y += .
+ srcs-y += main.c
++srcs-y += rp1_i2c.c
++srcs-y += bmc_sensor_pta.c

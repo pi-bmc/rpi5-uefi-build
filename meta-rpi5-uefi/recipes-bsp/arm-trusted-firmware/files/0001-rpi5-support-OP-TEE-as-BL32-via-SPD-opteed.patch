@@ -1,0 +1,96 @@
+From: pi-bmc <nbatkins@gmail.com>
+Subject: [PATCH] rpi5: support OP-TEE as BL32 via SPD=opteed
+
+The rpi5 port is BL31-only (RESET_TO_BL31, no BL2), so nothing ever
+populated bl32_image_ep_info. Add the preloaded-BL32 arrangement used by
+the pi-bmc firmware: the OP-TEE image rides inside the RPI_EFI.fd blob
+the VPU loads at 0x0 (FD region at offset 0x330000, see RPi5.fdf);
+bl31_early_platform_setup2 copies it to the secure DRAM carve-out at
+0x1D000000 while the MMU is still off and fills in the classic opteed
+handoff. rpi3_common.c already maps BL32_MEM and provides the SPSR
+helper once BL32_BASE/SPD_opteed are defined. MAX_MMAP_REGIONS and
+MAX_XLAT_TABLES grow to cover the added BL32 region.
+
+Guarded by SPD_opteed throughout: a build without SPD=opteed is
+bit-identical to before.
+
+---
+diff -ur a/plat/rpi/common/rpi4_bl31_setup.c b/plat/rpi/common/rpi4_bl31_setup.c
+--- a/plat/rpi/common/rpi4_bl31_setup.c	2026-08-22 20:47:17.067695866 -0500
++++ b/plat/rpi/common/rpi4_bl31_setup.c	2026-08-22 20:47:17.078931128 -0500
+@@ -7,6 +7,7 @@
+ #include <assert.h>
+ #include <inttypes.h>
+ #include <stdint.h>
++#include <string.h>
+ 
+ #include <arch_helpers.h>
+ #include <common/bl_common.h>
+@@ -136,6 +137,27 @@
+ 	bl33_image_ep_info.spsr = rpi3_get_spsr_for_bl33_entry();
+ 	SET_SECURITY_STATE(bl33_image_ep_info.h.attr, NON_SECURE);
+ 
++#ifdef SPD_opteed
++	/*
++	 * BL32 (OP-TEE, AArch64) rides inside the armstub blob the VPU
++	 * loaded at 0x0. Move it to the secure DRAM carve-out while the
++	 * MMU and caches are still off, and describe it for opteed
++	 * using the classic handoff: arg0 = exec state, arg1 = pageable
++	 * part, arg2 = memory limit, arg3 = DT address (none of which
++	 * apply here).
++	 */
++	memcpy((void *)BL32_BASE, (void *)RPI5_OPTEE_IMAGE_OFFSET,
++	       RPI5_OPTEE_IMAGE_MAX_SIZE);
++
++	bl32_image_ep_info.pc = BL32_BASE;
++	bl32_image_ep_info.spsr = rpi3_get_spsr_for_bl32_entry();
++	SET_SECURITY_STATE(bl32_image_ep_info.h.attr, SECURE);
++	bl32_image_ep_info.args.arg0 = MODE_RW_64;
++	bl32_image_ep_info.args.arg1 = 0;
++	bl32_image_ep_info.args.arg2 = 0;
++	bl32_image_ep_info.args.arg3 = 0;
++#endif
++
+ #if RPI3_DIRECT_LINUX_BOOT
+ # if RPI3_BL33_IN_AARCH32
+ 	/*
+diff -ur a/plat/rpi/rpi5/include/platform_def.h b/plat/rpi/rpi5/include/platform_def.h
+--- a/plat/rpi/rpi5/include/platform_def.h	2026-08-22 20:47:17.067103455 -0500
++++ b/plat/rpi/rpi5/include/platform_def.h	2026-08-22 20:47:17.078880836 -0500
+@@ -117,8 +117,8 @@
+ #define PLAT_PHY_ADDR_SPACE_SIZE	(ULL(1) << 40)
+ #define PLAT_VIRT_ADDR_SPACE_SIZE	(ULL(1) << 40)
+ 
+-#define MAX_MMAP_REGIONS		8
+-#define MAX_XLAT_TABLES			4
++#define MAX_MMAP_REGIONS		16
++#define MAX_XLAT_TABLES			8
+ 
+ #define MAX_IO_DEVICES			U(3)
+ #define MAX_IO_HANDLES			U(4)
+@@ -126,6 +126,25 @@
+ #define MAX_IO_BLOCK_DEVICES		U(1)
+ 
+ /*
++ * BL32: OP-TEE, entered via SPD=opteed. The image rides inside the
++ * RPI_EFI.fd blob the VPU loads at 0x0 (a dedicated FD region at offset
++ * RPI5_OPTEE_IMAGE_OFFSET, see RPi5.fdf); bl31_early_platform_setup2
++ * copies it to the secure DRAM carve-out before the MMU comes up.
++ * BL32_MEM_* must match OP-TEE's CFG_TZDRAM_START/SIZE (plat-rpi5
++ * conf.mk) and the carve-out EDK2 reserves (RaspberryPiMem.c); OP-TEE's
++ * static SHM sits right above at 0x1F000000-0x1F400000.
++ */
++#ifdef SPD_opteed
++#define RPI5_OPTEE_IMAGE_OFFSET		ULL(0x00330000)
++#define RPI5_OPTEE_IMAGE_MAX_SIZE	ULL(0x00080000)
++
++#define BL32_MEM_BASE			ULL(0x1D000000)
++#define BL32_MEM_SIZE			ULL(0x02000000)
++#define BL32_BASE			BL32_MEM_BASE
++#define BL32_LIMIT			(BL32_MEM_BASE + BL32_MEM_SIZE)
++#endif
++
++/*
+  * Serial-related constants.
+  */
+ #define PLAT_RPI_PL011_UART_BASE	RPI4_PL011_UART_BASE

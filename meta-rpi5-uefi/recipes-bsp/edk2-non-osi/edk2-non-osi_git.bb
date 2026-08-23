@@ -33,9 +33,10 @@ LIC_FILES_CHKSUM = "file://Readme.md;md5=7683be75b315e148746417d1238d3157"
 
 PV = "202509+git${SRCPV}"
 
-# bl31.bin, staged under ${STAGING_DATADIR}/arm-trusted-firmware and installed
-# into the tree below.
-DEPENDS = "arm-trusted-firmware"
+# bl31.bin, staged under ${STAGING_DATADIR}/arm-trusted-firmware, and OP-TEE's
+# tee-raw.bin, staged under ${STAGING_DATADIR}/optee-os, both installed into
+# the tree below.
+DEPENDS = "arm-trusted-firmware optee-os"
 
 SRC_URI = "git://github.com/tianocore/edk2-non-osi.git;protocol=https;branch=master;destsuffix=edk2-non-osi"
 
@@ -71,6 +72,9 @@ EDK2_SOURCE_ROOT = "${datadir}/edk2"
 # Must match arm-trusted-firmware's TFA_SYSROOT_DIR.
 TFA_SYSROOT_DIR = "${STAGING_DATADIR}/arm-trusted-firmware"
 
+# Must match optee-os's OPTEE_SYSROOT_DIR.
+OPTEE_SYSROOT_DIR = "${STAGING_DATADIR}/optee-os"
+
 # Where RPi5.dsc's "!ifndef TFA_BUILD_ARTIFACTS" branch looks, relative to a
 # PACKAGES_PATH root: Platform/RaspberryPi/$(PLATFORM_NAME)/TrustedFirmware.
 TFA_BL31_SUBDIR = "Platform/RaspberryPi/RPi5/TrustedFirmware"
@@ -88,4 +92,12 @@ do_install() {
     install -d ${D}${EDK2_SOURCE_ROOT}/edk2-non-osi/${TFA_BL31_SUBDIR}
     install -m 0644 ${TFA_SYSROOT_DIR}/bl31.bin \
         ${D}${EDK2_SOURCE_ROOT}/edk2-non-osi/${TFA_BL31_SUBDIR}/bl31.bin
+
+    # OP-TEE (BL32), same arrangement: RPi5.fdf's TFA_BUILD_BL32 names this
+    # path. Staged unconditionally; RPI5_OPTEE=FALSE in the firmware recipe
+    # simply leaves it out of the FD.
+    [ -f "${OPTEE_SYSROOT_DIR}/tee-raw.bin" ] || \
+        bbfatal "optee-os staged no ${OPTEE_SYSROOT_DIR}/tee-raw.bin -- without it the FD has no BL32 payload for the opteed dispatcher."
+    install -m 0644 ${OPTEE_SYSROOT_DIR}/tee-raw.bin \
+        ${D}${EDK2_SOURCE_ROOT}/edk2-non-osi/${TFA_BL31_SUBDIR}/tee-raw.bin
 }

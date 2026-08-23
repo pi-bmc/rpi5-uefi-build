@@ -22,7 +22,7 @@ UINT64 mSystemMemoryBase;
 extern UINT64 mSystemMemoryEnd;
 
 // The total number of descriptors, including the final "end-of-table" descriptor.
-#define MAX_VIRTUAL_MEMORY_MAP_DESCRIPTORS 11
+#define MAX_VIRTUAL_MEMORY_MAP_DESCRIPTORS 14
 
 STATIC BOOLEAN                  VirtualMemoryInfoInitialized = FALSE;
 STATIC RPI_MEMORY_REGION_INFO   VirtualMemoryInfo[MAX_VIRTUAL_MEMORY_MAP_DESCRIPTORS];
@@ -107,13 +107,55 @@ ArmPlatformGetVirtualMemoryMap (
   VirtualMemoryInfo[Index].Type             = RPI_MEM_RESERVED_REGION;
   VirtualMemoryInfo[Index++].Name           = L"Flattened Device Tree";
 
-  // Base System RAM
-  VirtualMemoryTable[Index].PhysicalBase    = FixedPcdGet64 (PcdSystemMemoryBase);
-  VirtualMemoryTable[Index].VirtualBase     = VirtualMemoryTable[Index].PhysicalBase;
-  VirtualMemoryTable[Index].Length          = mSystemMemoryEnd + 1 - FixedPcdGet64 (PcdSystemMemoryBase);
-  VirtualMemoryTable[Index].Attributes      = ARM_MEMORY_REGION_ATTRIBUTE_WRITE_BACK;
-  VirtualMemoryInfo[Index].Type             = RPI_MEM_BASIC_REGION;
-  VirtualMemoryInfo[Index++].Name           = L"System RAM < 1GB";
+  //
+  // Base System RAM. With OP-TEE built in (PcdOpteeTzdramSize != 0), punch
+  // its carve-out [TZDRAM | static SHM] out of this range: the TZDRAM half
+  // gets the GPU-Reserved treatment (device-mapped, no HOB, invisible to
+  // the OS), the SHM half stays mapped write-back with a reserved-memory
+  // HOB so OpteeLib can talk to OP-TEE over it. The carve-out must lie
+  // wholly inside this region or it is skipped (and OP-TEE, which TF-A
+  // placed at compile time, would be left unprotected -- keep the PCDs,
+  // the TF-A defines and plat-rpi5 conf.mk in step).
+  //
+  if ((FixedPcdGet32 (PcdOpteeTzdramSize) != 0) &&
+      (FixedPcdGet64 (PcdOpteeTzdramBase) > FixedPcdGet64 (PcdSystemMemoryBase)) &&
+      (FixedPcdGet64 (PcdOpteeTzdramBase) + FixedPcdGet32 (PcdOpteeTzdramSize) +
+       FixedPcdGet32 (PcdOpteeShmSize) <= mSystemMemoryEnd + 1)) {
+    VirtualMemoryTable[Index].PhysicalBase  = FixedPcdGet64 (PcdSystemMemoryBase);
+    VirtualMemoryTable[Index].VirtualBase   = VirtualMemoryTable[Index].PhysicalBase;
+    VirtualMemoryTable[Index].Length        = FixedPcdGet64 (PcdOpteeTzdramBase) - FixedPcdGet64 (PcdSystemMemoryBase);
+    VirtualMemoryTable[Index].Attributes    = ARM_MEMORY_REGION_ATTRIBUTE_WRITE_BACK;
+    VirtualMemoryInfo[Index].Type           = RPI_MEM_BASIC_REGION;
+    VirtualMemoryInfo[Index++].Name         = L"System RAM < 1GB";
+
+    VirtualMemoryTable[Index].PhysicalBase  = FixedPcdGet64 (PcdOpteeTzdramBase);
+    VirtualMemoryTable[Index].VirtualBase   = VirtualMemoryTable[Index].PhysicalBase;
+    VirtualMemoryTable[Index].Length        = FixedPcdGet32 (PcdOpteeTzdramSize);
+    VirtualMemoryTable[Index].Attributes    = ARM_MEMORY_REGION_ATTRIBUTE_DEVICE;
+    VirtualMemoryInfo[Index].Type           = RPI_MEM_UNMAPPED_REGION;
+    VirtualMemoryInfo[Index++].Name         = L"OP-TEE TZDRAM";
+
+    VirtualMemoryTable[Index].PhysicalBase  = FixedPcdGet64 (PcdOpteeTzdramBase) + FixedPcdGet32 (PcdOpteeTzdramSize);
+    VirtualMemoryTable[Index].VirtualBase   = VirtualMemoryTable[Index].PhysicalBase;
+    VirtualMemoryTable[Index].Length        = FixedPcdGet32 (PcdOpteeShmSize);
+    VirtualMemoryTable[Index].Attributes    = ARM_MEMORY_REGION_ATTRIBUTE_WRITE_BACK;
+    VirtualMemoryInfo[Index].Type           = RPI_MEM_RESERVED_REGION;
+    VirtualMemoryInfo[Index++].Name         = L"OP-TEE Shared Memory";
+
+    VirtualMemoryTable[Index].PhysicalBase  = VirtualMemoryTable[Index - 1].PhysicalBase + VirtualMemoryTable[Index - 1].Length;
+    VirtualMemoryTable[Index].VirtualBase   = VirtualMemoryTable[Index].PhysicalBase;
+    VirtualMemoryTable[Index].Length        = mSystemMemoryEnd + 1 - VirtualMemoryTable[Index].PhysicalBase;
+    VirtualMemoryTable[Index].Attributes    = ARM_MEMORY_REGION_ATTRIBUTE_WRITE_BACK;
+    VirtualMemoryInfo[Index].Type           = RPI_MEM_BASIC_REGION;
+    VirtualMemoryInfo[Index++].Name         = L"System RAM < 1GB (high)";
+  } else {
+    VirtualMemoryTable[Index].PhysicalBase  = FixedPcdGet64 (PcdSystemMemoryBase);
+    VirtualMemoryTable[Index].VirtualBase   = VirtualMemoryTable[Index].PhysicalBase;
+    VirtualMemoryTable[Index].Length        = mSystemMemoryEnd + 1 - FixedPcdGet64 (PcdSystemMemoryBase);
+    VirtualMemoryTable[Index].Attributes    = ARM_MEMORY_REGION_ATTRIBUTE_WRITE_BACK;
+    VirtualMemoryInfo[Index].Type           = RPI_MEM_BASIC_REGION;
+    VirtualMemoryInfo[Index++].Name         = L"System RAM < 1GB";
+  }
 
   // GPU Reserved
   VirtualMemoryTable[Index].PhysicalBase    = mSystemMemoryEnd + 1;
