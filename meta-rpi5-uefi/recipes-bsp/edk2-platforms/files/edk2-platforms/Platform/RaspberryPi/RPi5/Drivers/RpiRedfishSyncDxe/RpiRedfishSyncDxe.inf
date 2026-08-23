@@ -53,10 +53,14 @@
   gEfiBlockIoProtocolGuid                   ## CONSUMES
   gEfiDevicePathProtocolGuid                ## CONSUMES
   gEfiNvmExpressPassThruProtocolGuid        ## CONSUMES
+  gEfiBootManagerPolicyProtocolGuid         ## SOMETIMES_CONSUMES
   gRpiFanProtocolGuid                       ## SOMETIMES_CONSUMES
 
 [Guids]
   gEfiGlobalVariableGuid                    ## CONSUMES
+  gEfiEventReadyToBootGuid                  ## CONSUMES ## Event
+  gEfiBootManagerPolicyNetworkGuid          ## CONSUMES
+  gEfiBootManagerPolicyConnectAllGuid       ## CONSUMES
   gEfiDiskInfoNvmeInterfaceGuid             ## CONSUMES
   gEfiDiskInfoAhciInterfaceGuid             ## CONSUMES
   gEfiDiskInfoIdeInterfaceGuid              ## CONSUMES

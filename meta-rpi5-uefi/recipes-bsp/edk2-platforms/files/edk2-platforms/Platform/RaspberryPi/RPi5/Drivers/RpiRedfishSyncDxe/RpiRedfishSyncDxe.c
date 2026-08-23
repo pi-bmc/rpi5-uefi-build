@@ -40,10 +40,91 @@
 #include <Library/JsonLib.h>
 #include <Library/UefiBootManagerLib.h>
 
+#include <Protocol/BootManagerPolicy.h>
 #include <Protocol/RpiFan.h>
 
 STATIC EFI_HANDLE       mImageHandle    = NULL;
 STATIC BOOLEAN          mSyncDone       = FALSE;
+STATIC BOOLEAN          mSettled        = FALSE;
+STATIC BOOLEAN          mReadyToBoot    = FALSE;
+
+//
+// Installed (bare, no interface) once the first sync attempt has run to
+// completion -- whatever its outcome. PlatformBootManagerLib waits a bounded
+// time for this before letting BDS proceed to the boot selection, so a boot
+// override staged on the BMC is consumed BEFORE the default option boots
+// rather than racing it: since the USB NIC gate moved the Redfish stack's
+// bring-up out of ConnectAll (edk2-platforms patch 0034 / edk2 patch 0108),
+// nothing else serializes the exchange against the boot. The GUID literal is
+// duplicated in PlatformBm.c; keep the two in sync.
+//
+STATIC CONST EFI_GUID   mRpiRedfishSyncSettledGuid = {
+  0x47a80c52, 0x948f, 0x4972, { 0x81, 0xe1, 0x6b, 0x32, 0x32, 0x4b, 0x06, 0x08 }
+};
+
+//
+// NV breadcrumb (vendor GUID: the settled GUID above) marking that the
+// previous boot staged BootNext for a "Continuous" override and cold-reset.
+// Its presence means THIS boot is the one launching that target: BdsEntry
+// caches BootNext before any platform hook runs (BdsEntry.c, "Cache the
+// BootNext NV variable before calling any PlatformBootManagerLib APIs"),
+// so if the sync staged and reset again here, the cached target would be
+// thrown away every cycle and the machine would reset forever without ever
+// reaching it. The sync deletes the breadcrumb and stands aside for that
+// one boot instead.
+//
+#define RPI_REDFISH_CONTINUOUS_MARK_VAR  L"RpiSyncContinuousApplied"
+
+/**
+  Mark the sync as settled for whoever is waiting on it.
+
+  Idempotent; installs mRpiRedfishSyncSettledGuid on a fresh handle. Never
+  fails the caller -- a failed install only costs the waiter its full bound.
+**/
+STATIC
+VOID
+SignalSyncSettled (
+  VOID
+  )
+{
+  EFI_STATUS  Status;
+  EFI_HANDLE  Handle;
+
+  if (mSettled) {
+    return;
+  }
+
+  mSettled = TRUE;
+  Handle   = NULL;
+  Status   = gBS->InstallProtocolInterface (
+                    &Handle,
+                    (EFI_GUID *)&mRpiRedfishSyncSettledGuid,
+                    EFI_NATIVE_INTERFACE,
+                    NULL
+                    );
+  DEBUG ((DEBUG_ERROR, "RpiRedfishSync: settled - %r\n", Status));
+}
+
+/**
+  Latch ReadyToBoot. Past this point a boot override must not be applied:
+  staging BootNext and cold-resetting under a loaded OS loader would yank the
+  machine out from under it. HandleBootOverride() checks the latch and leaves
+  the override staged on the BMC instead; the next boot's sync -- which runs
+  long before ReadyToBoot -- picks it up.
+
+  @param[in] Event    The ReadyToBoot event.
+  @param[in] Context  Unused.
+**/
+STATIC
+VOID
+EFIAPI
+OnReadyToBoot (
+  IN EFI_EVENT  Event,
+  IN VOID       *Context
+  )
+{
+  mReadyToBoot = TRUE;
+}
 
 /**
   Log an HTTP status code alongside the URI it came from.
@@ -221,6 +302,95 @@ OptionIsDiskBoot (
 }
 
 /**
+  Does one boot option satisfy one Redfish BootSourceOverrideTarget?
+
+  @param[in] Target  Redfish BootSourceOverrideTarget value.
+  @param[in] Option  Boot option to test.
+
+  @retval TRUE   The option satisfies the target.
+  @retval FALSE  It does not.
+**/
+STATIC
+BOOLEAN
+OptionMatchesTarget (
+  IN CONST CHAR8                   *Target,
+  IN EFI_BOOT_MANAGER_LOAD_OPTION  *Option
+  )
+{
+  if (AsciiStrCmp (Target, "BiosSetup") == 0) {
+    //
+    // The setup UI (UiApp) is the boot option BDS tags as an application.
+    //
+    return ((Option->Attributes & LOAD_OPTION_CATEGORY) == LOAD_OPTION_CATEGORY_APP);
+  }
+
+  if (AsciiStrCmp (Target, "Pxe") == 0) {
+    //
+    // Network boot is BDS's own "PXEv4 (MAC:...)" option for the onboard
+    // RJ45, auto-created once Rp1GemDxe publishes SNP for it. Match the
+    // device path rather than the description, which is localised.
+    //
+    return OptionIsNetworkBoot (Option);
+  }
+
+  if (AsciiStrCmp (Target, "Hdd") == 0) {
+    //
+    // Local block storage, in whichever shape BDS has it at this point.
+    // See OptionIsDiskBoot().
+    //
+    return OptionIsDiskBoot (Option);
+  }
+
+  return FALSE;
+}
+
+/**
+  Connect the device class a boot override target implies.
+
+  Under BDP_CONNECT_MINIMAL -- this platform's default Boot Discovery
+  Policy -- nothing connects the onboard NIC or extra storage during an
+  ordinary boot, so the boot option a "Pxe" or "Hdd" override needs may not
+  exist yet. Same ConnectDeviceClass plumbing BootDiscoveryPolicyHandler
+  uses, driven by the override instead of the policy variable.
+
+  @param[in] Target  Redfish BootSourceOverrideTarget value.
+**/
+STATIC
+VOID
+ConnectBootClassDevices (
+  IN CONST CHAR8  *Target
+  )
+{
+  EFI_STATUS                        Status;
+  EFI_BOOT_MANAGER_POLICY_PROTOCOL  *Policy;
+  EFI_GUID                          *Class;
+
+  Status = gBS->LocateProtocol (
+                  &gEfiBootManagerPolicyProtocolGuid,
+                  NULL,
+                  (VOID **)&Policy
+                  );
+  if (EFI_ERROR (Status)) {
+    DEBUG ((DEBUG_ERROR, "RpiRedfishSync: no boot manager policy - %r\n", Status));
+    return;
+  }
+
+  if (AsciiStrCmp (Target, "Pxe") == 0) {
+    Class = &gEfiBootManagerPolicyNetworkGuid;
+  } else {
+    Class = &gEfiBootManagerPolicyConnectAllGuid;
+  }
+
+  Status = Policy->ConnectDeviceClass (Policy, Class);
+  DEBUG ((
+    DEBUG_ERROR,
+    "RpiRedfishSync: connected device class for '%a' - %r\n",
+    Target,
+    Status
+    ));
+}
+
+/**
   Find the boot option matching a Redfish BootSourceOverrideTarget.
 
   Redfish names boot *classes* ("Pxe", "Hdd", "BiosSetup"); UEFI has numbered
@@ -255,6 +425,7 @@ FindBootOverrideOption (
   )
 {
   UINTN    Index;
+  UINTN    Pass;
   BOOLEAN  Found;
 
   *Options     = NULL;
@@ -292,30 +463,44 @@ FindBootOverrideOption (
       ));
   }
 
-  for (Index = 0; Index < *OptionCount; Index++) {
-    if (AsciiStrCmp (Target, "BiosSetup") == 0) {
-      //
-      // The setup UI (UiApp) is the boot option BDS tags as an application.
-      //
-      Found = (((*Options)[Index].Attributes & LOAD_OPTION_CATEGORY) == LOAD_OPTION_CATEGORY_APP);
-    } else if (AsciiStrCmp (Target, "Pxe") == 0) {
-      //
-      // Network boot is BDS's own "PXEv4 (MAC:...)" option for the onboard
-      // RJ45, auto-created once Rp1GemDxe publishes SNP for it. Match the
-      // device path rather than the description, which is localised.
-      //
-      Found = OptionIsNetworkBoot (&(*Options)[Index]);
-    } else if (AsciiStrCmp (Target, "Hdd") == 0) {
-      //
-      // Local block storage, in whichever shape BDS has it at this point.
-      // See OptionIsDiskBoot().
-      //
-      Found = OptionIsDiskBoot (&(*Options)[Index]);
+  for (Pass = 0; Pass < 2; Pass++) {
+    for (Index = 0; Index < *OptionCount; Index++) {
+      if (OptionMatchesTarget (Target, &(*Options)[Index])) {
+        Found  = TRUE;
+        *Match = Index;
+        break;
+      }
     }
 
-    if (Found) {
-      *Match = Index;
+    if (Found || (Pass == 1)) {
       break;
+    }
+
+    //
+    // Nothing matched the options as they stand. Under BDP_CONNECT_MINIMAL
+    // (this platform's default) the device class the target implies may
+    // never have been connected this boot, and its boot option never
+    // created -- a PXE option only exists once the onboard NIC's network
+    // stack has published a load file. Connect the class, refresh the
+    // options, scan once more. (The RHI's own USB NIC can never satisfy
+    // "Pxe": OptionIsNetworkBoot rejects USB device paths, and patch 0103
+    // keeps USB NICs out of enumeration entirely.)
+    //
+    DEBUG ((
+      DEBUG_ERROR,
+      "RpiRedfishSync: no option matches '%a' yet, connecting its device class\n",
+      Target
+      ));
+    EfiBootManagerFreeLoadOptions (*Options, *OptionCount);
+    *Options     = NULL;
+    *OptionCount = 0;
+
+    ConnectBootClassDevices (Target);
+    EfiBootManagerRefreshAllBootOption ();
+
+    *Options = EfiBootManagerGetLoadOptions (OptionCount, LoadOptionTypeBoot);
+    if ((*Options == NULL) || (*OptionCount == 0)) {
+      return EFI_NOT_FOUND;
     }
   }
 
@@ -413,12 +598,20 @@ ApplyMatchedOption (
 }
 
 /**
-  Read the BMC's requested boot override from a ComputerSystem payload and apply
-  it, then tell the BMC it has been consumed.
+  Read the BMC's requested boot override from a ComputerSystem payload and act
+  on it.
 
-  Only "Once" overrides are honoured. A "Continuous" override would re-apply on
-  every boot with no way for the host to clear it, which is a boot loop waiting
-  to happen on a link whose only operator is the BMC.
+  A "Once" override is acknowledged to the BMC (cleared) and then applied via
+  BootNext plus a cold reset -- consumed exactly once, and the target gets a
+  clean full-reset boot.
+
+  A "Continuous" override is applied exactly the same way, minus the
+  acknowledgement: it stays staged on the BMC until the operator clears it,
+  and re-applies on every subsequent boot cycle. What breaks the
+  otherwise-infinite stage/reset loop is RPI_REDFISH_CONTINUOUS_MARK_VAR
+  (see its comment): the boot that stages BootNext sets it, and the next
+  boot's sync sees it, deletes it and stands aside while BDS launches the
+  target it cached at entry.
 
   @param[in] Service   Redfish service to acknowledge through.
   @param[in] Response  Response holding the ComputerSystem payload.
@@ -440,6 +633,18 @@ HandleBootOverride (
   EFI_BOOT_MANAGER_LOAD_OPTION  *Options;
   UINTN                         OptionCount;
   UINTN                         Match;
+  BOOLEAN                       IsOnce;
+  BOOLEAN                       IsContinuous;
+  UINTN                         DataSize;
+  UINT16                        Mark;
+
+  if (mReadyToBoot) {
+    DEBUG ((
+      DEBUG_ERROR,
+      "RpiRedfishSync: past ReadyToBoot, leaving any boot override staged for the next boot\n"
+      ));
+    return;
+  }
 
   if ((Response == NULL) || (Response->Payload == NULL)) {
     return;
@@ -468,11 +673,74 @@ HandleBootOverride (
     (Enabled == NULL) ? "(unset)" : Enabled
     ));
 
-  if ((Enabled == NULL) || (AsciiStrCmp (Enabled, "Once") != 0)) {
+  IsOnce       = ((Enabled != NULL) && (AsciiStrCmp (Enabled, "Once") == 0));
+  IsContinuous = ((Enabled != NULL) && (AsciiStrCmp (Enabled, "Continuous") == 0));
+
+  if (!IsOnce && !IsContinuous) {
     return;
   }
 
+  if (IsContinuous) {
+    DataSize = 0;
+    Status   = gRT->GetVariable (
+                      RPI_REDFISH_CONTINUOUS_MARK_VAR,
+                      (EFI_GUID *)&mRpiRedfishSyncSettledGuid,
+                      NULL,
+                      &DataSize,
+                      NULL
+                      );
+    if (Status == EFI_BUFFER_TOO_SMALL) {
+      //
+      // This boot exists to launch the BootNext the previous boot staged;
+      // BdsEntry cached it at entry. Stand aside.
+      //
+      gRT->SetVariable (
+             RPI_REDFISH_CONTINUOUS_MARK_VAR,
+             (EFI_GUID *)&mRpiRedfishSyncSettledGuid,
+             0,
+             0,
+             NULL
+             );
+      DEBUG ((
+        DEBUG_ERROR,
+        "RpiRedfishSync: continuous override boot in progress, standing aside\n"
+        ));
+      return;
+    }
+  }
+
   if (EFI_ERROR (FindBootOverrideOption (Target, &Options, &OptionCount, &Match))) {
+    return;
+  }
+
+  if (IsContinuous) {
+    //
+    // Same apply as "Once", minus the acknowledgement -- Continuous stays
+    // staged on the BMC by definition. Mark the cycle first: without the
+    // breadcrumb the next boot would stage and reset again forever, so a
+    // mark that cannot be written means the override must not be applied.
+    //
+    Mark   = (UINT16)Options[Match].OptionNumber;
+    Status = gRT->SetVariable (
+                    RPI_REDFISH_CONTINUOUS_MARK_VAR,
+                    (EFI_GUID *)&mRpiRedfishSyncSettledGuid,
+                    EFI_VARIABLE_NON_VOLATILE | EFI_VARIABLE_BOOTSERVICE_ACCESS,
+                    sizeof (Mark),
+                    &Mark
+                    );
+    if (EFI_ERROR (Status)) {
+      DEBUG ((
+        DEBUG_ERROR,
+        "RpiRedfishSync: cannot mark the continuous cycle (%r), not applying\n",
+        Status
+        ));
+      EfiBootManagerFreeLoadOptions (Options, OptionCount);
+      return;
+    }
+
+    ApplyMatchedOption (&Options[Match]);
+
+    EfiBootManagerFreeLoadOptions (Options, OptionCount);
     return;
   }
 
@@ -1091,6 +1359,13 @@ RpiRedfishConfigHandlerInit (
 
   RpiRedfishSync (ServiceInfo);
 
+  //
+  // The exchange ran to completion (an applied boot override never returns
+  // here -- ApplyMatchedOption resets). Release anyone holding the boot for
+  // its outcome.
+  //
+  SignalSyncSettled ();
+
   return EFI_SUCCESS;
 }
 
@@ -1133,8 +1408,26 @@ RpiRedfishSyncDxeEntryPoint (
   )
 {
   EFI_STATUS  Status;
+  EFI_EVENT   ReadyToBootEvent;
 
   mImageHandle = ImageHandle;
+
+  //
+  // Latch ReadyToBoot so a sync that loses the race against the boot cannot
+  // cold-reset the machine under a running OS loader. Failure to create the
+  // event is survivable -- it only re-opens that (rare) window.
+  //
+  Status = gBS->CreateEventEx (
+                  EVT_NOTIFY_SIGNAL,
+                  TPL_CALLBACK,
+                  OnReadyToBoot,
+                  NULL,
+                  &gEfiEventReadyToBootGuid,
+                  &ReadyToBootEvent
+                  );
+  if (EFI_ERROR (Status)) {
+    DEBUG ((DEBUG_ERROR, "RpiRedfishSync: ReadyToBoot latch - %r\n", Status));
+  }
 
   Status = gBS->InstallProtocolInterface (
                   &mImageHandle,

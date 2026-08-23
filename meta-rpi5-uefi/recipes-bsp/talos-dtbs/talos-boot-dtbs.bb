@@ -58,6 +58,7 @@ SRC_URI = "\
     file://bcm2712-thermal-overlay.dts \
     file://bcm2712-boot-spi-overlay.dts \
     file://bcm2712-dwc2-usb-overlay.dts \
+    file://bcm2712-serial0-overlay.dts \
 "
 
 DEPENDS = "dtc-native crane-native"
@@ -80,7 +81,8 @@ do_install[noexec] = "1"
 # overlay where dtc resolves it through __local_fixups__. See each .dts
 # header for the evidence.
 TALOS_DTB_OVERLAYS = "bcm2712-blconfig-overlay bcm2712-thermal-overlay \
-                      bcm2712-boot-spi-overlay bcm2712-dwc2-usb-overlay"
+                      bcm2712-boot-spi-overlay bcm2712-dwc2-usb-overlay \
+                      bcm2712-serial0-overlay"
 
 # The trees taken out of each image. The Talos kernel ships three bcm2712 ones;
 # bcm2712-rpi-5-b-ovl-rp1.dtb is deliberately not among these two.

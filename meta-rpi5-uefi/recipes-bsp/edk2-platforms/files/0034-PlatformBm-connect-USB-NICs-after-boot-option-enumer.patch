@@ -9,7 +9,19 @@ end of PlatformBootManagerAfterConsole, once boot option enumeration is
 behind us, so the Redfish host interface stack assembles during the boot
 timeout countdown - waiting the firmware was doing anyway - instead of
 preempting enumeration from TPL_CALLBACK/TPL_NOTIFY callbacks the whole
-way through. The mechanism and the measurements are in 0108's log.
+way through.
+
+Moving the stack's bring-up out of ConnectAll removes the accidental
+serialization that used to guarantee RpiRedfishSyncDxe's exchange - and
+any boot override the BMC staged - completed before the boot selection.
+So the boot now waits for it deliberately instead: once the NIC is
+connected, and only when the Redfish config handler protocol exists (the
+Redfish stack is a build-time option), BDS holds in a stall loop until
+RpiRedfishSyncDxe installs its sync-settled signal, bounded at 20 s for
+a BMC whose Redfish service never answers. The exchange runs from timer
+and protocol-notify callbacks, which preempt the TPL_APPLICATION stall
+loop freely - waiting here is what lets it run. An applied override
+never returns (BootNext + cold reset); every other outcome signals.
 
 The USB host controllers are connected first: under BDP_CONNECT_MINIMAL
 (this platform's default Boot Discovery Policy) nothing else has
@@ -29,7 +41,7 @@ Signed-off-by: appkins <nbatkins@gmail.com>
 ---
 --- a/Platform/RaspberryPi/Library/PlatformBootManagerLib/PlatformBm.c
 +++ b/Platform/RaspberryPi/Library/PlatformBootManagerLib/PlatformBm.c
-@@ -854,6 +854,84 @@
+@@ -854,6 +854,158 @@
    EfiBootManagerFreeLoadOptions (Options, OptionCount);
  }
  
@@ -41,6 +53,23 @@ Signed-off-by: appkins <nbatkins@gmail.com>
 +//
 +STATIC CONST EFI_GUID mUsbNicGateGuid =
 +  { 0x5144a8c6, 0x4d1c, 0x4709, { 0xb3, 0xa6, 0xfc, 0xb7, 0x44, 0xc3, 0x60, 0xdc } };
++
++//
++// Installed by RpiRedfishSyncDxe once its first BMC exchange has run to
++// completion, whatever the outcome. The GUID literal is duplicated there;
++// keep the two in sync.
++//
++STATIC CONST EFI_GUID mRpiRedfishSyncSettledGuid =
++  { 0x47a80c52, 0x948f, 0x4972, { 0x81, 0xe1, 0x6b, 0x32, 0x32, 0x4b, 0x06, 0x08 } };
++
++//
++// Upper bound on the wait for that signal, in 100 ms polls. The exchange
++// normally settles in a few seconds; the bound only bites when the BMC's
++// Redfish service is unreachable, where it trades up to 20 s of boot time
++// for never missing a staged boot override. Only paid when a USB NIC and
++// the Redfish config handler both exist.
++//
++#define RPI_SYNC_WAIT_POLLS  200
 +
 +/**
 +  Connect the USB NICs now that boot option enumeration is over.
@@ -65,9 +94,12 @@ Signed-off-by: appkins <nbatkins@gmail.com>
 +  The USB host controllers are connected first: under BDP_CONNECT_MINIMAL
 +  nothing else has enumerated the bus, so the CDC class driver has not
 +  produced the USB Ethernet handles yet.
++
++  @retval TRUE   At least one USB NIC handle was found and connected.
++  @retval FALSE  No USB NIC is present (or the gate could not be installed).
 +**/
 +STATIC
-+VOID
++BOOLEAN
 +ConnectUsbNicDevices (
 +  VOID
 +  )
@@ -84,7 +116,7 @@ Signed-off-by: appkins <nbatkins@gmail.com>
 +  if (EFI_ERROR (Status)) {
 +    DEBUG ((DEBUG_ERROR, "%a: install USB NIC gate: %r\n",
 +      __func__, Status));
-+    return;
++    return FALSE;
 +  }
 +
 +  Status = gBS->LocateHandleBuffer (ByProtocol, &gEfiUsb2HcProtocolGuid,
@@ -101,7 +133,7 @@ Signed-off-by: appkins <nbatkins@gmail.com>
 +                  NULL, &Count, &Handles);
 +  if (EFI_ERROR (Status)) {
 +    DEBUG ((DEBUG_INFO, "%a: no USB NIC present (%r)\n", __func__, Status));
-+    return;
++    return FALSE;
 +  }
 +
 +  for (Index = 0; Index < Count; Index++) {
@@ -109,12 +141,66 @@ Signed-off-by: appkins <nbatkins@gmail.com>
 +  }
 +
 +  FreePool (Handles);
++  return TRUE;
++}
++
++/**
++  Hold the boot until the Redfish host interface sync has settled, bounded.
++
++  The gate above moved the Redfish stack's bring-up out of ConnectAll, so
++  nothing else serializes RpiRedfishSyncDxe's exchange - which consumes any
++  boot override the BMC staged - against the boot selection. Without this
++  wait a fast default boot reaches ExitBootServices first, the Redfish
++  quiesce stops the stack, and the override sits unconsumed on the BMC.
++
++  Discovery, the exchange and its retries all run from timer and
++  protocol-notify callbacks, which preempt this TPL_APPLICATION stall loop
++  freely - waiting here IS letting them run. An applied override never
++  returns (BootNext + cold reset); every other outcome installs the settled
++  signal. The bound covers a BMC whose Redfish service never answers:
++  RpiRedfishSyncDxe can only signal once discovery hands it a service.
++**/
++STATIC
++VOID
++WaitForRedfishSyncSettled (
++  VOID
++  )
++{
++  VOID   *Instance;
++  UINTN  Poll;
++
++  //
++  // Redfish is a build-time option; without its config handler protocol
++  // (installed by RpiRedfishSyncDxe at dispatch) there is nothing to wait
++  // for.
++  //
++  if (EFI_ERROR (gBS->LocateProtocol (
++                        &gEdkIIRedfishConfigHandlerProtocolGuid,
++                        NULL, &Instance))) {
++    return;
++  }
++
++  for (Poll = 0; Poll < RPI_SYNC_WAIT_POLLS; Poll++) {
++    if (!EFI_ERROR (gBS->LocateProtocol (
++                          (EFI_GUID *)&mRpiRedfishSyncSettledGuid,
++                          NULL, &Instance))) {
++      DEBUG ((DEBUG_INFO, "%a: Redfish sync settled after ~%dms\n",
++        __func__, Poll * 100));
++      return;
++    }
++
++    gBS->Stall (100 * 1000);
++  }
++
++  DEBUG ((DEBUG_ERROR,
++    "%a: Redfish sync did not settle within ~%dms, booting on\n",
++    __func__, RPI_SYNC_WAIT_POLLS * 100));
 +}
 +
  /**
    Do the platform specific action after the console is ready
    Possible things that can be done in PlatformBootManagerAfterConsole:
-@@ -895,11 +973,6 @@
+@@ -895,11 +1047,6 @@
      DEBUG ((DEBUG_INFO, "Error applying Boot Discovery Policy:%r\n", Status));
    }
  
@@ -126,22 +212,33 @@ Signed-off-by: appkins <nbatkins@gmail.com>
    Status = gBS->LocateProtocol (&gEsrtManagementProtocolGuid, NULL, (VOID**)&EsrtManagement);
    if (!EFI_ERROR (Status)) {
      EsrtManagement->SyncEsrtFmp ();
-@@ -912,6 +985,8 @@
+@@ -912,6 +1059,10 @@
    }
  
    PlatformRegisterOptionsAndKeys ();
 +
-+  ConnectUsbNicDevices ();
++  if (ConnectUsbNicDevices ()) {
++    WaitForRedfishSyncSettled ();
++  }
  }
  
  /**
 --- a/Platform/RaspberryPi/Library/PlatformBootManagerLib/PlatformBootManagerLib.inf
 +++ b/Platform/RaspberryPi/Library/PlatformBootManagerLib/PlatformBootManagerLib.inf
-@@ -86,6 +86,7 @@
+@@ -31,6 +31,7 @@
+ [Packages]
+   MdeModulePkg/MdeModulePkg.dec
+   MdePkg/MdePkg.dec
++  RedfishPkg/RedfishPkg.dec
+   ShellPkg/ShellPkg.dec
+   Platform/RaspberryPi/RaspberryPi.dec
+ 
+@@ -86,6 +87,8 @@
    gEfiSimpleFileSystemProtocolGuid
    gEsrtManagementProtocolGuid
    gEfiUsb2HcProtocolGuid
 +  gEdkIIUsbEthProtocolGuid
++  gEdkIIRedfishConfigHandlerProtocolGuid
  
  [Depex]
    gEdkiiPlatformSpecificResetHandlerProtocolGuid

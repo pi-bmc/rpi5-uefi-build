@@ -1,0 +1,33 @@
+/*
+ * serial0 alias for the Raspberry Pi 5 / BCM2712 debug UART (uart10).
+ *
+ * Baked into the Talos base DTBs at build time (see talos-boot-dtbs.bb,
+ * fdtoverlay), NOT shipped as a runtime .dtbo.
+ *
+ * The mainline bcm2712-rpi-5-b tree aliases the SoC's dedicated debug UART
+ * (the three-pin connector, uart10 at /soc@107c000000/serial@7d001000) only
+ * as serial10, with stdout-path pointing at it by that name. The Raspberry
+ * Pi convention everywhere else - firmware, documentation, and consumers
+ * that put console=serial0 on the kernel command line - names the primary
+ * console UART serial0, and the kernel resolves that spelling through
+ * /aliases. The base tree has no serial0 alias at all, so such a console
+ * argument quietly matches nothing.
+ *
+ * Map serial0 to uart10 so both spellings land on the same port. serial10
+ * is left in place: stdout-path and anything else keyed on the mainline
+ * name keep working, and dtc orders /aliases properties by name so adding
+ * one cannot disturb the other.
+ */
+/dts-v1/;
+/plugin/;
+
+/ {
+	compatible = "brcm,bcm2712";
+
+	fragment@0 {
+		target-path = "/aliases";
+		__overlay__ {
+			serial0 = "/soc@107c000000/serial@7d001000";
+		};
+	};
+};
