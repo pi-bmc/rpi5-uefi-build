@@ -32,7 +32,7 @@
   #
   DEFINE SECURE_BOOT_ENABLE      = FALSE
   DEFINE INCLUDE_TFTP_COMMAND    = FALSE
-  DEFINE DEBUG_PRINT_ERROR_LEVEL = 0x80000002
+  DEFINE DEBUG_PRINT_ERROR_LEVEL = 0x8000004F
 
   #
   # OP-TEE (BL32) integration: embeds tee-raw.bin in the FD (see RPi5.fdf),
@@ -433,9 +433,9 @@
   AcpiLib|EmbeddedPkg/Library/AcpiLib/AcpiLib.inf
 
   #
-  # RP1 GPIO/PWM block. Two consumers -- Rp1GemDxe's PHY reset line and
-  # ActiveCoolerDxe's fan PWM -- so it is mapped once here rather than
-  # overridden in each component.
+  # RP1 GPIO block: Rp1GemDxe's PHY reset line and RpiOpteeSensorDxe's I2C1
+  # pinmux. (The fan PWM is no longer a consumer: ActiveCoolerScmiDxe goes
+  # through OP-TEE's SCMI server, which owns the PWM and the GPIO45 mux.)
   #
   Rp1GpioLib|Silicon/RaspberryPi/RpiSiliconPkg/Library/Rp1GpioLib/Rp1GpioLib.inf
 
@@ -1008,7 +1008,7 @@
   #
   Platform/RaspberryPi/RPi5/Drivers/BootloaderConfigDxe/BootloaderConfigDxe.inf
   Platform/RaspberryPi/RPi5/Drivers/PowerButtonDxe/PowerButtonDxe.inf
-  Platform/RaspberryPi/RPi5/Drivers/ActiveCoolerDxe/ActiveCoolerDxe.inf
+  Platform/RaspberryPi/RPi5/Drivers/ActiveCoolerScmiDxe/ActiveCoolerScmiDxe.inf
   Platform/RaspberryPi/RPi5/Drivers/FanConfigDxe/FanConfigDxe.inf
 !if $(RPI5_OPTEE) == TRUE
   #

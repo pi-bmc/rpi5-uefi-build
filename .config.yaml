@@ -59,13 +59,7 @@ local_conf_header:
     # RELEASE (default), DEBUG or NOOPT. Bring-up used DEBUG for the serial
     # DEBUG() stream and the 0xAF freed-pool fill; flip back when chasing
     # crashes.
-    # TEMP debug: DEBUG target so our MmCommunicationOpteeDxe/ReeFs DEBUG()
-    # output is compiled in (RELEASE uses BaseDebugLibNull + -DMDEPKG_NDEBUG and
-    # strips every DEBUG()). Paired with DEBUG_PRINT_ERROR_LEVEL=0x80000002
-    # (RPi5.dsc) so only ERROR/WARN print -> the "REEFS:" trace is legible and
-    # boot isn't drowned in DEBUG_INFO. Revert to RELEASE once the REE-FS store
-    # path is confirmed.
-    RPI5_BUILD_TARGET = "DEBUG"
+    RPI5_BUILD_TARGET = "RELEASE"
     # Build ShellPkg's Dp command into the firmware: `dp` at the UEFI shell
     # then prints per-driver init times (the platform already records the
     # measurements). Set to "0" to drop it and reclaim the FV space.
@@ -74,13 +68,11 @@ local_conf_header:
     # (No storage-backend knob any more: StMM variables live in the FD NV
     # window OP-TEE maps into the SP; nothing is stored through OP-TEE.)
     RPI5_OPTEE_VARS = "1"
-    # TEMP debug: LOG_LEVEL=3 + CFG_TEE_CORE_DEBUG so OP-TEE narrates the StMM
-    # SP bring-up (prints "stmm load address 0x...", every FF-A FID the SP
-    # invokes, and a symbolised abort dump). StMM itself is built with
-    # BaseDebugLibNull/BaseSerialPortLibNull and is silent, so this OP-TEE-side
-    # trace is the only window into the S-EL0 NULL-deref. Revert to "0" once the
-    # crash is localised. If tee-raw.bin now trips the 0x80000 size guard, tell me.
-    OPTEE_DEBUG = "1"
+    # "1" = OP-TEE LOG_LEVEL=3 + CFG_TEE_CORE_DEBUG: narrates StMM SP bring-up
+    # (varstore mapping, every FF-A FID, symbolised abort dumps). The go-to
+    # knob when debugging the secure side; StMM itself is always silent
+    # (BaseDebugLibNull/BaseSerialPortLibNull).
+    OPTEE_DEBUG = "0"
     # Shared download and sstate directories (can be overridden per user)
     DL_DIR = "/opt/yocto/downloads"
     SSTATE_DIR = "/opt/yocto/sstate-cache"

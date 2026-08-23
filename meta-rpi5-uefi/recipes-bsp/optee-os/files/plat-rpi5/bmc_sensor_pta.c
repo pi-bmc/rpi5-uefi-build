@@ -40,7 +40,14 @@
 
 #define PTA_NAME "bmc_sensor.pta"
 
-#define DEFAULT_PERIOD_MS	1000
+/*
+ * 15 s, matching the Prometheus default scrape interval the BMC feeds:
+ * pushing faster than anything reads it is pure bus + wakeup churn. The
+ * EDK2 INIT handshake passes 0 (keep default), so this is the one knob;
+ * PTA_BMC_SENSOR_CMD_SET_PERIOD can still retune it at runtime within
+ * [MIN_PERIOD_MS, MAX_PERIOD_MS].
+ */
+#define DEFAULT_PERIOD_MS	15000
 #define MIN_PERIOD_MS		100
 #define MAX_PERIOD_MS		60000
 #define EEPROM_PAGE_SIZE	64

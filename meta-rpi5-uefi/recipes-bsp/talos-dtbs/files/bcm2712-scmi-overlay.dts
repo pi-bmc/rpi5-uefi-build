@@ -1,0 +1,106 @@
+/*
+ * SCMI on Raspberry Pi 5 / BCM2712: sensor + fan served by OP-TEE.
+ *
+ * Replaces bcm2712-thermal-overlay.dts. That overlay bound Linux's native
+ * bcm2711_thermal driver to the AVS monitor with an empty cooling map --
+ * written when "the target boards have no PWM fan", which stopped being
+ * true when the Active Cooler moved under OP-TEE: the secure world now
+ * owns the RP1 fan PWM exclusively (plat-rpi5 rp1_pwm.c, including the
+ * GPIO45 mux) and exposes it, with the BCM2712 die temperature, over SCMI.
+ * Every agent -- EDK2's ActiveCoolerDxe during firmware, Linux at runtime
+ * -- goes through that one server, so nothing races the PWM registers and
+ * the OS never needs the native thermal binding.
+ *
+ * Transport is the standard arm,scmi-smc: agent writes the 128-byte SMT
+ * message into the shared page and rings the SiP fast SMC, which TF-A
+ * forwards into OP-TEE's fast-SMC vector. Three values are contract, kept
+ * in step across four places (TF-A 0002 patch rpi_scmi_svc.c, OP-TEE
+ * scmi_server.c, EDK2 ActiveCoolerDxe, here):
+ *
+ *   arm,smc-id     0x82000010  (RPI_SIP_SCMI_AGENT0)
+ *   shmem          0x1f3ff000 + 0x1000, the top page of the OP-TEE
+ *                  reserved SHM window (EfiReservedMemoryType via
+ *                  PcdOpteeShmSize, so the kernel never claims it)
+ *   protocols      0x15 sensor (id 0: "soc", milli-C),
+ *                  0x13 perf ("fan", levels 0..4)
+ *
+ * This overlay is the ONLY source of these nodes: EDK2's FdtDxe does not
+ * inject SCMI nodes (the 0037 patch drafted for that was never wired into
+ * the edk2-platforms recipe). Baking them here is also what lets the
+ * thermal zone below reference the sensor by phandle at build time, which
+ * runtime injection could never offer.
+ *
+ * The zone mirrors the retired thermal overlay: monitoring plus a critical
+ * trip, no cooling maps -- Linux has no standard cooling-device binding
+ * for an SCMI perf domain, and firmware-side closed-loop control already
+ * covers the pre-OS window. Consuming the sensor needs the kernel's SCMI
+ * stack (CONFIG_ARM_SCMI_PROTOCOL + ARM_SCMI_TRANSPORT_SMC +
+ * SENSORS_ARM_SCMI); the node set is inert on kernels without it.
+ *
+ * Cell shapes match the stripped mainline base tree: root and
+ * /reserved-memory are #address-cells = <2>, #size-cells = <2>, and
+ * /reserved-memory has empty ranges (1:1). no-map keeps the shared page
+ * out of the linear map so the shmem driver's ioremap is the only kernel
+ * mapping -- the same non-cacheable view OP-TEE has (MEM_AREA_IO_NSEC).
+ */
+/dts-v1/;
+/plugin/;
+
+/ {
+	compatible = "brcm,bcm2712";
+
+	fragment@0 {
+		target-path = "/reserved-memory";
+		__overlay__ {
+			scmi_shmem: scmi-shmem@1f3ff000 {
+				compatible = "arm,scmi-shmem";
+				reg = <0x0 0x1f3ff000 0x0 0x1000>;
+				no-map;
+			};
+		};
+	};
+
+	fragment@1 {
+		target-path = "/";
+		__overlay__ {
+			firmware {
+				scmi {
+					compatible = "arm,scmi-smc";
+					arm,smc-id = <0x82000010>;
+					shmem = <&scmi_shmem>;
+					#address-cells = <1>;
+					#size-cells = <0>;
+
+					scmi_sensors: protocol@15 {
+						reg = <0x15>;
+						#thermal-sensor-cells = <1>;
+					};
+
+					scmi_perf: protocol@13 {
+						reg = <0x13>;
+					};
+				};
+			};
+
+			thermal-zones {
+				cpu-thermal {
+					polling-delay-passive = <1000>;
+					polling-delay = <2000>;
+					/* SCMI sensor 0: "soc", already in milli-C */
+					thermal-sensors = <&scmi_sensors 0>;
+
+					trips {
+						cpu-crit {
+							temperature = <110000>;
+							hysteresis = <0>;
+							type = "critical";
+						};
+					};
+
+					cooling-maps {
+					};
+				};
+			};
+		};
+	};
+};

@@ -55,7 +55,7 @@ TALOS_KERNEL_TAGS ?= "${TALOS_KERNEL_TAG}"
 # when the VPU firmware's fixup runs).
 SRC_URI = "\
     file://bcm2712-blconfig-overlay.dts \
-    file://bcm2712-thermal-overlay.dts \
+    file://bcm2712-scmi-overlay.dts \
     file://bcm2712-boot-spi-overlay.dts \
     file://bcm2712-dwc2-usb-overlay.dts \
     file://bcm2712-serial0-overlay.dts \
@@ -80,7 +80,7 @@ do_install[noexec] = "1"
 # path, and the one cross-reference (spi10 -> dma40) sits inside a single
 # overlay where dtc resolves it through __local_fixups__. See each .dts
 # header for the evidence.
-TALOS_DTB_OVERLAYS = "bcm2712-blconfig-overlay bcm2712-thermal-overlay \
+TALOS_DTB_OVERLAYS = "bcm2712-blconfig-overlay bcm2712-scmi-overlay \
                       bcm2712-boot-spi-overlay bcm2712-dwc2-usb-overlay \
                       bcm2712-serial0-overlay"
 

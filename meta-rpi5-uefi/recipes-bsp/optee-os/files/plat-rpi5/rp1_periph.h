@@ -24,6 +24,8 @@
 #define RP1_I2C1_OFFSET		0x74000
 #define RP1_CLOCKS_OFFSET	0x18000
 #define RP1_PWM1_OFFSET		0x9c000
+#define RP1_IO_BANK0_OFFSET	0xd0000
+#define RP1_PADS_BANK0_OFFSET	0xf0000
 
 /*
  * Map the RP1 peripheral window at physical @bar_pa as secure device

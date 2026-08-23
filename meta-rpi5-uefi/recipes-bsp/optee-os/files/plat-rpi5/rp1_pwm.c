@@ -34,6 +34,30 @@
 #define FAN_PWM_CHANNEL		3
 #define FAN_PWM_RANGE_TICKS	2078	/* 41566 ns at 20 ns/tick */
 
+/*
+ * Fan PWM line: GPIO45, funcsel 0 (= PWM1 channel 3), pull-down -- the
+ * values the VPU DTB uses for Linux's pwm-fan. GPIO45 lives in bank 2
+ * (pins 34..53, window offset +0x8000 within the IO and PADS blocks),
+ * local index 11. OP-TEE owns this mux: with the fan delegated to SCMI,
+ * no normal-world agent touches RP1 fan hardware at all.
+ */
+#define FAN_GPIO_BANK_OFFSET	0x8000
+#define FAN_GPIO_LOCAL		11	/* GPIO45 - 34 */
+
+#define IO_CTRL_REG		(RP1_IO_BANK0_OFFSET + FAN_GPIO_BANK_OFFSET + \
+				 (FAN_GPIO_LOCAL) * 8 + 4)
+#define IO_CTRL_FUNCSEL_MASK	GENMASK_32(4, 0)
+#define IO_CTRL_OUTOVER_MASK	GENMASK_32(13, 12)	/* 0 = peripheral */
+#define IO_CTRL_OEOVER_MASK	GENMASK_32(15, 14)	/* 0 = peripheral */
+#define IO_CTRL_FUNCSEL_PWM	0			/* alt0 on GPIO45 */
+
+#define PADS_PIN_REG		(RP1_PADS_BANK0_OFFSET + FAN_GPIO_BANK_OFFSET + \
+				 0x4 + (FAN_GPIO_LOCAL) * 4)
+#define PADS_PULL_DOWN		BIT(2)
+#define PADS_PULL_UP		BIT(3)
+#define PADS_IN_ENABLE		BIT(6)
+#define PADS_OUT_DISABLE	BIT(7)
+
 /* Trip/duty table mirrors ActiveCoolerDxe: level 0 off .. level 4 max. */
 static const unsigned int fan_duty255[RP1_FAN_LEVEL_COUNT] = {
 	0, 75, 125, 175, 250,
@@ -80,6 +104,19 @@ static bool fan_hw_init_locked(void)
 		io_write32(clk + CLK_PWM1_CTRL,
 			   CLK_CTRL_AUXSRC_XOSC | CLK_CTRL_ENABLE);
 	}
+
+	/*
+	 * Mux GPIO45 to the PWM (idempotent if the VPU already did): pad
+	 * input buffer on, output not disabled, pull-down; funcsel to PWM
+	 * with the out/oe overrides back on peripheral control.
+	 */
+	io_clrsetbits32(rp1_periph_base() + PADS_PIN_REG,
+			PADS_OUT_DISABLE | PADS_PULL_UP,
+			PADS_IN_ENABLE | PADS_PULL_DOWN);
+	io_clrsetbits32(rp1_periph_base() + IO_CTRL_REG,
+			IO_CTRL_FUNCSEL_MASK | IO_CTRL_OUTOVER_MASK |
+			IO_CTRL_OEOVER_MASK,
+			IO_CTRL_FUNCSEL_PWM);
 
 	io_write32(pwm + PWM_CHAN_CTRL(FAN_PWM_CHANNEL),
 		   PWM_CHAN_CTRL_MODE_TE_MS | PWM_CHAN_CTRL_INVERT |
