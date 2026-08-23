@@ -204,10 +204,11 @@ READ_LOCK_STATUS   = TRUE
   INF MdeModulePkg/Universal/CapsuleRuntimeDxe/CapsuleRuntimeDxe.inf
 !if $(RPI5_OPTEE_VARS) == TRUE
   #
-  # UEFI variables live in OP-TEE-mediated RPMB: the DXE side is only the MM
-  # variable proxy over the StMM secure partition (see the matching
-  # [Components] block in RPi5.dsc). Fault-tolerant write and the actual store
-  # run inside StMM (BL32_AP_MM.fd), not here.
+  # UEFI variables in StMM, stored in THIS FD's NV window below (0x3b0000):
+  # OP-TEE maps the window into the StMM secure partition, where the
+  # variable + FTW stack runs on it directly. The DXE side is the MM
+  # transport + the file persistence engine (see the matching [Components]
+  # block in RPi5.dsc).
   #
   INF Platform/RaspberryPi/RPi5/Drivers/MmCommunicationOpteeDxe/MmCommunicationOpteeDxe.inf
   INF MdeModulePkg/Universal/Variable/RuntimeDxe/VariableSmmRuntimeDxe.inf

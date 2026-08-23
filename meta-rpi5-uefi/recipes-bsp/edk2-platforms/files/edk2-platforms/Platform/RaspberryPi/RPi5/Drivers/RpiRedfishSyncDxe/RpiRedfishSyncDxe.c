@@ -43,10 +43,10 @@
 #include <Protocol/BootManagerPolicy.h>
 #include <Protocol/RpiFan.h>
 
-STATIC EFI_HANDLE       mImageHandle    = NULL;
-STATIC BOOLEAN          mSyncDone       = FALSE;
-STATIC BOOLEAN          mSettled        = FALSE;
-STATIC BOOLEAN          mReadyToBoot    = FALSE;
+STATIC EFI_HANDLE  mImageHandle = NULL;
+STATIC BOOLEAN     mSyncDone    = FALSE;
+STATIC BOOLEAN     mSettled     = FALSE;
+STATIC BOOLEAN     mReadyToBoot = FALSE;
 
 //
 // Installed (bare, no interface) once the first sync attempt has run to
@@ -58,7 +58,7 @@ STATIC BOOLEAN          mReadyToBoot    = FALSE;
 // nothing else serializes the exchange against the boot. The GUID literal is
 // duplicated in PlatformBm.c; keep the two in sync.
 //
-STATIC CONST EFI_GUID   mRpiRedfishSyncSettledGuid = {
+STATIC CONST EFI_GUID  mRpiRedfishSyncSettledGuid = {
   0x47a80c52, 0x948f, 0x4972, { 0x81, 0xe1, 0x6b, 0x32, 0x32, 0x4b, 0x06, 0x08 }
 };
 

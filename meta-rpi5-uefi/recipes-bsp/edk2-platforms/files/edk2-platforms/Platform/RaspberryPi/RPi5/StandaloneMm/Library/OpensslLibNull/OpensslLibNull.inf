@@ -1,0 +1,24 @@
+#/** @file
+#
+#  Empty OpensslLib instance for the StMM secure partition -- see
+#  OpensslLibNull.c for why it exists.
+#
+#  Copyright (c) 2026, pi-bmc contributors
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+#
+#**/
+
+[Defines]
+  INF_VERSION                    = 0x0001001A
+  BASE_NAME                      = OpensslLibNull
+  FILE_GUID                      = 7f2c6ae3-91d4-4f0b-b8a5-3e60d17c2a94
+  MODULE_TYPE                    = BASE
+  VERSION_STRING                 = 1.0
+  LIBRARY_CLASS                  = OpensslLib
+
+[Sources]
+  OpensslLibNull.c
+
+[Packages]
+  MdePkg/MdePkg.dec

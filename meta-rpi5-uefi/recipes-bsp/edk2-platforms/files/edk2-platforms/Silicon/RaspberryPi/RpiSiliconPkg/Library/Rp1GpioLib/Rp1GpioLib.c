@@ -22,50 +22,50 @@
 // Per-bank window offset, identical within the IO, RIO and PADS windows
 // (Rp1.h's RP1_IO_BANK1_BASE etc. are the bank-0 base plus these).
 //
-#define RP1_GPIO_BANK1_OFFSET       0x4000
-#define RP1_GPIO_BANK2_OFFSET       0x8000
+#define RP1_GPIO_BANK1_OFFSET  0x4000
+#define RP1_GPIO_BANK2_OFFSET  0x8000
 
-#define RP1_GPIO_BANK0_FIRST_PIN    0
-#define RP1_GPIO_BANK1_FIRST_PIN    28
-#define RP1_GPIO_BANK2_FIRST_PIN    34
+#define RP1_GPIO_BANK0_FIRST_PIN  0
+#define RP1_GPIO_BANK1_FIRST_PIN  28
+#define RP1_GPIO_BANK2_FIRST_PIN  34
 
 //
 // RP2040-style atomic register aliases, applied on top of the per-bank
 // RIO window (write a bitmask to XOR/set/clear bits without a RMW).
 //
-#define RP1_ATOMIC_XOR_OFFSET       0x1000
-#define RP1_ATOMIC_SET_OFFSET       0x2000
-#define RP1_ATOMIC_CLR_OFFSET       0x3000
+#define RP1_ATOMIC_XOR_OFFSET  0x1000
+#define RP1_ATOMIC_SET_OFFSET  0x2000
+#define RP1_ATOMIC_CLR_OFFSET  0x3000
 
 //
 // IO window: per-pin STATUS/CTRL register pair, pin index local to the bank.
 //
-#define RP1_IO_STATUS_OFFSET(Pin)   ((Pin) * 8)
-#define RP1_IO_CTRL_OFFSET(Pin)     (((Pin) * 8) + 4)
+#define RP1_IO_STATUS_OFFSET(Pin)  ((Pin) * 8)
+#define RP1_IO_CTRL_OFFSET(Pin)    (((Pin) * 8) + 4)
 
-#define RP1_IO_CTRL_FUNCSEL_MASK    0x0000001f    // bits 4:0
-#define RP1_IO_CTRL_OUTOVER_MASK    0x00003000    // bits 13:12, 00 = follow peripheral
-#define RP1_IO_CTRL_OEOVER_MASK     0x0000c000    // bits 15:14, 00 = follow peripheral
+#define RP1_IO_CTRL_FUNCSEL_MASK  0x0000001f      // bits 4:0
+#define RP1_IO_CTRL_OUTOVER_MASK  0x00003000      // bits 13:12, 00 = follow peripheral
+#define RP1_IO_CTRL_OEOVER_MASK   0x0000c000      // bits 15:14, 00 = follow peripheral
 
 //
 // RIO window: whole-bank bitmask registers.
 //
-#define RP1_RIO_OUT_OFFSET          0x0
-#define RP1_RIO_OE_OFFSET           0x4
-#define RP1_RIO_IN_OFFSET           0x8           // nosync input
+#define RP1_RIO_OUT_OFFSET  0x0
+#define RP1_RIO_OE_OFFSET   0x4
+#define RP1_RIO_IN_OFFSET   0x8                   // nosync input
 
 //
 // PADS window: per-pin register at 0x4 + pin*4 (pin index local to the bank).
 //
-#define RP1_PADS_PIN_OFFSET(Pin)    (0x4 + ((Pin) * 4))
+#define RP1_PADS_PIN_OFFSET(Pin)  (0x4 + ((Pin) * 4))
 
-#define RP1_PADS_SLEWFAST           BIT0
-#define RP1_PADS_SCHMITT            BIT1
-#define RP1_PADS_PULL_DOWN          BIT2
-#define RP1_PADS_PULL_UP            BIT3
-#define RP1_PADS_DRIVE_MASK         (BIT5 | BIT4)
-#define RP1_PADS_IN_ENABLE          BIT6
-#define RP1_PADS_OUT_DISABLE        BIT7
+#define RP1_PADS_SLEWFAST     BIT0
+#define RP1_PADS_SCHMITT      BIT1
+#define RP1_PADS_PULL_DOWN    BIT2
+#define RP1_PADS_PULL_UP      BIT3
+#define RP1_PADS_DRIVE_MASK   (BIT5 | BIT4)
+#define RP1_PADS_IN_ENABLE    BIT6
+#define RP1_PADS_OUT_DISABLE  BIT7
 
 /**
   Split a global pin number into its bank window offset (+0x0000 / +0x4000 /
@@ -130,11 +130,11 @@ Rp1GpioSetFunction (
   //
   CtrlReg = PeripheralBase + RP1_IO_BANK0_BASE + Bank +
             RP1_IO_CTRL_OFFSET (LocalPin);
-  Value   = MmioRead32 (CtrlReg);
-  Value  &= ~(RP1_IO_CTRL_FUNCSEL_MASK |
-              RP1_IO_CTRL_OUTOVER_MASK |
-              RP1_IO_CTRL_OEOVER_MASK);
-  Value  |= Function & RP1_IO_CTRL_FUNCSEL_MASK;
+  Value  = MmioRead32 (CtrlReg);
+  Value &= ~(RP1_IO_CTRL_FUNCSEL_MASK |
+             RP1_IO_CTRL_OUTOVER_MASK |
+             RP1_IO_CTRL_OEOVER_MASK);
+  Value |= Function & RP1_IO_CTRL_FUNCSEL_MASK;
   MmioWrite32 (CtrlReg, Value);
 }
 

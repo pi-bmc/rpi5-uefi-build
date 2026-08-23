@@ -16,17 +16,23 @@ FdtPlatformGetBase (
   VOID
   )
 {
-  VOID    *Fdt;
-  INT32   FdtError;
+  VOID   *Fdt;
+  INT32  FdtError;
 
-  Fdt = (VOID *)(UINTN) PcdGet32 (PcdFdtBaseAddress);
+  Fdt = (VOID *)(UINTN)PcdGet32 (PcdFdtBaseAddress);
 
   FdtError = FdtCheckHeader (Fdt);
   if (FdtError != 0) {
-    DEBUG ((DEBUG_ERROR, "%a: Bad/missing FDT at 0x%p! Ret=%a\n",
-            __func__, Fdt, FdtStrerror (FdtError)));
+    DEBUG ((
+      DEBUG_ERROR,
+      "%a: Bad/missing FDT at 0x%p! Ret=%a\n",
+      __func__,
+      Fdt,
+      FdtStrerror (FdtError)
+      ));
     ASSERT (FALSE);
     return NULL;
   }
+
   return Fdt;
 }

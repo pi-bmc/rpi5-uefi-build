@@ -316,8 +316,6 @@ LoadBlconfig (
   mBlconfigTextLen = Index;
 }
 
-
-
 /**
   Keep the BlCfg efivarstore in sync with the live blconfig values so the
   Setup page always opens on what the running bootloader used. Saved-but-

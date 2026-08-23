@@ -33,12 +33,12 @@
 //
 // AcpiTables.inf
 //
-STATIC CONST EFI_GUID mAcpiTableFile = {
+STATIC CONST EFI_GUID  mAcpiTableFile = {
   0x7E374E25, 0x8E01, 0x4FEE, { 0x87, 0xf2, 0x39, 0x0C, 0x23, 0xC6, 0x06, 0xCD }
 };
 
-STATIC ACPI_SD_COMPAT_MODE_VARSTORE_DATA    AcpiSdCompatMode;
-STATIC ACPI_SD_LIMIT_UHS_VARSTORE_DATA      AcpiSdLimitUhs;
+STATIC ACPI_SD_COMPAT_MODE_VARSTORE_DATA  AcpiSdCompatMode;
+STATIC ACPI_SD_LIMIT_UHS_VARSTORE_DATA    AcpiSdLimitUhs;
 
 STATIC ACPI_PCIE_ECAM_COMPAT_MODE_VARSTORE_DATA          AcpiPcieEcamCompatMode;
 STATIC ACPI_PCIE_32_BIT_BAR_SPACE_SIZE_MB_VARSTORE_DATA  AcpiPcie32BitBarSpaceSizeMB;
@@ -128,29 +128,38 @@ STATIC
 VOID
 EFIAPI
 DsdtFixupStatus (
-  IN EFI_ACPI_SDT_PROTOCOL    *AcpiSdtProtocol,
-  IN EFI_ACPI_HANDLE          TableHandle
+  IN EFI_ACPI_SDT_PROTOCOL  *AcpiSdtProtocol,
+  IN EFI_ACPI_HANDLE        TableHandle
   )
 {
   EFI_STATUS  Status;
   UINTN       Index;
 
   struct {
-    CHAR8    *ObjectPath;
-    BOOLEAN  Enabled;
+    CHAR8      *ObjectPath;
+    BOOLEAN    Enabled;
   } DevStatus[] = {
-    { "\\_SB.PCI0._STA", FALSE },                             // Not exposed
+    { "\\_SB.PCI0._STA", FALSE                             }, // Not exposed
     { "\\_SB.PCI1._STA", mPciePlatform.Settings[1].Enabled }, // Configurable
-    { "\\_SB.PCI2._STA", FALSE },                             // Reserved by RP1
+    { "\\_SB.PCI2._STA", FALSE                             }, // Reserved by RP1
   };
 
   for (Index = 0; Index < ARRAY_SIZE (DevStatus); Index++) {
     if (DevStatus[Index].Enabled == FALSE) {
-      Status = AcpiAmlObjectUpdateInteger (AcpiSdtProtocol, TableHandle,
-                  DevStatus[Index].ObjectPath, 0x0);
+      Status = AcpiAmlObjectUpdateInteger (
+                 AcpiSdtProtocol,
+                 TableHandle,
+                 DevStatus[Index].ObjectPath,
+                 0x0
+                 );
       if (EFI_ERROR (Status)) {
-        DEBUG ((DEBUG_ERROR, "%a: Failed to patch %a. Status=%r\n",
-                __func__, DevStatus[Index].ObjectPath, Status));
+        DEBUG ((
+          DEBUG_ERROR,
+          "%a: Failed to patch %a. Status=%r\n",
+          __func__,
+          DevStatus[Index].ObjectPath,
+          Status
+          ));
       }
     }
   }
@@ -160,20 +169,28 @@ STATIC
 VOID
 EFIAPI
 DsdtFixupSd (
-  IN EFI_ACPI_SDT_PROTOCOL    *AcpiSdtProtocol,
-  IN EFI_ACPI_HANDLE          TableHandle
+  IN EFI_ACPI_SDT_PROTOCOL  *AcpiSdtProtocol,
+  IN EFI_ACPI_HANDLE        TableHandle
   )
 {
-  EFI_STATUS Status;
+  EFI_STATUS  Status;
 
-  Status = AcpiAmlObjectUpdateInteger (AcpiSdtProtocol, TableHandle,
-                "\\_SB.SDCM", AcpiSdCompatMode.Value);
+  Status = AcpiAmlObjectUpdateInteger (
+             AcpiSdtProtocol,
+             TableHandle,
+             "\\_SB.SDCM",
+             AcpiSdCompatMode.Value
+             );
   if (EFI_ERROR (Status)) {
     DEBUG ((DEBUG_ERROR, "%a: Failed to patch AcpiSdCompatMode.\n", __func__));
   }
 
-  Status = AcpiAmlObjectUpdateInteger (AcpiSdtProtocol, TableHandle,
-                "\\_SB.SDLU", AcpiSdLimitUhs.Value);
+  Status = AcpiAmlObjectUpdateInteger (
+             AcpiSdtProtocol,
+             TableHandle,
+             "\\_SB.SDLU",
+             AcpiSdLimitUhs.Value
+             );
   if (EFI_ERROR (Status)) {
     DEBUG ((DEBUG_ERROR, "%a: Failed to patch AcpiSdLimitUhs.\n", __func__));
   }
@@ -183,8 +200,8 @@ STATIC
 VOID
 EFIAPI
 DsdtFixupRp1 (
-  IN EFI_ACPI_SDT_PROTOCOL    *AcpiSdtProtocol,
-  IN EFI_ACPI_HANDLE          TableHandle
+  IN EFI_ACPI_SDT_PROTOCOL  *AcpiSdtProtocol,
+  IN EFI_ACPI_HANDLE        TableHandle
   )
 {
   EFI_STATUS        Status;
@@ -193,8 +210,8 @@ DsdtFixupRp1 (
   EFI_HANDLE        *Handles;
 
   HandleCount = 0;
-  Handles = NULL;
-  Rp1Bus = NULL;
+  Handles     = NULL;
+  Rp1Bus      = NULL;
 
   Status = gBS->LocateHandleBuffer (
                   ByProtocol,
@@ -249,20 +266,28 @@ STATIC
 VOID
 EFIAPI
 DsdtFixupPcie (
-  IN EFI_ACPI_SDT_PROTOCOL    *AcpiSdtProtocol,
-  IN EFI_ACPI_HANDLE          TableHandle
+  IN EFI_ACPI_SDT_PROTOCOL  *AcpiSdtProtocol,
+  IN EFI_ACPI_HANDLE        TableHandle
   )
 {
-  EFI_STATUS Status;
+  EFI_STATUS  Status;
 
-  Status = AcpiAmlObjectUpdateInteger (AcpiSdtProtocol, TableHandle,
-                "\\_SB.BB32", mAcpiPciMem32Base);
+  Status = AcpiAmlObjectUpdateInteger (
+             AcpiSdtProtocol,
+             TableHandle,
+             "\\_SB.BB32",
+             mAcpiPciMem32Base
+             );
   if (EFI_ERROR (Status)) {
     DEBUG ((DEBUG_ERROR, "%a: Failed to patch BB32.\n", __func__));
   }
 
-  Status = AcpiAmlObjectUpdateInteger (AcpiSdtProtocol, TableHandle,
-                "\\_SB.MS32", mAcpiPciMem32Size);
+  Status = AcpiAmlObjectUpdateInteger (
+             AcpiSdtProtocol,
+             TableHandle,
+             "\\_SB.MS32",
+             mAcpiPciMem32Size
+             );
   if (EFI_ERROR (Status)) {
     DEBUG ((DEBUG_ERROR, "%a: Failed to patch MS32.\n", __func__));
   }
@@ -275,31 +300,37 @@ AcpiFixupPcieEcam (
   IN ACPI_OS_BOOT_TYPE  OsType
   )
 {
-  EFI_STATUS                    Status;
-  UINTN                         Index;
-  RPI5_MCFG_TABLE               *McfgTable;
-  EFI_ACPI_DESCRIPTION_HEADER   *FadtTable;
-  UINTN                         TableKey;
-  UINT32                        PcieEcamMode;
-  UINT8                         PcieBusMax;
+  EFI_STATUS                   Status;
+  UINTN                        Index;
+  RPI5_MCFG_TABLE              *McfgTable;
+  EFI_ACPI_DESCRIPTION_HEADER  *FadtTable;
+  UINTN                        TableKey;
+  UINT32                       PcieEcamMode;
+  UINT8                        PcieBusMax;
 
-  Index = 0;
+  Index  = 0;
   Status = AcpiLocateTableBySignature (
              mAcpiSdtProtocol,
              EFI_ACPI_6_4_PCI_EXPRESS_MEMORY_MAPPED_CONFIGURATION_SPACE_BASE_ADDRESS_DESCRIPTION_TABLE_SIGNATURE,
              &Index,
              (EFI_ACPI_DESCRIPTION_HEADER **)&McfgTable,
-             &TableKey);
+             &TableKey
+             );
   if (EFI_ERROR (Status)) {
-    DEBUG ((DEBUG_ERROR, "%a: Couldn't locate ACPI MCFG table! Status=%r\n",
-            __func__, Status));
+    DEBUG ((
+      DEBUG_ERROR,
+      "%a: Couldn't locate ACPI MCFG table! Status=%r\n",
+      __func__,
+      Status
+      ));
     return Status;
   }
 
   PcieEcamMode = AcpiPcieEcamCompatMode.Value;
 
-  if (PcieEcamMode == ACPI_PCIE_ECAM_COMPAT_MODE_NXPMX6_DEN0115 ||
-      PcieEcamMode == ACPI_PCIE_ECAM_COMPAT_MODE_NXPMX6_GRAVITON) {
+  if ((PcieEcamMode == ACPI_PCIE_ECAM_COMPAT_MODE_NXPMX6_DEN0115) ||
+      (PcieEcamMode == ACPI_PCIE_ECAM_COMPAT_MODE_NXPMX6_GRAVITON))
+  {
     if (OsType == AcpiOsWindows) {
       PcieEcamMode = ACPI_PCIE_ECAM_COMPAT_MODE_NXPMX6;
     } else {
@@ -311,16 +342,21 @@ AcpiFixupPcieEcam (
     case ACPI_PCIE_ECAM_COMPAT_MODE_NXPMX6:
       PcieBusMax = 0;
 
-      Index = 0;
+      Index  = 0;
       Status = AcpiLocateTableBySignature (
-                mAcpiSdtProtocol,
-                EFI_ACPI_6_3_FIXED_ACPI_DESCRIPTION_TABLE_SIGNATURE,
-                &Index,
-                &FadtTable,
-                &TableKey);
+                 mAcpiSdtProtocol,
+                 EFI_ACPI_6_3_FIXED_ACPI_DESCRIPTION_TABLE_SIGNATURE,
+                 &Index,
+                 &FadtTable,
+                 &TableKey
+                 );
       if (EFI_ERROR (Status)) {
-        DEBUG ((DEBUG_ERROR, "%a: Couldn't locate ACPI FADT table! Status=%r\n",
-                __func__, Status));
+        DEBUG ((
+          DEBUG_ERROR,
+          "%a: Couldn't locate ACPI FADT table! Status=%r\n",
+          __func__,
+          Status
+          ));
         return Status;
       }
 
@@ -332,7 +368,7 @@ AcpiFixupPcieEcam (
       PcieBusMax = 0;
 
       CopyMem (McfgTable->Header.Header.OemId, "AMAZON", sizeof (McfgTable->Header.Header.OemId));
-      McfgTable->Header.Header.OemTableId = SIGNATURE_64 ('G','R','A','V','I','T','O','N');
+      McfgTable->Header.Header.OemTableId  = SIGNATURE_64 ('G', 'R', 'A', 'V', 'I', 'T', 'O', 'N');
       McfgTable->Header.Header.OemRevision = 0;
 
       //
@@ -345,6 +381,7 @@ AcpiFixupPcieEcam (
       for (Index = 0; Index < ARRAY_SIZE (McfgTable->Entries); Index++) {
         McfgTable->Entries[Index].BaseAddress = BASE_1TB + (Index * SIZE_1MB);
       }
+
       break;
 
     default: // ACPI_PCIE_ECAM_COMPAT_MODE_DEN0115
@@ -406,15 +443,15 @@ FindPeImageBase (
   return Base;
 }
 
-STATIC CHAR8 mWinLoadNameStr[] = "winload";
-#define PDB_NAME_MAX_LENGTH   256
+STATIC CHAR8  mWinLoadNameStr[] = "winload";
+#define PDB_NAME_MAX_LENGTH  256
 
 STATIC
 BOOLEAN
 EFIAPI
 IsPeImageWinLoader (
-  IN VOID *PeImage
- )
+  IN VOID  *PeImage
+  )
 {
   CHAR8  *PdbStr;
   UINTN  WinLoadNameStrLen;
@@ -444,9 +481,9 @@ AcpiExitBootServicesHook (
   IN UINTN       MapKey
   )
 {
-  UINTN               ReturnAddress;
-  UINTN               OsLoaderAddress;
-  ACPI_OS_BOOT_TYPE   OsType;
+  UINTN              ReturnAddress;
+  UINTN              OsLoaderAddress;
+  ACPI_OS_BOOT_TYPE  OsType;
 
   ReturnAddress = (UINTN)RETURN_ADDRESS (0);
 
@@ -713,13 +750,13 @@ InstallAcpiTables (
   }
 
   TableIndex = 0;
-  Status = AcpiLocateTableBySignature (
-             mAcpiSdtProtocol,
-             EFI_ACPI_6_3_DIFFERENTIATED_SYSTEM_DESCRIPTION_TABLE_SIGNATURE,
-             &TableIndex,
-             &mDsdtTable,
-             &TableKey
-             );
+  Status     = AcpiLocateTableBySignature (
+                 mAcpiSdtProtocol,
+                 EFI_ACPI_6_3_DIFFERENTIATED_SYSTEM_DESCRIPTION_TABLE_SIGNATURE,
+                 &TableIndex,
+                 &mDsdtTable,
+                 &TableKey
+                 );
   if (EFI_ERROR (Status)) {
     DEBUG ((DEBUG_ERROR, "%a: Couldn't locate ACPI DSDT table!\n", __func__));
     return Status;
@@ -785,7 +822,7 @@ ApplyConfigTableVariables (
 
   if (mIsAcpiEnabled) {
     mOriginalExitBootServices = gBS->ExitBootServices;
-    gBS->ExitBootServices = AcpiExitBootServicesHook;
+    gBS->ExitBootServices     = AcpiExitBootServicesHook;
   }
 }
 
@@ -795,75 +832,99 @@ SetupConfigTableVariables (
   VOID
   )
 {
-  EFI_STATUS    Status;
-  UINTN         Size;
-  UINT32        Var32;
+  EFI_STATUS  Status;
+  UINTN       Size;
+  UINT32      Var32;
 
-  AcpiSdCompatMode.Value = ACPI_SD_COMPAT_MODE_DEFAULT;
-  AcpiSdLimitUhs.Value = ACPI_SD_LIMIT_UHS_DEFAULT;
-  AcpiPcieEcamCompatMode.Value = ACPI_PCIE_ECAM_COMPAT_MODE_DEFAULT;
+  AcpiSdCompatMode.Value            = ACPI_SD_COMPAT_MODE_DEFAULT;
+  AcpiSdLimitUhs.Value              = ACPI_SD_LIMIT_UHS_DEFAULT;
+  AcpiPcieEcamCompatMode.Value      = ACPI_PCIE_ECAM_COMPAT_MODE_DEFAULT;
   AcpiPcie32BitBarSpaceSizeMB.Value = ACPI_PCIE_32_BIT_BAR_SPACE_SIZE_MB_DEFAULT;
 
-  Size = sizeof (ACPI_SD_COMPAT_MODE_VARSTORE_DATA);
-  Status = gRT->GetVariable (L"AcpiSdCompatMode",
+  Size   = sizeof (ACPI_SD_COMPAT_MODE_VARSTORE_DATA);
+  Status = gRT->GetVariable (
+                  L"AcpiSdCompatMode",
                   &gRpiPlatformFormSetGuid,
-                  NULL, &Size, &AcpiSdCompatMode);
+                  NULL,
+                  &Size,
+                  &AcpiSdCompatMode
+                  );
   if (EFI_ERROR (Status)) {
     Status = gRT->SetVariable (
                     L"AcpiSdCompatMode",
                     &gRpiPlatformFormSetGuid,
                     EFI_VARIABLE_NON_VOLATILE | EFI_VARIABLE_BOOTSERVICE_ACCESS | EFI_VARIABLE_RUNTIME_ACCESS,
                     Size,
-                    &AcpiSdCompatMode);
+                    &AcpiSdCompatMode
+                    );
     ASSERT_EFI_ERROR (Status);
   }
 
-  Size = sizeof (ACPI_SD_LIMIT_UHS_VARSTORE_DATA);
-  Status = gRT->GetVariable (L"AcpiSdLimitUhs",
+  Size   = sizeof (ACPI_SD_LIMIT_UHS_VARSTORE_DATA);
+  Status = gRT->GetVariable (
+                  L"AcpiSdLimitUhs",
                   &gRpiPlatformFormSetGuid,
-                  NULL, &Size, &AcpiSdLimitUhs);
+                  NULL,
+                  &Size,
+                  &AcpiSdLimitUhs
+                  );
   if (EFI_ERROR (Status)) {
     Status = gRT->SetVariable (
                     L"AcpiSdLimitUhs",
                     &gRpiPlatformFormSetGuid,
                     EFI_VARIABLE_NON_VOLATILE | EFI_VARIABLE_BOOTSERVICE_ACCESS | EFI_VARIABLE_RUNTIME_ACCESS,
                     Size,
-                    &AcpiSdLimitUhs);
+                    &AcpiSdLimitUhs
+                    );
     ASSERT_EFI_ERROR (Status);
   }
 
-  Size = sizeof (ACPI_PCIE_ECAM_COMPAT_MODE_VARSTORE_DATA);
-  Status = gRT->GetVariable (L"AcpiPcieEcamCompatMode",
+  Size   = sizeof (ACPI_PCIE_ECAM_COMPAT_MODE_VARSTORE_DATA);
+  Status = gRT->GetVariable (
+                  L"AcpiPcieEcamCompatMode",
                   &gRpiPlatformFormSetGuid,
-                  NULL, &Size, &AcpiPcieEcamCompatMode);
+                  NULL,
+                  &Size,
+                  &AcpiPcieEcamCompatMode
+                  );
   if (EFI_ERROR (Status)) {
     Status = gRT->SetVariable (
                     L"AcpiPcieEcamCompatMode",
                     &gRpiPlatformFormSetGuid,
                     EFI_VARIABLE_NON_VOLATILE | EFI_VARIABLE_BOOTSERVICE_ACCESS | EFI_VARIABLE_RUNTIME_ACCESS,
                     Size,
-                    &AcpiPcieEcamCompatMode);
+                    &AcpiPcieEcamCompatMode
+                    );
     ASSERT_EFI_ERROR (Status);
   }
 
-  Size = sizeof (ACPI_PCIE_32_BIT_BAR_SPACE_SIZE_MB_VARSTORE_DATA);
-  Status = gRT->GetVariable (L"AcpiPcie32BitBarSpaceSizeMB",
+  Size   = sizeof (ACPI_PCIE_32_BIT_BAR_SPACE_SIZE_MB_VARSTORE_DATA);
+  Status = gRT->GetVariable (
+                  L"AcpiPcie32BitBarSpaceSizeMB",
                   &gRpiPlatformFormSetGuid,
-                  NULL, &Size, &AcpiPcie32BitBarSpaceSizeMB);
+                  NULL,
+                  &Size,
+                  &AcpiPcie32BitBarSpaceSizeMB
+                  );
   if (EFI_ERROR (Status)) {
     Status = gRT->SetVariable (
                     L"AcpiPcie32BitBarSpaceSizeMB",
                     &gRpiPlatformFormSetGuid,
                     EFI_VARIABLE_NON_VOLATILE | EFI_VARIABLE_BOOTSERVICE_ACCESS | EFI_VARIABLE_RUNTIME_ACCESS,
                     Size,
-                    &AcpiPcie32BitBarSpaceSizeMB);
+                    &AcpiPcie32BitBarSpaceSizeMB
+                    );
     ASSERT_EFI_ERROR (Status);
   }
 
-  Size = sizeof (UINT32);
-  Status = gRT->GetVariable (L"SystemTableMode",
+  Size   = sizeof (UINT32);
+  Status = gRT->GetVariable (
+                  L"SystemTableMode",
                   &gRpiPlatformFormSetGuid,
-                  NULL, &Size, &Var32);
+                  NULL,
+                  &Size,
+                  &Var32
+                  );
   if (EFI_ERROR (Status)) {
     Status = PcdSet32S (PcdSystemTableMode, PcdGet32 (PcdSystemTableMode));
     ASSERT_EFI_ERROR (Status);

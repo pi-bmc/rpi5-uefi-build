@@ -185,23 +185,27 @@ OpenBootVolume (
     }
 
     Score = 0;
-    if (!EFI_ERROR (Candidate->Open (
-                      Candidate,
-                      &File,
-                      L"armstub8-2712.bin",
-                      EFI_FILE_MODE_READ,
-                      0
-                      )))
+    if (!EFI_ERROR (
+           Candidate->Open (
+                        Candidate,
+                        &File,
+                        L"armstub8-2712.bin",
+                        EFI_FILE_MODE_READ,
+                        0
+                        )
+           ))
     {
       File->Close (File);
       Score = 2;
-    } else if (!EFI_ERROR (Candidate->Open (
-                             Candidate,
-                             &File,
-                             L"config.txt",
-                             EFI_FILE_MODE_READ,
-                             0
-                             )))
+    } else if (!EFI_ERROR (
+                  Candidate->Open (
+                               Candidate,
+                               &File,
+                               L"config.txt",
+                               EFI_FILE_MODE_READ,
+                               0
+                               )
+                  ))
     {
       File->Close (File);
       Score = 1;
@@ -241,13 +245,15 @@ DeleteFileIfPresent (
 {
   EFI_FILE_PROTOCOL  *File;
 
-  if (!EFI_ERROR (Root->Open (
-                    Root,
-                    &File,
-                    Name,
-                    EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE,
-                    0
-                    )))
+  if (!EFI_ERROR (
+         Root->Open (
+                 Root,
+                 &File,
+                 Name,
+                 EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE,
+                 0
+                 )
+         ))
   {
     //
     // Delete() closes the handle regardless of the outcome.
@@ -513,14 +519,14 @@ PatchImage (
   }
 
   if (!EepromFindFileIn (
-        Image,
-        Size,
-        0,
-        EEPROM_PARTITION_A_START,
-        EEPROM_PARTITION_A_END,
-        "bootconf.txt",
-        &Loc
-        ))
+         Image,
+         Size,
+         0,
+         EEPROM_PARTITION_A_START,
+         EEPROM_PARTITION_A_END,
+         "bootconf.txt",
+         &Loc
+         ))
   {
     *FailLine = L"No bootconf.txt section in the EEPROM image.";
     return EFI_NOT_FOUND;
@@ -687,23 +693,23 @@ StageUpdate (
   VOID
   )
 {
-  EFI_STATUS         Status;
-  RPI_BLCFG_DATA     Edited;
-  BLCFG_VALUES       NewValues;
-  BCM2712_BOOT_SPI   Spi;
+  EFI_STATUS               Status;
+  RPI_BLCFG_DATA           Edited;
+  BLCFG_VALUES             NewValues;
+  BCM2712_BOOT_SPI         Spi;
   BCM2712_BOOT_SPI_RESULT  SpiResult;
-  CHAR16             DiagLine1[80];
-  CHAR16             DiagLine2[80];
-  UINT8              *Image;
-  UINT8              Digest[BLCFG_SHA256_DIGEST_SIZE];
-  CHAR8              Sig[128];
-  UINTN              SigLen;
-  UINTN              Index;
-  UINT32             Timestamp;
-  EFI_FILE_PROTOCOL  *Root;
-  CHAR16             *FailLine;
-  CONST CHAR8        *Val;
-  UINTN              ValLen;
+  CHAR16                   DiagLine1[80];
+  CHAR16                   DiagLine2[80];
+  UINT8                    *Image;
+  UINT8                    Digest[BLCFG_SHA256_DIGEST_SIZE];
+  CHAR8                    Sig[128];
+  UINTN                    SigLen;
+  UINTN                    Index;
+  UINT32                   Timestamp;
+  EFI_FILE_PROTOCOL        *Root;
+  CHAR16                   *FailLine;
+  CONST CHAR8              *Val;
+  UINTN                    ValLen;
 
   ZeroMem (&Edited, sizeof (Edited));
   if (!HiiGetBrowserData (

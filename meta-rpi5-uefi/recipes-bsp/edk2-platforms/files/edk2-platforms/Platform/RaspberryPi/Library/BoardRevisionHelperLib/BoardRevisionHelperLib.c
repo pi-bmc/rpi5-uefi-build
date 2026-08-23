@@ -12,11 +12,11 @@
 //
 // https://www.raspberrypi.com/documentation/computers/raspberry-pi.html#new-style-revision-codes
 //
-#define RPI_MEMORY_SIZE(Rev)      ((Rev >> 20) & 0x07)
-#define RPI_MANUFACTURER(Rev)     ((Rev >> 16) & 0x0F)
-#define RPI_PROCESSOR(Rev)        ((Rev >> 12) & 0x0F)
-#define RPI_TYPE(Rev)             ((Rev >> 4) & 0xFF)
-#define RPI_REVISION(Rev)         (Rev & 0x0F)
+#define RPI_MEMORY_SIZE(Rev)   ((Rev >> 20) & 0x07)
+#define RPI_MANUFACTURER(Rev)  ((Rev >> 16) & 0x0F)
+#define RPI_PROCESSOR(Rev)     ((Rev >> 12) & 0x0F)
+#define RPI_TYPE(Rev)          ((Rev >> 4) & 0xFF)
+#define RPI_REVISION(Rev)      (Rev & 0x0F)
 
 UINT64
 EFIAPI
@@ -25,8 +25,9 @@ BoardRevisionGetMemorySize (
   )
 {
   if (RevisionCode != 0) {
-      return SIZE_256MB * 1ULL << RPI_MEMORY_SIZE (RevisionCode);
+    return SIZE_256MB * 1ULL << RPI_MEMORY_SIZE (RevisionCode);
   }
+
   return SIZE_256MB; // Smallest possible size
 }
 
@@ -62,9 +63,10 @@ BoardRevisionGetModelFamily (
       case 0x18:          // Compute Module 5
       case 0x19:          // Raspberry Pi 500
       case 0x1a:          // Compute Module 5 Lite
-      return 5;
+        return 5;
     }
   }
+
   return 0;
 }
 
@@ -118,6 +120,7 @@ BoardRevisionGetModelName (
         return "Raspberry Pi Compute Module 5 Lite";
     }
   }
+
   return "Unknown Raspberry Pi Model";
 }
 
@@ -175,7 +178,7 @@ FdtNameByVariant (
     Variant = 0;
   }
 
-  return (CHAR8 *) Names[Variant];
+  return (CHAR8 *)Names[Variant];
 }
 
 /**
@@ -280,6 +283,7 @@ BoardRevisionGetManufacturerName (
         return "Stadium";
     }
   }
+
   return "Unknown Manufacturer";
 }
 
@@ -303,5 +307,6 @@ BoardRevisionGetProcessorName (
         return "BCM2712 (Arm Cortex-A76)";
     }
   }
+
   return "Unknown CPU Model";
 }

@@ -303,19 +303,19 @@ Rp1GemDriverBindingStart (
   CopyMem (&Gem->Snp, &gRp1GemSimpleNetworkTemplate, sizeof (Gem->Snp));
   Gem->Snp.Mode = &Gem->SnpMode;
 
-  Gem->SnpMode.State                 = EfiSimpleNetworkStopped;
-  Gem->SnpMode.HwAddressSize         = GEM_ETHER_ADDR_LEN;
-  Gem->SnpMode.MediaHeaderSize       = GEM_ETHER_HEADER_SIZE;
-  Gem->SnpMode.MaxPacketSize         = GEM_ETHER_MTU;
-  Gem->SnpMode.NvRamSize             = 0;
-  Gem->SnpMode.NvRamAccessSize       = 0;
-  Gem->SnpMode.ReceiveFilterMask     = EFI_SIMPLE_NETWORK_RECEIVE_UNICAST |
-                                       EFI_SIMPLE_NETWORK_RECEIVE_MULTICAST |
-                                       EFI_SIMPLE_NETWORK_RECEIVE_BROADCAST |
-                                       EFI_SIMPLE_NETWORK_RECEIVE_PROMISCUOUS |
-                                       EFI_SIMPLE_NETWORK_RECEIVE_PROMISCUOUS_MULTICAST;
-  Gem->SnpMode.ReceiveFilterSetting  = EFI_SIMPLE_NETWORK_RECEIVE_UNICAST |
-                                       EFI_SIMPLE_NETWORK_RECEIVE_BROADCAST;
+  Gem->SnpMode.State             = EfiSimpleNetworkStopped;
+  Gem->SnpMode.HwAddressSize     = GEM_ETHER_ADDR_LEN;
+  Gem->SnpMode.MediaHeaderSize   = GEM_ETHER_HEADER_SIZE;
+  Gem->SnpMode.MaxPacketSize     = GEM_ETHER_MTU;
+  Gem->SnpMode.NvRamSize         = 0;
+  Gem->SnpMode.NvRamAccessSize   = 0;
+  Gem->SnpMode.ReceiveFilterMask = EFI_SIMPLE_NETWORK_RECEIVE_UNICAST |
+                                   EFI_SIMPLE_NETWORK_RECEIVE_MULTICAST |
+                                   EFI_SIMPLE_NETWORK_RECEIVE_BROADCAST |
+                                   EFI_SIMPLE_NETWORK_RECEIVE_PROMISCUOUS |
+                                   EFI_SIMPLE_NETWORK_RECEIVE_PROMISCUOUS_MULTICAST;
+  Gem->SnpMode.ReceiveFilterSetting = EFI_SIMPLE_NETWORK_RECEIVE_UNICAST |
+                                      EFI_SIMPLE_NETWORK_RECEIVE_BROADCAST;
   Gem->SnpMode.MaxMCastFilterCount   = MAX_MCAST_FILTER_CNT;
   Gem->SnpMode.MCastFilterCount      = 0;
   Gem->SnpMode.IfType                = 1;   // Ethernet

@@ -27,6 +27,15 @@ trim_trailing_whitespace = true
 indent_style = space
 indent_size = 2
 
+# EDK2/TianoCore sources carried by the Yocto layer follow the EDK2 coding
+# style (2-space indent), enforced by hack/format-edk2.sh -- not the kernel
+# style of the generic C section above.
+[meta-rpi5-uefi/recipes-bsp/edk2*/files/**.{c,h,cpp}]
+indent_style = space
+indent_size = 2
+tab_width = 2
+end_of_line = lf
+
 [Makefile]
 indent_style = tab
 indent_size = 4

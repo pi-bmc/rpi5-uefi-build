@@ -1,12 +1,21 @@
 #/** @file
 #
 #  EFI_MM_COMMUNICATION2_PROTOCOL over the OP-TEE StandaloneMM (StMM) secure
-#  partition. Opens the PTA_STMM pseudo-TA session and relays MM communication
-#  buffers to StMM, servicing the OP-TEE normal-world RPC loop (shared memory +
-#  the storage backend) so the StMM variable service can reach its store. Both
-#  secure-storage backends are serviced: RPMB frames (Rpmb.c, for eMMC) and the
-#  REE filesystem (ReeFs.c, OP-TEE-encrypted files on the boot FAT volume);
-#  which one OP-TEE uses is a build-time choice in the optee-os recipe.
+#  partition, plus the persistence engine for the variable store.
+#
+#  StMM keeps UEFI variables directly in the RPi5.fdf NV window of the
+#  VPU-loaded FD (OP-TEE maps it into the SP; RpiNvMemFvb serves it), so this
+#  driver has two jobs:
+#    1. Transport: open the PTA_STMM pseudo-TA session (servicing the OP-TEE
+#       RPC loop) and relay MM communication buffers (MmCommunicationOptee.c).
+#    2. Persistence: write the NV window back into armstub8-2712.bin /
+#       RPI_EFI.fd on the boot FAT volume when variables change --
+#       VarBlockServiceDxe's model (VarStoreSync.c).
+#
+#  DXE_RUNTIME_DRIVER because VariableSmmRuntimeDxe calls Communicate through
+#  this protocol at OS runtime; post-ExitBootServices the call is refused
+#  cleanly (EFI_UNSUPPORTED) instead of touching boot-services state -- OS
+#  runtime variable access is a documented follow-up, not silently broken.
 #
 #  Copyright (c) 2026, pi-bmc contributors
 #
@@ -18,38 +27,55 @@
   INF_VERSION                    = 0x0001001A
   BASE_NAME                      = MmCommunicationOpteeDxe
   FILE_GUID                      = 6b2f1d84-0c3a-4f57-9a2e-7d5c8b1f4e02
-  MODULE_TYPE                    = DXE_DRIVER
+  MODULE_TYPE                    = DXE_RUNTIME_DRIVER
   VERSION_STRING                 = 1.0
   ENTRY_POINT                    = MmCommunicationOpteeInitialize
 
 [Sources]
   MmCommunicationOptee.c
   MmCommunicationOptee.h
-  Rpmb.c
-  ReeFs.c
+  VarStoreSync.c
 
 [Packages]
   ArmPkg/ArmPkg.dec
+  MdeModulePkg/MdeModulePkg.dec
   MdePkg/MdePkg.dec
+  Platform/RaspberryPi/RaspberryPi.dec
 
 [LibraryClasses]
   ArmSmcLib
   BaseLib
   BaseMemoryLib
   DebugLib
+  DevicePathLib
   MemoryAllocationLib
   OpteeLib
+  PcdLib
   UefiBootServicesTableLib
   UefiDriverEntryPoint
+  UefiRuntimeServicesTableLib
 
 [Guids]
-  gEfiFileInfoGuid                              ## CONSUMES
+  gEfiEventExitBootServicesGuid                 ## CONSUMES ## Event
+  gEfiEventReadyToBootGuid                      ## CONSUMES ## Event
+  gEfiEventVirtualAddressChangeGuid             ## CONSUMES ## Event
+  gEfiSystemNvDataFvGuid                        ## CONSUMES
+  gSmmVariableWriteGuid                         ## PRODUCES # marker: MM variable write ready
 
 [Protocols]
   gEfiMmCommunication2ProtocolGuid              ## PRODUCES
-  gEfiSdMmcPassThruProtocolGuid                 ## CONSUMES
+  gEfiSmmVariableProtocolGuid                   ## PRODUCES # marker + comm buffer header
   gEfiSimpleFileSystemProtocolGuid              ## CONSUMES
   gEfiBlockIoProtocolGuid                       ## CONSUMES
+  gEfiLoadedImageProtocolGuid                   ## CONSUMES
+  gEfiResetNotificationProtocolGuid             ## CONSUMES
+  gEfiDevicePathProtocolGuid                    ## CONSUMES
+
+[FixedPcd]
+  gArmTokenSpaceGuid.PcdFdBaseAddress
+  gEfiMdeModulePkgTokenSpaceGuid.PcdFlashNvStorageFtwSpareSize
+  gRaspberryPiTokenSpaceGuid.PcdNvStorageFtwSpareBase
+  gRaspberryPiTokenSpaceGuid.PcdNvStorageVariableBase
 
 [Depex]
   TRUE

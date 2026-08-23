@@ -1,19 +1,24 @@
-SUMMARY = "EDK2 StandaloneMM RPMB firmware volume (BL32_AP_MM.fd) for OP-TEE"
-DESCRIPTION = "Builds BL32_AP_MM.fd from edk2-platforms' \
-               Platform/StandaloneMm/PlatformStandaloneMmPkg/PlatformStandaloneMmRpmb.dsc: \
-               a StandaloneMM firmware volume packing StandaloneMmCore, the \
-               MM variable service (VariableStandaloneMm), the fault-tolerant \
-               write service (FaultTolerantWriteStandaloneMm), the MM CPU \
-               driver, and Drivers/OpTee/OpteeRpmbPkg/OpTeeRpmbFv -- the FVB \
-               that persists the UEFI variable store to eMMC/SD RPMB through \
-               OP-TEE (SP_SVC_RPMB_READ/WRITE to the OP-TEE core). \
+SUMMARY = "EDK2 StandaloneMM firmware volume (BL32_AP_MM.fd) for OP-TEE"
+DESCRIPTION = "Builds BL32_AP_MM.fd from this layer's \
+               Platform/RaspberryPi/RPi5/StandaloneMm/PlatformStandaloneMmRpi5.dsc \
+               (in the edk2-platforms overlay): a StandaloneMM firmware \
+               volume packing StandaloneMmCore, the MM variable service \
+               (VariableStandaloneMm), the fault-tolerant write service \
+               (FaultTolerantWriteStandaloneMm), the MM CPU driver, and \
+               RpiNvMemFvb -- an FVB over the RPi5.fdf NV window of the \
+               VPU-loaded FD, which OP-TEE maps into the SP (patch 0003 in \
+               the optee-os recipe, CFG_STMM_VARSTORE_*). No storage device \
+               and no OP-TEE storage-service traffic: variable + FTW writes \
+               land directly in that memory window; EDK2's \
+               MmCommunicationOpteeDxe persists the window back into \
+               armstub8-2712.bin / RPI_EFI.fd on the boot FAT. \
 \
-               OP-TEE, built as the S-EL1 FF-A SPM Core (CFG_CORE_SEL1_SPMC), \
-               loads this FV as the StMM secure partition via CFG_STMM_PATH; \
-               the optee-os recipe DEPENDS on this recipe and points \
-               CFG_STMM_PATH at the staged BL32_AP_MM.fd. EDK2 (BL33) reaches \
-               the variable service over FF-A (MmCommunicationDxe + \
-               VariableSmmRuntimeDxe). \
+               OP-TEE loads this FV as the StMM secure partition via \
+               CFG_STMM_PATH (an ordinary pseudo-TA under opteed, no FF-A \
+               SPMC); the optee-os recipe DEPENDS on this recipe and points \
+               CFG_STMM_PATH at the staged BL32_AP_MM.fd. EDK2 (BL33) \
+               reaches the variable service through MmCommunicationOpteeDxe \
+               + VariableSmmRuntimeDxe. \
 \
                Built the same way as rpi5-uefi-firmware: the edk2 and \
                edk2-platforms trees come from the sysroot (staged by their \
@@ -48,23 +53,14 @@ EDK2_PLATFORMS_PATH = "${WORKDIR}/edk2-platforms"
 # RELEASE (default), DEBUG or NOOPT, per the dsc's BUILD_TARGETS.
 STMM_BUILD_TARGET ??= "RELEASE"
 
-# Enlarge the RPMB variable-store geometry (see do_configure). Default OFF while
-# we isolate a StandaloneMmCore memory-map abort: the 3x64KB store + 64KB FTW
-# blocks, against OP-TEE's 16KB-aligned MMRAM and AArch64's 64KB
-# RUNTIME_PAGE_ALLOCATION_GRANULARITY, is the leading suspect. "0" = stock
-# (8KB var / 48KB EFI_VARS object); "1" = 192KB object.
-STMM_BIG_VARS ??= "0"
-
-# StandaloneMmCore/Page.c bounds its temporary memory-map descriptor stack at
-# MAX_MAP_DEPTH (upstream 6), guarded only by an ASSERT -- a no-op in RELEASE.
-# A re-entrant CoreConvertPages (AllocateMemoryMapEntry's refuel calls
-# MmInternalAllocatePagesEx -> CoreConvertPages) can push mMapDepth past the
-# bound, writing &mMapStack[mMapDepth] into the adjacent .data globals and
-# corrupting the memory-map list. Tested -- raising it did NOT fix the abort
-# (root cause was the missing free-range validation ported below), so kept at
-# stock "6". Left as a knob for future stress.
-STMM_MAP_DEPTH ??= "6"
-do_configure[vardeps] += "STMM_BIG_VARS STMM_MAP_DEPTH"
+# The platform: this layer's StandaloneMM dsc from the edk2-platforms overlay.
+# Its NV geometry is pinned to the RPi5.fdf FD NV window (variable 0xe000,
+# FTW working 0x1000, FTW spare 0x10000 at fixed SP VAs) -- growing the store
+# means growing the FDF NV regions and the dsc PCDs together, so there is no
+# geometry knob here.
+STMM_DSC_DIR = "Platform/RaspberryPi/RPi5/StandaloneMm"
+STMM_DSC = "${STMM_DSC_DIR}/PlatformStandaloneMmRpi5.dsc"
+STMM_BUILD_DIR = "Build/MmStandaloneRpi5"
 
 # Where the built FV is staged for optee-os (keep in step with optee-os's
 # STMM_FV consumption).
@@ -83,40 +79,12 @@ do_configure() {
     cp -a --reflink=auto "${EDK2_SRC}/." "${EDK2_PATH}/"
     cp -a --reflink=auto "${EDK2_PLATFORMS_SRC}/." "${EDK2_PLATFORMS_PATH}/"
 
-    # Enlarge the RPMB-backed UEFI variable store. PlatformStandaloneMmRpmb.dsc
-    # ships a tiny geometry -- 16KB variable region, 48KB EFI_VARS object
-    # (var + FTW working + FTW spare), 8KB max variable, 10KB max auth variable.
-    # That is smaller than the FD-backed store this replaces (RPi5.fdf
-    # NV_VARIABLE_STORE is 0xe000 = 56KB) and too small for a Secure Boot dbx.
-    # Bump to a 64KB variable store + 64KB/64KB FTW (a 192KB EFI_VARS object --
-    # the RPMB partition must be at least that; industrial SD / eMMC RPMB is
-    # far larger) and a 32KB max auth variable. The NV regions are a runtime RAM
-    # mirror OpTeeRpmbFvb syncs to RPMB, not part of BL32_AP_MM.fd, so the FV
-    # binary size is unchanged. Edited in place because a dsc may set each PCD
-    # only once (append would duplicate); verified after so a silent no-match
-    # (upstream reformatted the lines) fails the build instead of shipping the
-    # tiny store.
-    stmm_dsc="${EDK2_PLATFORMS_PATH}/Platform/StandaloneMm/PlatformStandaloneMmPkg/PlatformStandaloneMmRpmb.dsc"
-    if [ "${STMM_BIG_VARS}" = "1" ]; then
-        sed -i \
-            -e 's#PcdMaxVariableSize|0x2000#PcdMaxVariableSize|0x8000#' \
-            -e 's#PcdMaxAuthVariableSize|0x2800#PcdMaxAuthVariableSize|0x8000#' \
-            -e 's#PcdFlashNvStorageVariableSize|0x00004000#PcdFlashNvStorageVariableSize|0x00010000#' \
-            -e 's#PcdFlashNvStorageFtwWorkingSize|0x00004000#PcdFlashNvStorageFtwWorkingSize|0x00010000#' \
-            -e 's#PcdFlashNvStorageFtwSpareSize|0x00004000#PcdFlashNvStorageFtwSpareSize|0x00010000#' \
-            -e 's#PcdVariableStoreSize|0x00004000#PcdVariableStoreSize|0x00010000#' \
-            "${stmm_dsc}"
-        for chk in "PcdMaxVariableSize|0x8000" "PcdMaxAuthVariableSize|0x8000" \
-                   "PcdFlashNvStorageVariableSize|0x00010000" \
-                   "PcdFlashNvStorageFtwWorkingSize|0x00010000" \
-                   "PcdFlashNvStorageFtwSpareSize|0x00010000" \
-                   "PcdVariableStoreSize|0x00010000"; do
-            grep -qF "${chk}" "${stmm_dsc}" || \
-                bbfatal "RPMB variable-store PCD bump failed for '${chk}' -- upstream PlatformStandaloneMmRpmb.dsc changed; fix the sed in do_configure"
-        done
-    else
-        bbnote "STMM_BIG_VARS=0: stock PlatformStandaloneMmRpmb.dsc geometry (8KB var / 48KB EFI_VARS object) -- isolating the StandaloneMmCore map abort"
-    fi
+    # The platform dsc/fdf and the RpiNvMemFvb driver come from this layer's
+    # edk2-platforms overlay (staged by the edk2-platforms recipe); nothing to
+    # edit -- just make sure the overlay actually reached the staged tree, so
+    # a stale sysroot fails loudly here instead of deep inside the build.
+    [ -f "${EDK2_PLATFORMS_PATH}/${STMM_DSC}" ] || \
+        bbfatal "${STMM_DSC} missing from the staged edk2-platforms tree -- rebuild edk2-platforms so the StandaloneMm overlay is staged"
 
     # This tree (edk2-stable202608 + edk2-platforms master) predates the host
     # aarch64 gcc (13.4), which is stricter than the toolchain EDK2 targets and
@@ -137,13 +105,9 @@ do_configure() {
         sed -i 's/#if defined(MBEDTLS_HAVE_ASM)/#if 0 \&\& defined(MBEDTLS_HAVE_ASM)/' "${CT}"
     fi
 
-    # Raise StandaloneMmCore's memory-map temp-stack depth (see STMM_MAP_DEPTH).
     mm_page="${EDK2_PATH}/StandaloneMmPkg/Core/Page.c"
-    sed -i "s/\(#define[[:space:]]\+MAX_MAP_DEPTH[[:space:]]\+\)6\b/\1${STMM_MAP_DEPTH}/" "${mm_page}"
-    grep -qE "#define[[:space:]]+MAX_MAP_DEPTH[[:space:]]+${STMM_MAP_DEPTH}\b" "${mm_page}" || \
-        bbfatal "MAX_MAP_DEPTH bump to ${STMM_MAP_DEPTH} failed -- StandaloneMmPkg/Core/Page.c changed; fix the sed"
 
-    # ROOT-CAUSE FIX: StandaloneMmCore/Page.c is missing the "check valid memory
+    # HARDENING: StandaloneMmCore/Page.c is missing the "check valid memory
     # range" hardening that MdeModulePkg/Core/PiSmmCore/Page.c has (the two are
     # maintained separately and drifted). Without it, a free of a zero/out-of-map
     # range reaches ConvertMmMemoryMapEntry() and splices a bogus node into
@@ -212,16 +176,8 @@ open(p, 'wb').write(d)
 print('StandaloneMmCore Page.c: ported PiSmmCore free-range validation')
 PYEOF
 
-    #   * gcc 12/13 emit false-positive -Wmaybe-uninitialized / stringop /
-    #     array-bounds / dangling-pointer diagnostics in upstream EDK2 sources
-    #     (e.g. ArmStandaloneMmCoreEntryPoint.c); demote those to warnings.
-    # Appended (=) to the dsc's existing AARCH64 BuildOptions, so these flags
-    # come after (and override) the toolchain's -Werror.
-    printf '%s\n' \
-        '' \
-        '[BuildOptions.AARCH64]' \
-        '  GCC:*_*_*_CC_FLAGS = -Wno-error=maybe-uninitialized -Wno-error=uninitialized -Wno-error=stringop-overflow -Wno-error=stringop-overread -Wno-error=array-bounds -Wno-error=dangling-pointer -Wno-error=nonnull' \
-        >> "${EDK2_PLATFORMS_PATH}/Platform/StandaloneMm/PlatformStandaloneMmPkg/PlatformStandaloneMmRpmb.dsc"
+    # (The gcc-12/13 false-positive -Wno-error demotions live in the dsc's own
+    # [BuildOptions.AARCH64] now -- see PlatformStandaloneMmRpi5.dsc.)
 }
 
 do_compile() {
@@ -250,22 +206,39 @@ do_compile() {
     # GCC_AARCH64_PREFIX, not $CC.
     export GCC_AARCH64_PREFIX="${TARGET_PREFIX}"
 
-    dsc="edk2-platforms/Platform/StandaloneMm/PlatformStandaloneMmPkg/PlatformStandaloneMmRpmb.dsc"
-    build -a AARCH64 -t GCC -b ${STMM_BUILD_TARGET} -p "${dsc}"
+    build -a AARCH64 -t GCC -b ${STMM_BUILD_TARGET} -p "edk2-platforms/${STMM_DSC}"
 
-    fv="${WORKDIR}/Build/MmStandaloneRpmb/${STMM_BUILD_TARGET}_GCC/FV/${STMM_FV_NAME}"
+    fv="${WORKDIR}/${STMM_BUILD_DIR}/${STMM_BUILD_TARGET}_GCC/FV/${STMM_FV_NAME}"
     [ -f "${fv}" ] || bbfatal "StandaloneMM build produced no ${fv} -- check the build log"
+
+    # FP/SIMD gate. This code runs in the StMM secure partition at S-EL0
+    # where FP/SIMD access traps (esr EC 0x07) and OP-TEE kills the SP --
+    # measured on hardware: gcc's q-register varargs prologue in
+    # VariableSmm.c took down the first SetVariable of the boot. The dsc
+    # forces -mgeneral-regs-only, but only this scan proves the invariant
+    # held for every module (a future lib swap or dsc edit could silently
+    # drop the flag). Scans the pre-GenFw ELFs; any FP/SIMD-register
+    # instruction anywhere is fatal.
+    for dll in $(find "${WORKDIR}/${STMM_BUILD_DIR}/${STMM_BUILD_TARGET}_GCC/AARCH64" \
+                   -name '*.dll' -path '*/DEBUG/*'); do
+        n=$(${TARGET_PREFIX}objdump -d "${dll}" | \
+            grep -cE '\s(ldr|str|ldp|stp|fmov|movi|ld1|st1|dup|fadd|fsub|fmul|fdiv|fcvt|scvtf|ucvtf)\s+[qvds][0-9]+' || true)
+        if [ "${n}" != "0" ]; then
+            bbfatal "$(basename ${dll}) contains ${n} FP/SIMD instruction(s) -- would trap in the StMM SP (S-EL0). Check -mgeneral-regs-only in ${STMM_DSC}."
+        fi
+    done
+    bbnote "StMM FP/SIMD gate: all modules clean"
 }
 
 do_install() {
     install -d ${D}${STMM_SYSROOT_DIR}
-    install -m 0644 ${WORKDIR}/Build/MmStandaloneRpmb/${STMM_BUILD_TARGET}_GCC/FV/${STMM_FV_NAME} \
+    install -m 0644 ${WORKDIR}/${STMM_BUILD_DIR}/${STMM_BUILD_TARGET}_GCC/FV/${STMM_FV_NAME} \
         ${D}${STMM_SYSROOT_DIR}/${STMM_FV_NAME}
 }
 
 do_deploy() {
     install -d ${DEPLOYDIR}
-    install -m 0644 ${WORKDIR}/Build/MmStandaloneRpmb/${STMM_BUILD_TARGET}_GCC/FV/${STMM_FV_NAME} \
+    install -m 0644 ${WORKDIR}/${STMM_BUILD_DIR}/${STMM_BUILD_TARGET}_GCC/FV/${STMM_FV_NAME} \
         ${DEPLOYDIR}/${STMM_FV_NAME}
 }
 

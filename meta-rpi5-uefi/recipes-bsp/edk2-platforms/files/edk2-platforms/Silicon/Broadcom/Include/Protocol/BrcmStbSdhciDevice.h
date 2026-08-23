@@ -20,7 +20,7 @@ typedef struct _BRCMSTB_SDHCI_DEVICE_PROTOCOL BRCMSTB_SDHCI_DEVICE_PROTOCOL;
 
 typedef
 EFI_STATUS
-(EFIAPI *BRCMSTB_SDHCI_SET_SIGNALING_VOLTAGE) (
+(EFIAPI *BRCMSTB_SDHCI_SET_SIGNALING_VOLTAGE)(
   IN BRCMSTB_SDHCI_DEVICE_PROTOCOL      *This,
   IN SD_MMC_SIGNALING_VOLTAGE           Voltage
   );
@@ -29,19 +29,19 @@ struct _BRCMSTB_SDHCI_DEVICE_PROTOCOL {
   //
   // Controller platform info
   //
-  EFI_PHYSICAL_ADDRESS                  HostAddress;
-  EFI_PHYSICAL_ADDRESS                  CfgAddress;
-  NON_DISCOVERABLE_DEVICE_DMA_TYPE      DmaType;
+  EFI_PHYSICAL_ADDRESS                   HostAddress;
+  EFI_PHYSICAL_ADDRESS                   CfgAddress;
+  NON_DISCOVERABLE_DEVICE_DMA_TYPE       DmaType;
 
-  BOOLEAN                               IsSlotRemovable;
+  BOOLEAN                                IsSlotRemovable;
 
   //
   // Optional callback for setting the signaling voltage via
   // an external regulator.
   //
-  BRCMSTB_SDHCI_SET_SIGNALING_VOLTAGE   SetSignalingVoltage;
+  BRCMSTB_SDHCI_SET_SIGNALING_VOLTAGE    SetSignalingVoltage;
 };
 
-extern EFI_GUID gBrcmStbSdhciDeviceProtocolGuid;
+extern EFI_GUID  gBrcmStbSdhciDeviceProtocolGuid;
 
 #endif // __BRCMSTB_SDHCI_DEVICE_H__

@@ -134,11 +134,22 @@ RenderSmbiosUuid (
     Text,
     37,
     "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
-    Uuid[3],  Uuid[2],  Uuid[1],  Uuid[0],
-    Uuid[5],  Uuid[4],
-    Uuid[7],  Uuid[6],
-    Uuid[8],  Uuid[9],
-    Uuid[10], Uuid[11], Uuid[12], Uuid[13], Uuid[14], Uuid[15]
+    Uuid[3],
+    Uuid[2],
+    Uuid[1],
+    Uuid[0],
+    Uuid[5],
+    Uuid[4],
+    Uuid[7],
+    Uuid[6],
+    Uuid[8],
+    Uuid[9],
+    Uuid[10],
+    Uuid[11],
+    Uuid[12],
+    Uuid[13],
+    Uuid[14],
+    Uuid[15]
     );
 
   return TRUE;

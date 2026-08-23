@@ -28,15 +28,15 @@
 
 #include <Uefi.h>
 
-#define EEPROM_IMAGE_SIZE_2712    SIZE_2MB
+#define EEPROM_IMAGE_SIZE_2712  SIZE_2MB
 
-#define EEPROM_SECTION_MAGIC      0x55aaf00fU
-#define EEPROM_SECTION_MAGIC_MASK 0xfffff00fU
-#define EEPROM_FILE_MAGIC         0x55aaf11fU
-#define EEPROM_PAD_MAGIC          0x55aafeefU
+#define EEPROM_SECTION_MAGIC       0x55aaf00fU
+#define EEPROM_SECTION_MAGIC_MASK  0xfffff00fU
+#define EEPROM_FILE_MAGIC          0x55aaf11fU
+#define EEPROM_PAD_MAGIC           0x55aafeefU
 
-#define EEPROM_FILE_HDR_LEN       20
-#define EEPROM_FILENAME_LEN       12
+#define EEPROM_FILE_HDR_LEN  20
+#define EEPROM_FILENAME_LEN  12
 
 #define EEPROM_READ_ONLY_SIZE     SIZE_64KB
 #define EEPROM_PARTITION_SIZE     (988 * 1024)
@@ -45,13 +45,13 @@
 #define EEPROM_PARTITION_B_START  EEPROM_PARTITION_A_END
 #define EEPROM_PARTITION_B_END    (EEPROM_PARTITION_B_START + EEPROM_PARTITION_SIZE)
 
-#define EEPROM_ERASE_ALIGN        SIZE_4KB
+#define EEPROM_ERASE_ALIGN  SIZE_4KB
 
 //
 // Modifiable files must fit one erase sector (rpi-eeprom-config's
 // MAX_FILE_SIZE).
 //
-#define EEPROM_MAX_FILE_SIZE      (EEPROM_ERASE_ALIGN - EEPROM_FILE_HDR_LEN)
+#define EEPROM_MAX_FILE_SIZE  (EEPROM_ERASE_ALIGN - EEPROM_FILE_HDR_LEN)
 
 typedef struct {
   UINTN      HdrOffset;      // section header (magic) offset

@@ -43,20 +43,20 @@
 // Ethernet framing constants (kept local: the RPi5 platform DSC does not
 // provide a NetLib mapping for standalone UEFI drivers).
 //
-#define GEM_ETHER_ADDR_LEN      6
-#define GEM_ETHER_HEADER_SIZE   14
-#define GEM_ETHER_MTU           1500
-#define GEM_MAX_FRAME_SIZE      1536    // matches NET_CFG 1536RXEN limit
+#define GEM_ETHER_ADDR_LEN     6
+#define GEM_ETHER_HEADER_SIZE  14
+#define GEM_ETHER_MTU          1500
+#define GEM_MAX_FRAME_SIZE     1536     // matches NET_CFG 1536RXEN limit
 
 //
 // Ring geometry: modest polled-mode rings, 2048-byte buffers.
 //
-#define GEM_RX_DESC_COUNT       16
-#define GEM_TX_DESC_COUNT       8
-#define GEM_RX_BUFFER_SIZE      2048
-#define GEM_TX_BUFFER_SIZE      2048
+#define GEM_RX_DESC_COUNT   16
+#define GEM_TX_DESC_COUNT   8
+#define GEM_RX_BUFFER_SIZE  2048
+#define GEM_TX_BUFFER_SIZE  2048
 
-#define RP1_GEM_SIGNATURE       SIGNATURE_32 ('R', 'G', 'e', 'm')
+#define RP1_GEM_SIGNATURE  SIGNATURE_32 ('R', 'G', 'e', 'm')
 
 typedef struct {
   UINT32                         Signature;
@@ -155,8 +155,8 @@ GemMacDisableTxRx (
 
 VOID
 GemSetMacAddress (
-  IN RP1_GEM_PRIVATE_DATA  *Gem,
-  IN CONST EFI_MAC_ADDRESS *MacAddress
+  IN RP1_GEM_PRIVATE_DATA   *Gem,
+  IN CONST EFI_MAC_ADDRESS  *MacAddress
   );
 
 VOID

@@ -18,18 +18,18 @@
 #include "ConfigTable.h"
 #include "Peripherals.h"
 
-UINT32 mBoardRevisionCode;
-UINT64 mSystemMemorySize;
+UINT32  mBoardRevisionCode;
+UINT64  mSystemMemorySize;
 
-extern UINT8 RpiPlatformDxeHiiBin[];
-extern UINT8 RpiPlatformDxeStrings[];
+extern UINT8  RpiPlatformDxeHiiBin[];
+extern UINT8  RpiPlatformDxeStrings[];
 
 typedef struct {
-  VENDOR_DEVICE_PATH VendorDevicePath;
-  EFI_DEVICE_PATH_PROTOCOL End;
+  VENDOR_DEVICE_PATH          VendorDevicePath;
+  EFI_DEVICE_PATH_PROTOCOL    End;
 } HII_VENDOR_DEVICE_PATH;
 
-STATIC HII_VENDOR_DEVICE_PATH mVendorDevicePath = {
+STATIC HII_VENDOR_DEVICE_PATH  mVendorDevicePath = {
   {
     {
       HARDWARE_DEVICE_PATH,
@@ -58,32 +58,39 @@ InstallHiiPages (
   VOID
   )
 {
-  EFI_STATUS        Status;
-  EFI_HII_HANDLE    HiiHandle;
-  EFI_HANDLE        DriverHandle;
+  EFI_STATUS      Status;
+  EFI_HII_HANDLE  HiiHandle;
+  EFI_HANDLE      DriverHandle;
 
   DriverHandle = NULL;
-  Status = gBS->InstallMultipleProtocolInterfaces (&DriverHandle,
-                  &gEfiDevicePathProtocolGuid,
-                  &mVendorDevicePath,
-                  NULL);
+  Status       = gBS->InstallMultipleProtocolInterfaces (
+                        &DriverHandle,
+                        &gEfiDevicePathProtocolGuid,
+                        &mVendorDevicePath,
+                        NULL
+                        );
   if (EFI_ERROR (Status)) {
     return Status;
   }
 
-  HiiHandle = HiiAddPackages (&gRpiPlatformFormSetGuid,
+  HiiHandle = HiiAddPackages (
+                &gRpiPlatformFormSetGuid,
                 DriverHandle,
                 RpiPlatformDxeStrings,
                 RpiPlatformDxeHiiBin,
-                NULL);
+                NULL
+                );
 
   if (HiiHandle == NULL) {
-    gBS->UninstallMultipleProtocolInterfaces (DriverHandle,
+    gBS->UninstallMultipleProtocolInterfaces (
+           DriverHandle,
            &gEfiDevicePathProtocolGuid,
            &mVendorDevicePath,
-           NULL);
+           NULL
+           );
     return EFI_OUT_OF_RESOURCES;
   }
+
   return EFI_SUCCESS;
 }
 
@@ -112,16 +119,20 @@ ApplyVariables (
 EFI_STATUS
 EFIAPI
 RpiPlatformDxeEntryPoint (
-  IN  EFI_HANDLE          ImageHandle,
-  IN  EFI_SYSTEM_TABLE    *SystemTable
+  IN  EFI_HANDLE        ImageHandle,
+  IN  EFI_SYSTEM_TABLE  *SystemTable
   )
 {
-  EFI_STATUS Status;
+  EFI_STATUS  Status;
 
   Status = BoardInfoGetRevisionCode (&mBoardRevisionCode);
   if (EFI_ERROR (Status)) {
-    DEBUG ((DEBUG_ERROR, "%a: Failed to get board revision. Status=%r\n",
-            __func__, Status));
+    DEBUG ((
+      DEBUG_ERROR,
+      "%a: Failed to get board revision. Status=%r\n",
+      __func__,
+      Status
+      ));
     ASSERT (FALSE);
   }
 

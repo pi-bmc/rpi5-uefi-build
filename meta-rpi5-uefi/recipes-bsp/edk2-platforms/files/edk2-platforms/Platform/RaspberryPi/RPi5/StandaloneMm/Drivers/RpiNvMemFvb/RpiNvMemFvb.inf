@@ -1,0 +1,56 @@
+#/** @file
+#
+#  Memory-window FVB for the RPi5 StandaloneMM variable store: serves the
+#  VPU-loaded FD NV region (mapped into the SP by optee_os plat-rpi5) as a
+#  plain memory-mapped firmware volume. Replaces OpTeeRpmbFv -- no storage
+#  device, no OP-TEE storage-service traffic. See RpiNvMemFvb.c.
+#
+#  Copyright (c) 2026, pi-bmc contributors
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+#
+#**/
+
+[Defines]
+  INF_VERSION                    = 0x0001001A
+  BASE_NAME                      = RpiNvMemFvb
+  FILE_GUID                      = 9d5f3b82-6a1e-4c94-8f2b-1e7d0c4a9b53
+  MODULE_TYPE                    = MM_STANDALONE
+  VERSION_STRING                 = 1.0
+  PI_SPECIFICATION_VERSION       = 0x00010032
+  ENTRY_POINT                    = RpiNvMemFvbInit
+
+[Sources]
+  RpiNvMemFvb.c
+
+[Packages]
+  MdeModulePkg/MdeModulePkg.dec
+  MdePkg/MdePkg.dec
+  StandaloneMmPkg/StandaloneMmPkg.dec
+
+[LibraryClasses]
+  BaseLib
+  BaseMemoryLib
+  DebugLib
+  MmServicesTableLib
+  PcdLib
+  StandaloneMmDriverEntryPoint
+
+[Guids]
+  gEfiAuthenticatedVariableGuid
+  gEfiSystemNvDataFvGuid
+  gEfiVariableGuid
+
+[Pcd]
+  gEfiMdeModulePkgTokenSpaceGuid.PcdFlashNvStorageFtwSpareBase64
+  gEfiMdeModulePkgTokenSpaceGuid.PcdFlashNvStorageFtwSpareSize
+  gEfiMdeModulePkgTokenSpaceGuid.PcdFlashNvStorageFtwWorkingBase64
+  gEfiMdeModulePkgTokenSpaceGuid.PcdFlashNvStorageFtwWorkingSize
+  gEfiMdeModulePkgTokenSpaceGuid.PcdFlashNvStorageVariableBase64
+  gEfiMdeModulePkgTokenSpaceGuid.PcdFlashNvStorageVariableSize
+
+[Protocols]
+  gEfiSmmFirmwareVolumeBlockProtocolGuid          ## PRODUCES
+
+[Depex]
+  TRUE

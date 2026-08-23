@@ -9,19 +9,19 @@
 #ifndef __BRCMSTB_SDHCI_DXE_H__
 #define __BRCMSTB_SDHCI_DXE_H__
 
-#define SDIO_HOST_SIZE                                0x260
+#define SDIO_HOST_SIZE  0x260
 
-#define SDIO_CFG_CTRL                                 0x0
-#define SDIO_CFG_CTRL_SDCD_N_TEST_EN                  BIT31
-#define SDIO_CFG_CTRL_SDCD_N_TEST_LEV                 BIT30
+#define SDIO_CFG_CTRL                  0x0
+#define SDIO_CFG_CTRL_SDCD_N_TEST_EN   BIT31
+#define SDIO_CFG_CTRL_SDCD_N_TEST_LEV  BIT30
 
-#define SDIO_CFG_SD_PIN_SEL                           0x44
-#define SDIO_CFG_SD_PIN_SEL_MASK                      (BIT1 | BIT0)
-#define SDIO_CFG_SD_PIN_SEL_CARD                      BIT1
+#define SDIO_CFG_SD_PIN_SEL       0x44
+#define SDIO_CFG_SD_PIN_SEL_MASK  (BIT1 | BIT0)
+#define SDIO_CFG_SD_PIN_SEL_CARD  BIT1
 
-#define SDIO_CFG_MAX_50MHZ_MODE                       0x1ac
-#define SDIO_CFG_MAX_50MHZ_MODE_STRAP_OVERRIDE        BIT31
-#define SDIO_CFG_MAX_50MHZ_MODE_ENABLE                BIT0
+#define SDIO_CFG_MAX_50MHZ_MODE                 0x1ac
+#define SDIO_CFG_MAX_50MHZ_MODE_STRAP_OVERRIDE  BIT31
+#define SDIO_CFG_MAX_50MHZ_MODE_ENABLE          BIT0
 
 typedef struct {
   UINT32    TimeoutFreq   : 6; // bit 0:5

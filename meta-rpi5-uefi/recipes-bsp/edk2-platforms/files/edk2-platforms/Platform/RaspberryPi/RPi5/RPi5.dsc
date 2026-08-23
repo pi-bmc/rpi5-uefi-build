@@ -508,11 +508,21 @@
 [PcdsFeatureFlag.common]
   gEfiMdeModulePkgTokenSpaceGuid.PcdConOutGopSupport|TRUE
   gEfiMdeModulePkgTokenSpaceGuid.PcdInstallAcpiSdtProtocol|TRUE
+!if $(RPI5_OPTEE_VARS) == TRUE
+  # The x86-SMM-era runtime variable cache has VariableStandaloneMm writing
+  # into NS buffers by raw pointer -- pointers the StMM SP has no mapping
+  # for, so the first Get/SetVariable after cache init would data-abort in
+  # S-EL0. All variable traffic goes through the MM communicate path instead.
+  gEfiMdeModulePkgTokenSpaceGuid.PcdEnableVariableRuntimeCache|FALSE
+!endif
 
 [PcdsFixedAtBuild.common]
   gArmPlatformTokenSpaceGuid.PcdCoreCount|4
 
   gArmPlatformTokenSpaceGuid.PcdCPUCorePrimaryStackSize|0x4000
+  # MUST stay equal to the values in PlatformStandaloneMmRpi5.dsc when
+  # RPI5_OPTEE_VARS is on: the NS proxy sizes its communicate payloads from
+  # these copies, StMM enforces its own.
   gEfiMdeModulePkgTokenSpaceGuid.PcdMaxVariableSize|0x2000
   gEfiMdeModulePkgTokenSpaceGuid.PcdMaxAuthVariableSize|0x2800
 
@@ -733,13 +743,16 @@
   MdeModulePkg/Core/RuntimeDxe/RuntimeDxe.inf
 !if $(RPI5_OPTEE_VARS) == TRUE
   #
-  # UEFI variables via OP-TEE + RPMB. The store, its authenticated-variable
-  # handling and fault-tolerant write all run inside the StMM secure partition
-  # (BL32_AP_MM.fd, built by the edk2-standalone-mm recipe and embedded in
-  # OP-TEE); the DXE side is only the MM variable proxy on top of the OP-TEE
-  # StMM MM transport. NOTE: RPMB frame transport to the block device is not
-  # wired yet (see MmCommunicationOpteeDxe/Rpmb.c), so enabling this without
-  # that backend leaves variables non-functional -- hence it is opt-in.
+  # UEFI variables in StMM. The store IS this FD's NV window (the same
+  # 0x3b0000..0x3d0000 regions VarBlockServiceDxe serves in the !else
+  # branch): OP-TEE maps it into the StMM secure partition
+  # (CFG_STMM_VARSTORE_*), where RpiNvMemFvb + FaultTolerantWrite +
+  # VariableStandaloneMm (BL32_AP_MM.fd, edk2-standalone-mm recipe) run the
+  # authenticated variable stack on it directly -- no storage device, no
+  # OP-TEE storage-service traffic. The DXE side is the MM transport plus
+  # the persistence engine that writes the window back to
+  # armstub8-2712.bin / RPI_EFI.fd on the boot FAT (VarStoreSync.c,
+  # VarBlockServiceDxe's model).
   #
   Platform/RaspberryPi/RPi5/Drivers/MmCommunicationOpteeDxe/MmCommunicationOpteeDxe.inf
   MdeModulePkg/Universal/Variable/RuntimeDxe/VariableSmmRuntimeDxe.inf

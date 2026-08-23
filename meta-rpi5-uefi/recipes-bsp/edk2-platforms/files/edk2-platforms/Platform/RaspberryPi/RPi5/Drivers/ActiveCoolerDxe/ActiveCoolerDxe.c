@@ -70,56 +70,56 @@
 //
 // BCM2712 AVS monitor temperature status (SoC bus, direct CPU mapping).
 //
-#define AVS_RO_TEMP_STATUS      0x107D542200ULL
-#define AVS_TEMP_VALID_MASK     0x10400        // bits 16 and 10
-#define AVS_TEMP_RAW_MASK       0x3FF
+#define AVS_RO_TEMP_STATUS   0x107D542200ULL
+#define AVS_TEMP_VALID_MASK  0x10400           // bits 16 and 10
+#define AVS_TEMP_RAW_MASK    0x3FF
 
 //
 // RP1 PWM block (at RP1_PWM1_BASE), per-channel stride 16 bytes.
 //
-#define PWM_GLOBAL_CTRL         0x000
-#define PWM_GLOBAL_SET_UPDATE   BIT31          // latch shadowed config
-#define PWM_GLOBAL_CHAN_EN(c)   (1u << (c))
-#define PWM_CHAN_CTRL(c)        (0x014 + ((c) * 16))
-#define PWM_CHAN_RANGE(c)       (0x018 + ((c) * 16))
-#define PWM_CHAN_DUTY(c)        (0x020 + ((c) * 16))
+#define PWM_GLOBAL_CTRL        0x000
+#define PWM_GLOBAL_SET_UPDATE  BIT31           // latch shadowed config
+#define PWM_GLOBAL_CHAN_EN(c)  (1u << (c))
+#define PWM_CHAN_CTRL(c)       (0x014 + ((c) * 16))
+#define PWM_CHAN_RANGE(c)      (0x018 + ((c) * 16))
+#define PWM_CHAN_DUTY(c)       (0x020 + ((c) * 16))
 
-#define PWM_CHAN_CTRL_MODE_TE_MS   BIT0        // trailing-edge mark/space
-#define PWM_CHAN_CTRL_INVERT       BIT3
-#define PWM_CHAN_CTRL_FIFO_POP     BIT8        // mask FIFO pop (unused here)
+#define PWM_CHAN_CTRL_MODE_TE_MS  BIT0         // trailing-edge mark/space
+#define PWM_CHAN_CTRL_INVERT      BIT3
+#define PWM_CHAN_CTRL_FIFO_POP    BIT8         // mask FIFO pop (unused here)
 
 //
 // clk_pwm1 in the main clock block (at RP1_CLOCKS_MAIN_BASE). All of
 // clk_pwm1's parents are aux sources; index 2 is xosc (50 MHz).
 //
-#define CLK_PWM1_CTRL           0x084
-#define CLK_PWM1_DIV_INT        0x088
-#define CLK_PWM1_DIV_FRAC       0x08C
-#define CLK_CTRL_ENABLE         BIT11
-#define CLK_CTRL_AUXSRC_XOSC    (2u << 5)
+#define CLK_PWM1_CTRL         0x084
+#define CLK_PWM1_DIV_INT      0x088
+#define CLK_PWM1_DIV_FRAC     0x08C
+#define CLK_CTRL_ENABLE       BIT11
+#define CLK_CTRL_AUXSRC_XOSC  (2u << 5)
 
-#define FAN_PWM_CHANNEL         3
-#define FAN_PWM_GPIO            45
+#define FAN_PWM_CHANNEL  3
+#define FAN_PWM_GPIO     45
 
 //
 // 41566 ns DTB period at 20 ns per tick (xosc 50 MHz, divide-by-1).
 //
-#define FAN_PWM_RANGE_TICKS     2078
+#define FAN_PWM_RANGE_TICKS  2078
 
-#define FAN_POLL_INTERVAL       10000000ULL    // 1 s in 100 ns units
-#define FAN_HYST_MILLIC         5000
+#define FAN_POLL_INTERVAL  10000000ULL         // 1 s in 100 ns units
+#define FAN_HYST_MILLIC    5000
 
 typedef struct {
-  INT32    TripMilliC;    // enter this level at or above
-  UINT32   Duty255;       // pwm-fan cooling-level, out of 255
+  INT32     TripMilliC;   // enter this level at or above
+  UINT32    Duty255;      // pwm-fan cooling-level, out of 255
 } FAN_LEVEL;
 
 STATIC CONST FAN_LEVEL  mFanLevels[] = {
-  { 0,      0   },
-  { 50000,  75  },
-  { 60000,  125 },
-  { 67500,  175 },
-  { 75000,  250 },
+  { 0,     0   },
+  { 50000, 75  },
+  { 60000, 125 },
+  { 67500, 175 },
+  { 75000, 250 },
 };
 
 #define FAN_LEVEL_COUNT  (sizeof (mFanLevels) / sizeof (mFanLevels[0]))
@@ -136,8 +136,8 @@ STATIC CONST FAN_LEVEL  mFanLevels[] = {
 STATIC EFI_EVENT             mPollTimer;
 STATIC EFI_EVENT             mExitBootServicesEvent;
 STATIC EFI_PHYSICAL_ADDRESS  mRp1Base;             // 0 until RP1_BUS_PROTOCOL appears
-STATIC INTN                  mLevel        = -1;   // -1 until first command
-STATIC INTN                  mOverride     = -1;   // -1 = no protocol override
+STATIC INTN                  mLevel    = -1;       // -1 until first command
+STATIC INTN                  mOverride = -1;       // -1 = no protocol override
 STATIC RPI_FAN_POLICY        mPolicy;              // sanitized, refreshed every tick
 
 /**
@@ -208,7 +208,7 @@ ReadPolicy (
     }
   }
 
-  mPolicy      = Var;
+  mPolicy = Var;
   if (mPolicy.FixedLevel > FAN_LEVEL_MAX) {
     mPolicy.FixedLevel = FAN_LEVEL_SAFE;
   }
@@ -230,10 +230,14 @@ TripMilliC (
   }
 
   switch (Level) {
-    case 1:  TripC = mPolicy.Trip1C; break;
-    case 2:  TripC = mPolicy.Trip2C; break;
-    case 3:  TripC = mPolicy.Trip3C; break;
-    default: TripC = mPolicy.Trip4C; break;
+    case 1:  TripC = mPolicy.Trip1C;
+      break;
+    case 2:  TripC = mPolicy.Trip2C;
+      break;
+    case 3:  TripC = mPolicy.Trip3C;
+      break;
+    default: TripC = mPolicy.Trip4C;
+      break;
   }
 
   return (INT32)TripC * 1000;
@@ -252,8 +256,10 @@ FanPwmLatch (
   EFI_PHYSICAL_ADDRESS  Pwm;
 
   Pwm = mRp1Base + RP1_PWM1_BASE;
-  MmioWrite32 (Pwm + PWM_GLOBAL_CTRL,
-    MmioRead32 (Pwm + PWM_GLOBAL_CTRL) | PWM_GLOBAL_SET_UPDATE);
+  MmioWrite32 (
+    Pwm + PWM_GLOBAL_CTRL,
+    MmioRead32 (Pwm + PWM_GLOBAL_CTRL) | PWM_GLOBAL_SET_UPDATE
+    );
 }
 
 /**
@@ -275,8 +281,14 @@ FanSetLevel (
   MmioWrite32 (Pwm + PWM_CHAN_DUTY (FAN_PWM_CHANNEL), DutyTicks);
   FanPwmLatch ();
 
-  DEBUG ((DEBUG_INFO, "ActiveCoolerDxe: level %d -> %d (duty %u/%u)\n",
-    (INT32)mLevel, (INT32)Level, DutyTicks, FAN_PWM_RANGE_TICKS));
+  DEBUG ((
+    DEBUG_INFO,
+    "ActiveCoolerDxe: level %d -> %d (duty %u/%u)\n",
+    (INT32)mLevel,
+    (INT32)Level,
+    DutyTicks,
+    FAN_PWM_RANGE_TICKS
+    ));
 
   mLevel = (INTN)Level;
 }
@@ -316,16 +328,24 @@ FanHwInit (
   // low for DUTY ticks of each RANGE window, so duty 0 parks it high
   // (fan off) even while the channel stays enabled.
   //
-  MmioWrite32 (Pwm + PWM_CHAN_CTRL (FAN_PWM_CHANNEL),
-    PWM_CHAN_CTRL_MODE_TE_MS | PWM_CHAN_CTRL_INVERT | PWM_CHAN_CTRL_FIFO_POP);
+  MmioWrite32 (
+    Pwm + PWM_CHAN_CTRL (FAN_PWM_CHANNEL),
+    PWM_CHAN_CTRL_MODE_TE_MS | PWM_CHAN_CTRL_INVERT | PWM_CHAN_CTRL_FIFO_POP
+    );
   MmioWrite32 (Pwm + PWM_CHAN_RANGE (FAN_PWM_CHANNEL), FAN_PWM_RANGE_TICKS);
   MmioWrite32 (Pwm + PWM_CHAN_DUTY (FAN_PWM_CHANNEL), 0);
-  MmioWrite32 (Pwm + PWM_GLOBAL_CTRL,
-    MmioRead32 (Pwm + PWM_GLOBAL_CTRL) | PWM_GLOBAL_CHAN_EN (FAN_PWM_CHANNEL));
+  MmioWrite32 (
+    Pwm + PWM_GLOBAL_CTRL,
+    MmioRead32 (Pwm + PWM_GLOBAL_CTRL) | PWM_GLOBAL_CHAN_EN (FAN_PWM_CHANNEL)
+    );
   FanPwmLatch ();
 
-  DEBUG ((DEBUG_INFO, "ActiveCoolerDxe: PWM1 ch%d up at RP1 %lx\n",
-    FAN_PWM_CHANNEL, (UINT64)mRp1Base));
+  DEBUG ((
+    DEBUG_INFO,
+    "ActiveCoolerDxe: PWM1 ch%d up at RP1 %lx\n",
+    FAN_PWM_CHANNEL,
+    (UINT64)mRp1Base
+    ));
 }
 
 /**
@@ -348,8 +368,14 @@ FanPollTick (
   UINTN             Index;
 
   if (mRp1Base == 0) {
-    if (EFI_ERROR (gBS->LocateProtocol (&gRp1BusProtocolGuid, NULL,
-                     (VOID **)&Rp1Bus))) {
+    if (EFI_ERROR (
+          gBS->LocateProtocol (
+                 &gRp1BusProtocolGuid,
+                 NULL,
+                 (VOID **)&Rp1Bus
+                 )
+          ))
+    {
       return;   // RP1 not connected yet; try again next tick
     }
 
@@ -381,9 +407,11 @@ FanPollTick (
 
   if (!AvsReadMilliCelsius (&MilliC)) {
     if (mLevel < FAN_LEVEL_SAFE) {
-      DEBUG ((DEBUG_WARN,
+      DEBUG ((
+        DEBUG_WARN,
         "ActiveCoolerDxe: AVS reading invalid, forcing level %d\n",
-        FAN_LEVEL_SAFE));
+        FAN_LEVEL_SAFE
+        ));
       FanSetLevel (FAN_LEVEL_SAFE);
     }
 

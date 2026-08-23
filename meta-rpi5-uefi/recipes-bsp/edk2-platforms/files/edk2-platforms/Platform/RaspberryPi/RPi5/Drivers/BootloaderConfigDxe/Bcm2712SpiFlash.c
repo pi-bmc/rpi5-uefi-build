@@ -35,28 +35,28 @@
 //
 // BCM2835 SPI controller registers (BCM2835 ARM Peripherals datasheet).
 //
-#define SPI_REG_CS        0x00
-#define SPI_REG_FIFO      0x04
-#define SPI_REG_CLK       0x08
+#define SPI_REG_CS    0x00
+#define SPI_REG_FIFO  0x04
+#define SPI_REG_CLK   0x08
 
-#define SPI_CS_CLEAR_TX   BIT4
-#define SPI_CS_CLEAR_RX   BIT5
-#define SPI_CS_TA         BIT7
-#define SPI_CS_DONE       BIT16
-#define SPI_CS_RXD        BIT17
-#define SPI_CS_TXD        BIT18
+#define SPI_CS_CLEAR_TX  BIT4
+#define SPI_CS_CLEAR_RX  BIT5
+#define SPI_CS_TA        BIT7
+#define SPI_CS_DONE      BIT16
+#define SPI_CS_RXD       BIT17
+#define SPI_CS_TXD       BIT18
 
 //
 // 750 MHz VPU clock / 64 = ~11.7 MHz SCLK.
 //
-#define SPI_CLK_DIVIDER   64
+#define SPI_CLK_DIVIDER  64
 
 //
 // brcmstb GIO per-bank registers (see PowerButtonDxe).
 //
-#define GIO_BANK_SIZE     0x20
-#define GIO_REG_DATA      0x04
-#define GIO_REG_IODIR     0x08   // 1 = input
+#define GIO_BANK_SIZE  0x20
+#define GIO_REG_DATA   0x04
+#define GIO_REG_IODIR  0x08      // 1 = input
 
 #define GPIO_ACTIVE_LOW_FLAG  BIT0
 
@@ -65,10 +65,10 @@
 // controller dead (each iteration is at least one MMIO read, so this is
 // on the order of a second).
 //
-#define SPI_STALL_LIMIT   10000000
+#define SPI_STALL_LIMIT  10000000
 
-#define FLASH_CMD_RDID    0x9F
-#define FLASH_CMD_READ    0x03
+#define FLASH_CMD_RDID  0x9F
+#define FLASH_CMD_READ  0x03
 
 //
 // Fixed BCM2712 addresses for the boot SPI path, used only when the live
@@ -138,10 +138,10 @@ Bcm2712BootSpiLocate (
   // The soc SPI controller in front of the boot flash is the only
   // "brcm,bcm2835-spi" node in the VPU DTB (the RP1's SPIs are PL022s).
   //
-  Spi->SpiBase    = BCM2712_BOOT_SPI_BASE;
-  Spi->CsBankBase = BCM2712_BOOT_CS_GIO_BASE + (BCM2712_BOOT_CS_PIN / 32) * GIO_BANK_SIZE;
-  Spi->CsMask     = 1U << (BCM2712_BOOT_CS_PIN % 32);
-  Spi->CsPin      = BCM2712_BOOT_CS_PIN;
+  Spi->SpiBase     = BCM2712_BOOT_SPI_BASE;
+  Spi->CsBankBase  = BCM2712_BOOT_CS_GIO_BASE + (BCM2712_BOOT_CS_PIN / 32) * GIO_BANK_SIZE;
+  Spi->CsMask      = 1U << (BCM2712_BOOT_CS_PIN % 32);
+  Spi->CsPin       = BCM2712_BOOT_CS_PIN;
   Spi->CsActiveLow = TRUE;
 
   Node = FdtNodeOffsetByCompatible (Fdt, -1, "brcm,bcm2835-spi");
@@ -395,10 +395,10 @@ SpiIdle (
 
 EFI_STATUS
 Bcm2712BootSpiReadImage (
-  IN  CONST BCM2712_BOOT_SPI    *Spi,
-  OUT UINT8                     *Buffer,
-  IN  UINTN                     Len,
-  OUT BCM2712_BOOT_SPI_RESULT   *Result OPTIONAL
+  IN  CONST BCM2712_BOOT_SPI   *Spi,
+  OUT UINT8                    *Buffer,
+  IN  UINTN                    Len,
+  OUT BCM2712_BOOT_SPI_RESULT  *Result OPTIONAL
   )
 {
   EFI_STATUS        Status;

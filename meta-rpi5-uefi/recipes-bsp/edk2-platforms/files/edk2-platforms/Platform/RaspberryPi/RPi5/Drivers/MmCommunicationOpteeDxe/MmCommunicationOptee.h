@@ -4,14 +4,14 @@
   Publishes EFI_MM_COMMUNICATION2_PROTOCOL and relays the MM communication
   buffer to the OP-TEE StMM secure partition. OP-TEE runs StMM as an ordinary
   pseudo-TA under the opteed dispatcher (no FF-A SPMC): normal world opens a
-  session to PTA_STMM_UUID and invokes PTA_STMM_CMD_COMMUNICATE.
+  session to PTA_STMM_UUID and invokes PTA_STMM_CMD_COMMUNICATE, servicing
+  the OP-TEE normal-world RPC loop (shared-memory alloc/free, foreign
+  interrupts) throughout.
 
-  When StMM's variable service writes/reads the RPMB-backed store, OP-TEE
-  yields to normal world with an RPC (OPTEE_SMC_RETURN_RPC_*). This driver
-  runs the full OP-TEE normal-world RPC loop -- shared-memory alloc/free and
-  the RPMB command family -- so a GetVariable/SetVariable can complete. The
-  actual RPMB frame transport to the block device lives behind
-  OpteeRpmbAccessLib.
+  Storage is not RPC-serviced: StMM's variable stack works directly on the
+  VPU-loaded FD NV window OP-TEE maps into the SP (CFG_STMM_VARSTORE_*, FVB
+  = RpiNvMemFvb). This driver persists that window back to the boot FAT
+  (VarStoreSync.c).
 
   Copyright (c) 2026, pi-bmc.  SPDX-License-Identifier: BSD-2-Clause-Patent
 **/
@@ -20,6 +20,28 @@
 #define MM_COMMUNICATION_OPTEE_H_
 
 #include <Uefi.h>
+
+//
+// Persistence engine (VarStoreSync.c): writes the FD NV window back into
+// armstub8-2712.bin / RPI_EFI.fd on the boot FAT (VarBlockServiceDxe model).
+//
+
+/**
+  Arm the persistence engine: geometry from the RPi5.fdf NV PCDs, protocol
+  notifies (SimpleFileSystem, ResetNotification) and the ReadyToBoot dump.
+**/
+EFI_STATUS
+VarStoreSyncInit (
+  VOID
+  );
+
+/**
+  Mark the store dirty; called for every successful SetVariable communicate.
+**/
+VOID
+VarStoreSyncMarkDirty (
+  VOID
+  );
 
 //
 // PTA_STMM: the OP-TEE pseudo-TA that fronts the StMM secure partition.
@@ -35,17 +57,17 @@
 // (core/arch/arm/include/sm/optee_smc.h). Only the subset this transport
 // needs is reproduced here.
 //
-#define OPTEE_SMC_CALL_WITH_ARG          0x32000004
-#define OPTEE_SMC_CALL_RETURN_FROM_RPC   0x32000003
-#define OPTEE_SMC_GET_SHM_CONFIG         0xB2000007
+#define OPTEE_SMC_CALL_WITH_ARG         0x32000004
+#define OPTEE_SMC_CALL_RETURN_FROM_RPC  0x32000003
+#define OPTEE_SMC_GET_SHM_CONFIG        0xB2000007
 
-#define OPTEE_SMC_RETURN_OK              0x00000000
-#define OPTEE_SMC_RETURN_ETHREAD_LIMIT   0x00000001
-#define OPTEE_SMC_RETURN_UNKNOWN_FUNCTION 0xFFFFFFFF
+#define OPTEE_SMC_RETURN_OK                0x00000000
+#define OPTEE_SMC_RETURN_ETHREAD_LIMIT     0x00000001
+#define OPTEE_SMC_RETURN_UNKNOWN_FUNCTION  0xFFFFFFFF
 
-#define OPTEE_SMC_RETURN_RPC_PREFIX_MASK 0xFFFF0000
-#define OPTEE_SMC_RETURN_RPC_PREFIX      0xFFFF0000
-#define OPTEE_SMC_RETURN_RPC_FUNC_MASK   0x0000FFFF
+#define OPTEE_SMC_RETURN_RPC_PREFIX_MASK  0xFFFF0000
+#define OPTEE_SMC_RETURN_RPC_PREFIX       0xFFFF0000
+#define OPTEE_SMC_RETURN_RPC_FUNC_MASK    0x0000FFFF
 
 #define OPTEE_SMC_RPC_FUNC_ALLOC         0
 #define OPTEE_SMC_RPC_FUNC_FREE          2
@@ -56,33 +78,33 @@
   (((Ret) != OPTEE_SMC_RETURN_UNKNOWN_FUNCTION) && \
    (((Ret) & OPTEE_SMC_RETURN_RPC_PREFIX_MASK) == OPTEE_SMC_RETURN_RPC_PREFIX))
 
-#define OPTEE_SMC_RETURN_GET_RPC_FUNC(Ret) ((Ret) & OPTEE_SMC_RETURN_RPC_FUNC_MASK)
+#define OPTEE_SMC_RETURN_GET_RPC_FUNC(Ret)  ((Ret) & OPTEE_SMC_RETURN_RPC_FUNC_MASK)
 
 #define OPTEE_SMC_SHM_CACHED  1
 
 //
 // OPTEE_MSG_ARG / param attributes (core/include/optee_msg.h).
 //
-#define OPTEE_MSG_ATTR_TYPE_NONE           0x0
-#define OPTEE_MSG_ATTR_TYPE_VALUE_INPUT    0x1
-#define OPTEE_MSG_ATTR_TYPE_VALUE_OUTPUT   0x2
-#define OPTEE_MSG_ATTR_TYPE_VALUE_INOUT    0x3
-#define OPTEE_MSG_ATTR_TYPE_RMEM_INPUT     0x5
-#define OPTEE_MSG_ATTR_TYPE_RMEM_OUTPUT    0x6
-#define OPTEE_MSG_ATTR_TYPE_RMEM_INOUT     0x7
-#define OPTEE_MSG_ATTR_TYPE_TMEM_INPUT     0x9
-#define OPTEE_MSG_ATTR_TYPE_TMEM_OUTPUT    0xa
-#define OPTEE_MSG_ATTR_TYPE_TMEM_INOUT     0xb
-#define OPTEE_MSG_ATTR_TYPE_MASK           0xff
-#define OPTEE_MSG_ATTR_META                0x100
+#define OPTEE_MSG_ATTR_TYPE_NONE          0x0
+#define OPTEE_MSG_ATTR_TYPE_VALUE_INPUT   0x1
+#define OPTEE_MSG_ATTR_TYPE_VALUE_OUTPUT  0x2
+#define OPTEE_MSG_ATTR_TYPE_VALUE_INOUT   0x3
+#define OPTEE_MSG_ATTR_TYPE_RMEM_INPUT    0x5
+#define OPTEE_MSG_ATTR_TYPE_RMEM_OUTPUT   0x6
+#define OPTEE_MSG_ATTR_TYPE_RMEM_INOUT    0x7
+#define OPTEE_MSG_ATTR_TYPE_TMEM_INPUT    0x9
+#define OPTEE_MSG_ATTR_TYPE_TMEM_OUTPUT   0xa
+#define OPTEE_MSG_ATTR_TYPE_TMEM_INOUT    0xb
+#define OPTEE_MSG_ATTR_TYPE_MASK          0xff
+#define OPTEE_MSG_ATTR_META               0x100
 
-#define OPTEE_MSG_CMD_OPEN_SESSION         0
-#define OPTEE_MSG_CMD_INVOKE_COMMAND       1
-#define OPTEE_MSG_CMD_CLOSE_SESSION        2
+#define OPTEE_MSG_CMD_OPEN_SESSION    0
+#define OPTEE_MSG_CMD_INVOKE_COMMAND  1
+#define OPTEE_MSG_CMD_CLOSE_SESSION   2
 
-#define OPTEE_MSG_LOGIN_PUBLIC             0x0
+#define OPTEE_MSG_LOGIN_PUBLIC  0x0
 
-#define OPTEE_MSG_MAX_NUM_PARAMS           4
+#define OPTEE_MSG_MAX_NUM_PARAMS  4
 
 #pragma pack(1)
 typedef struct {
@@ -127,52 +149,18 @@ typedef struct {
 
 //
 // OP-TEE RPC command IDs serviced during the call (core/include/optee_rpc_cmd.h).
+// Only the shared-memory pair: storage never RPCs in this design.
 //
-#define OPTEE_RPC_CMD_RPMB               1
-#define OPTEE_RPC_CMD_FS                 2
-#define OPTEE_RPC_CMD_SHM_ALLOC          6
-#define OPTEE_RPC_CMD_SHM_FREE           7
-#define OPTEE_RPC_CMD_RPMB_PROBE_RESET   22
-#define OPTEE_RPC_CMD_RPMB_PROBE_NEXT    23
-#define OPTEE_RPC_CMD_RPMB_FRAMES        24
-
-//
-// OPTEE_RPC_CMD_FS subcommands (value[0].a). REE-FS secure-storage backend:
-// OP-TEE encrypts + hash-tree-protects its objects and stores them as files in
-// the normal world through these ops (core/include/optee_rpc_cmd.h).
-//
-#define OPTEE_RPC_FS_OPEN                0
-#define OPTEE_RPC_FS_CREATE              1
-#define OPTEE_RPC_FS_CLOSE               2
-#define OPTEE_RPC_FS_READ                3
-#define OPTEE_RPC_FS_WRITE               4
-#define OPTEE_RPC_FS_TRUNCATE            5
-#define OPTEE_RPC_FS_REMOVE              6
-#define OPTEE_RPC_FS_RENAME              7
-#define OPTEE_RPC_FS_OPENDIR             8
-#define OPTEE_RPC_FS_CLOSEDIR            9
-#define OPTEE_RPC_FS_READDIR             10
-
-//
-// TEE error codes used by the FS backend.
-//
-#define TEE_ERROR_ITEM_NOT_FOUND         0xFFFF0008
-#define TEE_ERROR_ACCESS_CONFLICT        0xFFFF0012
-#define TEE_ERROR_BAD_PARAMETERS         0xFFFF0006
-
-#define OPTEE_RPC_SHM_TYPE_APPL          0
-#define OPTEE_RPC_SHM_TYPE_KERNEL        1
-#define OPTEE_RPC_SHM_TYPE_GLOBAL        2
-
-#define OPTEE_RPC_RPMB_EMMC              0
+#define OPTEE_RPC_CMD_SHM_ALLOC  6
+#define OPTEE_RPC_CMD_SHM_FREE   7
 
 //
 // TEE return codes used when composing RPC results (tee_api_defines.h).
 //
-#define TEE_SUCCESS                      0x00000000
-#define TEE_ERROR_GENERIC                0xFFFF0000
-#define TEE_ERROR_NOT_SUPPORTED          0xFFFF000A
-#define TEE_ERROR_OUT_OF_MEMORY          0xFFFF000C
-#define TEE_ERROR_SHORT_BUFFER           0xFFFF0010
+#define TEE_SUCCESS              0x00000000
+#define TEE_ERROR_GENERIC        0xFFFF0000
+#define TEE_ERROR_NOT_SUPPORTED  0xFFFF000A
+#define TEE_ERROR_OUT_OF_MEMORY  0xFFFF000C
+#define TEE_ERROR_SHORT_BUFFER   0xFFFF0010
 
 #endif // MM_COMMUNICATION_OPTEE_H_

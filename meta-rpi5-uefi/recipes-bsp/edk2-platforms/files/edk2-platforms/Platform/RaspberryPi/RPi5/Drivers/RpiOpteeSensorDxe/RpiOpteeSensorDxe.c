@@ -47,8 +47,8 @@
 // I2C1 (GPIO2/3, 100 kHz); the sensor record goes to the spare region
 // at 0x7800 of the EEPROM map.
 //
-#define BMC_EEPROM_SLAVE_ADDRESS   0x50
-#define BMC_SENSOR_EEPROM_OFFSET   0x7800
+#define BMC_EEPROM_SLAVE_ADDRESS  0x50
+#define BMC_SENSOR_EEPROM_OFFSET  0x7800
 
 //
 // I2C1 SDA/SCL are GPIO2/GPIO3 as alt3 (same mux the retired
@@ -68,14 +68,17 @@ OpteeSensorInvokeInit (
   IN EFI_PHYSICAL_ADDRESS  PeripheralBase
   )
 {
-  EFI_STATUS                  Status;
-  OPTEE_OPEN_SESSION_ARG      OpenArg;
-  OPTEE_INVOKE_FUNCTION_ARG   InvokeArg;
+  EFI_STATUS                 Status;
+  OPTEE_OPEN_SESSION_ARG     OpenArg;
+  OPTEE_INVOKE_FUNCTION_ARG  InvokeArg;
 
   Status = OpteeInit ();
   if (EFI_ERROR (Status)) {
-    DEBUG ((DEBUG_ERROR,
-      "RpiOpteeSensor: OpteeInit failed - %r (no static SHM?)\n", Status));
+    DEBUG ((
+      DEBUG_ERROR,
+      "RpiOpteeSensor: OpteeInit failed - %r (no static SHM?)\n",
+      Status
+      ));
     return Status;
   }
 
@@ -83,9 +86,13 @@ OpteeSensorInvokeInit (
   CopyGuid (&OpenArg.Uuid, &mPtaBmcSensorGuid);
   Status = OpteeOpenSession (&OpenArg);
   if (EFI_ERROR (Status) || (OpenArg.Return != OPTEE_SUCCESS)) {
-    DEBUG ((DEBUG_ERROR,
+    DEBUG ((
+      DEBUG_ERROR,
       "RpiOpteeSensor: pTA session failed - %r (TEE ret %x origin %x)\n",
-      Status, OpenArg.Return, OpenArg.ReturnOrigin));
+      Status,
+      OpenArg.Return,
+      OpenArg.ReturnOrigin
+      ));
     return EFI_ERROR (Status) ? Status : EFI_PROTOCOL_ERROR;
   }
 
@@ -105,18 +112,26 @@ OpteeSensorInvokeInit (
 
   Status = OpteeInvokeFunction (&InvokeArg);
   if (EFI_ERROR (Status) || (InvokeArg.Return != OPTEE_SUCCESS)) {
-    DEBUG ((DEBUG_ERROR,
+    DEBUG ((
+      DEBUG_ERROR,
       "RpiOpteeSensor: CMD_INIT failed - %r (TEE ret %x origin %x)\n",
-      Status, InvokeArg.Return, InvokeArg.ReturnOrigin));
+      Status,
+      InvokeArg.Return,
+      InvokeArg.ReturnOrigin
+      ));
     if (!EFI_ERROR (Status)) {
       Status = EFI_PROTOCOL_ERROR;
     }
   } else {
-    DEBUG ((DEBUG_INFO,
+    DEBUG ((
+      DEBUG_INFO,
       "RpiOpteeSensor: sensor push armed (RP1 BAR %lx, I2C1 +%x, "
       "slave %x, EEPROM +%x)\n",
-      PeripheralBase, RP1_I2C1_BASE, BMC_EEPROM_SLAVE_ADDRESS,
-      BMC_SENSOR_EEPROM_OFFSET));
+      PeripheralBase,
+      RP1_I2C1_BASE,
+      BMC_EEPROM_SLAVE_ADDRESS,
+      BMC_SENSOR_EEPROM_OFFSET
+      ));
   }
 
   OpteeCloseSession (OpenArg.Session);
@@ -139,13 +154,13 @@ OnRp1BusInstalled (
   EFI_PHYSICAL_ADDRESS  PeripheralBase;
 
   BufferSize = sizeof (Handle);
-  Status = gBS->LocateHandle (
-                  ByRegisterNotify,
-                  NULL,
-                  mRp1BusRegistration,
-                  &BufferSize,
-                  &Handle
-                  );
+  Status     = gBS->LocateHandle (
+                      ByRegisterNotify,
+                      NULL,
+                      mRp1BusRegistration,
+                      &BufferSize,
+                      &Handle
+                      );
   if (EFI_ERROR (Status)) {
     // Spurious signal before Rp1BusDxe is up; wait for the next one.
     return;
@@ -193,9 +208,11 @@ RpiOpteeSensorInitialize (
   EFI_STATUS  Status;
 
   if (!IsOpteePresent ()) {
-    DEBUG ((DEBUG_WARN,
+    DEBUG ((
+      DEBUG_WARN,
       "RpiOpteeSensor: no OP-TEE at S-EL1 (TF-A built without "
-      "SPD=opteed?), sensor handshake disabled\n"));
+      "SPD=opteed?), sensor handshake disabled\n"
+      ));
     return EFI_SUCCESS;
   }
 

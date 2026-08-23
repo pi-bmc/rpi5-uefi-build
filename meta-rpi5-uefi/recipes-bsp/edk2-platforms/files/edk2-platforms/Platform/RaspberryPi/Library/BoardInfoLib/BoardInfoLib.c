@@ -17,10 +17,10 @@ BoardInfoGetRevisionCode (
   OUT   UINT32  *RevisionCode
   )
 {
-  VOID            *Fdt;
-  INT32           Node;
-  CONST VOID      *Property;
-  INT32           Length;
+  VOID        *Fdt;
+  INT32       Node;
+  CONST VOID  *Property;
+  INT32       Length;
 
   Fdt = FdtPlatformGetBase ();
   if (Fdt == NULL) {
@@ -39,7 +39,7 @@ BoardInfoGetRevisionCode (
     return EFI_BAD_BUFFER_SIZE;
   }
 
-  *RevisionCode = Fdt32ToCpu (*(UINT32 *) Property);
+  *RevisionCode = Fdt32ToCpu (*(UINT32 *)Property);
 
   return EFI_SUCCESS;
 }
@@ -50,10 +50,10 @@ BoardInfoGetSerialNumber (
   OUT   UINT64  *SerialNumber
   )
 {
-  VOID            *Fdt;
-  INT32           Node;
-  CONST VOID      *Property;
-  INT32           Length;
+  VOID        *Fdt;
+  INT32       Node;
+  CONST VOID  *Property;
+  INT32       Length;
 
   Fdt = FdtPlatformGetBase ();
   if (Fdt == NULL) {
@@ -72,7 +72,7 @@ BoardInfoGetSerialNumber (
     return EFI_BAD_BUFFER_SIZE;
   }
 
-  *SerialNumber = Fdt64ToCpu (*(UINT64 *) Property);
+  *SerialNumber = Fdt64ToCpu (*(UINT64 *)Property);
 
   return EFI_SUCCESS;
 }

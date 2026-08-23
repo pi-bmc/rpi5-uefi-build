@@ -16,15 +16,15 @@
 
 #include <Protocol/RpiFirmware.h>
 
-STATIC RASPBERRY_PI_FIRMWARE_PROTOCOL *mFwProtocol;
+STATIC RASPBERRY_PI_FIRMWARE_PROTOCOL  *mFwProtocol;
 
 STATIC
 VOID
 EFIAPI
 OffsetTimeZoneEpoch (
-  IN      EFI_TIME    *Time,
-  IN OUT  UINT32      *EpochSeconds,
-  IN      BOOLEAN     Add
+  IN      EFI_TIME  *Time,
+  IN OUT  UINT32    *EpochSeconds,
+  IN      BOOLEAN   Add
   )
 {
   //
@@ -98,7 +98,7 @@ LibSetTime (
   EFI_STATUS  Status;
   UINT32      EpochSeconds;
 
-  if (Time == NULL || !IsTimeValid (Time)) {
+  if ((Time == NULL) || !IsTimeValid (Time)) {
     return EFI_UNSUPPORTED;
   }
 
@@ -139,7 +139,7 @@ LibGetWakeupTime (
   UINT32      EnableVal;
   UINT32      PendingVal;
 
-  if (Time == NULL || Enabled == NULL || Pending == NULL) {
+  if ((Time == NULL) || (Enabled == NULL) || (Pending == NULL)) {
     return EFI_INVALID_PARAMETER;
   }
 
@@ -200,7 +200,7 @@ LibSetWakeupTime (
   UINT32      EpochSeconds;
 
   if (Enabled) {
-    if (Time == NULL || !IsTimeValid (Time)) {
+    if ((Time == NULL) || !IsTimeValid (Time)) {
       return EFI_INVALID_PARAMETER;
     }
 
@@ -235,8 +235,8 @@ STATIC
 VOID
 EFIAPI
 VirtualAddressChangeNotify (
-  IN EFI_EVENT        Event,
-  IN VOID             *Context
+  IN EFI_EVENT  Event,
+  IN VOID       *Context
   )
 {
   EfiConvertPointer (0x0, (VOID **)&mFwProtocol);
@@ -255,8 +255,8 @@ VirtualAddressChangeNotify (
 EFI_STATUS
 EFIAPI
 LibRtcInitialize (
-  IN EFI_HANDLE                 ImageHandle,
-  IN EFI_SYSTEM_TABLE           *SystemTable
+  IN EFI_HANDLE        ImageHandle,
+  IN EFI_SYSTEM_TABLE  *SystemTable
   )
 {
   EFI_STATUS  Status;
@@ -266,7 +266,8 @@ LibRtcInitialize (
   Status = gBS->LocateProtocol (
                   &gRaspberryPiFirmwareProtocolGuid,
                   NULL,
-                  (VOID **)&mFwProtocol);
+                  (VOID **)&mFwProtocol
+                  );
   ASSERT_EFI_ERROR (Status);
   if (EFI_ERROR (Status)) {
     return Status;
@@ -278,7 +279,8 @@ LibRtcInitialize (
                   VirtualAddressChangeNotify,
                   NULL,
                   &gEfiEventVirtualAddressChangeGuid,
-                  &VirtualAddressChangeEvent);
+                  &VirtualAddressChangeEvent
+                  );
   ASSERT_EFI_ERROR (Status);
   if (EFI_ERROR (Status)) {
     return Status;
@@ -289,14 +291,14 @@ LibRtcInitialize (
   // of UEFI's bounds. Update it to the firmware build time.
   //
   Status = LibGetTime (&Time, NULL);
-  if (EFI_ERROR(Status)) {
+  if (EFI_ERROR (Status)) {
     return Status;
   }
 
   if (!IsTimeValid (&Time)) {
     EpochToEfiTime (BUILD_EPOCH, &Time);
     Status = LibSetTime (&Time);
-    if (EFI_ERROR(Status)) {
+    if (EFI_ERROR (Status)) {
       return Status;
     }
   }

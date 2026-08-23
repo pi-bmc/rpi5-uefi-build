@@ -270,7 +270,7 @@ GemInitRings (
     ASSERT ((BufAddr & (GEM_RXDESC_ADDR_OWN | GEM_RXDESC_ADDR_WRAP)) == 0);
 
     Gem->RxRing[Index].Addr = (UINT32)BufAddr |
-      ((Index == GEM_RX_DESC_COUNT - 1) ? GEM_RXDESC_ADDR_WRAP : 0);
+                              ((Index == GEM_RX_DESC_COUNT - 1) ? GEM_RXDESC_ADDR_WRAP : 0);
     Gem->RxRing[Index].Ctrl   = 0;
     Gem->RxRing[Index].AddrHi = (UINT32)(BufAddr >> 32);
     Gem->RxRing[Index].Unused = 0;
@@ -282,7 +282,7 @@ GemInitRings (
 
     Gem->TxRing[Index].Addr = (UINT32)BufAddr;
     Gem->TxRing[Index].Ctrl = GEM_TXDESC_CTRL_USED |
-      ((Index == GEM_TX_DESC_COUNT - 1) ? GEM_TXDESC_CTRL_WRAP : 0);
+                              ((Index == GEM_TX_DESC_COUNT - 1) ? GEM_TXDESC_CTRL_WRAP : 0);
     Gem->TxRing[Index].AddrHi = (UINT32)(BufAddr >> 32);
     Gem->TxRing[Index].Unused = 0;
 
@@ -494,7 +494,8 @@ GemSetReceiveFilters (
     }
 
     if ((Filters & (EFI_SIMPLE_NETWORK_RECEIVE_MULTICAST |
-                    EFI_SIMPLE_NETWORK_RECEIVE_PROMISCUOUS_MULTICAST)) != 0) {
+                    EFI_SIMPLE_NETWORK_RECEIVE_PROMISCUOUS_MULTICAST)) != 0)
+    {
       NetCfg |= GEM_NET_CFG_MULTI_HASH_EN;
       Hash    = 0xFFFFFFFF;
     }
@@ -505,7 +506,8 @@ GemSetReceiveFilters (
   GemWrite32 (Gem, GEM_NET_CFG, NetCfg);
 
   if ((Filters & (EFI_SIMPLE_NETWORK_RECEIVE_UNICAST |
-                  EFI_SIMPLE_NETWORK_RECEIVE_PROMISCUOUS)) != 0) {
+                  EFI_SIMPLE_NETWORK_RECEIVE_PROMISCUOUS)) != 0)
+  {
     GemSetMacAddress (Gem, &Gem->SnpMode.CurrentAddress);
   } else {
     //
@@ -891,7 +893,8 @@ GemGetRecycledTxBuffer (
 
   if ((Desc->Ctrl & (GEM_TXDESC_CTRL_RETRY_ERR |
                      GEM_TXDESC_CTRL_AHB_ERR |
-                     GEM_TXDESC_CTRL_LATE_COLL)) != 0) {
+                     GEM_TXDESC_CTRL_LATE_COLL)) != 0)
+  {
     DEBUG ((
       DEBUG_WARN,
       "Rp1GemDxe: TX error on descriptor %u (ctrl 0x%x)\n",

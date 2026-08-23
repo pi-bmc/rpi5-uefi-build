@@ -556,7 +556,7 @@ Rp1GemSnpGetStatus (
   }
 
   Gem->SnpMode.MediaPresent =
-    (BOOLEAN)!EFI_ERROR (Rp1GemPhyUpdateConfig (Gem));
+    (BOOLEAN) !EFI_ERROR (Rp1GemPhyUpdateConfig (Gem));
 
   if (TxBuf != NULL) {
     GemGetRecycledTxBuffer (Gem, TxBuf);

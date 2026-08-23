@@ -51,7 +51,7 @@ ArmPlatformInitializeSystemMemory (
 {
 }
 
-STATIC ARM_CORE_INFO mRpiInfoTable[] = {
+STATIC ARM_CORE_INFO  mRpiInfoTable[] = {
   { 0x000, }, // Cluster 0, Core 0
   { 0x100, }, // Cluster 0, Core 1
   { 0x200, }, // Cluster 0, Core 2
@@ -66,16 +66,16 @@ PrePeiCoreGetMpCoreInfo (
   )
 {
   // Only support one cluster
-  *CoreCount = sizeof (mRpiInfoTable) / sizeof (ARM_CORE_INFO);
+  *CoreCount    = sizeof (mRpiInfoTable) / sizeof (ARM_CORE_INFO);
   *ArmCoreTable = mRpiInfoTable;
 
   return EFI_SUCCESS;
 }
 
-STATIC ARM_MP_CORE_INFO_PPI mMpCoreInfoPpi = {
+STATIC ARM_MP_CORE_INFO_PPI    mMpCoreInfoPpi = {
   PrePeiCoreGetMpCoreInfo
 };
-STATIC EFI_PEI_PPI_DESCRIPTOR mPlatformPpiTable[] = {
+STATIC EFI_PEI_PPI_DESCRIPTOR  mPlatformPpiTable[] = {
   {
     EFI_PEI_PPI_DESCRIPTOR_PPI,
     &gArmMpCoreInfoPpiGuid,
@@ -90,5 +90,5 @@ ArmPlatformGetPlatformPpiList (
   )
 {
   *PpiListSize = sizeof (mPlatformPpiTable);
-  *PpiList = mPlatformPpiTable;
+  *PpiList     = mPlatformPpiTable;
 }

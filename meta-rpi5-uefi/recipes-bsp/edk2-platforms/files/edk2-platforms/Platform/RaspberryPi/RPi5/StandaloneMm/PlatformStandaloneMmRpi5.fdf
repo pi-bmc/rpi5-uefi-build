@@ -1,0 +1,63 @@
+#
+#  StandaloneMM flash description for the Raspberry Pi 5 (pi-bmc).
+#
+#  Same packaging as Platform/StandaloneMm/PlatformStandaloneMmPkg/
+#  PlatformStandaloneMmRpmb.fdf (the FD name BL32_AP_MM is kept so the
+#  optee-os recipe's CFG_STMM_PATH consumption is unchanged), with
+#  OpTeeRpmbFv replaced by RpiNvMemFvb: the FVB over the VPU-loaded FD NV
+#  window that OP-TEE maps into the SP (see PlatformStandaloneMmRpi5.dsc).
+#
+#  Copyright (c) 2018, ARM Limited. All rights reserved.
+#  Copyright (c) 2020, Linaro Ltd. All rights reserved.
+#  Copyright (c) 2026, pi-bmc contributors
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+#
+
+[FD.BL32_AP_MM]
+BaseAddress   = 0x1000 # any address apart from 0x0
+Size          = 0x00300000
+ErasePolarity = 1
+
+BlockSize     = 0x00001000
+NumBlocks     = 0x0300
+
+0x00000000|0x00280000
+FV = FVMAIN_COMPACT
+
+[FV.FVMAIN_COMPACT]
+FvAlignment        = 8
+ERASE_POLARITY     = 1
+MEMORY_MAPPED      = TRUE
+STICKY_WRITE       = TRUE
+LOCK_CAP           = TRUE
+LOCK_STATUS        = TRUE
+WRITE_DISABLED_CAP = TRUE
+WRITE_ENABLED_CAP  = TRUE
+WRITE_STATUS       = TRUE
+WRITE_LOCK_CAP     = TRUE
+WRITE_LOCK_STATUS  = TRUE
+READ_DISABLED_CAP  = TRUE
+READ_ENABLED_CAP   = TRUE
+READ_STATUS        = TRUE
+READ_LOCK_CAP      = TRUE
+READ_LOCK_STATUS   = TRUE
+
+  INF StandaloneMmPkg/Core/StandaloneMmCore.inf
+  INF Platform/RaspberryPi/RPi5/StandaloneMm/Drivers/RpiNvMemFvb/RpiNvMemFvb.inf
+  INF MdeModulePkg/Universal/FaultTolerantWriteDxe/FaultTolerantWriteStandaloneMm.inf
+  INF MdeModulePkg/Universal/Variable/RuntimeDxe/VariableStandaloneMm.inf
+  INF ArmPkg/Drivers/StandaloneMmCpu/StandaloneMmCpu.inf
+
+[Rule.Common.MM_CORE_STANDALONE]
+  FILE SEC = $(NAMED_GUID) FIXED {
+    PE32  PE32 Align = Auto             $(INF_OUTPUT)/$(MODULE_NAME).efi
+  }
+
+[Rule.Common.MM_STANDALONE]
+  FILE MM_STANDALONE = $(NAMED_GUID) {
+    SMM_DEPEX SMM_DEPEX Optional       $(INF_OUTPUT)/$(MODULE_NAME).depex
+    PE32      PE32                     $(INF_OUTPUT)/$(MODULE_NAME).efi
+    UI        STRING="$(MODULE_NAME)" Optional
+    VERSION   STRING="$(INF_VERSION)" Optional BUILD_NUM=$(BUILD_NUMBER)
+  }

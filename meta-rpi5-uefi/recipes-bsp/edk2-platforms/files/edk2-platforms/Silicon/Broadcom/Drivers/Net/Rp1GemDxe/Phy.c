@@ -29,17 +29,17 @@
 // returns 0xFFFF) until this pulse - u-boot's macb does the same before
 // every bus scan, with a 15 ms post-release settle.
 //
-#define PHY_RESET_GPIO           32
-#define PHY_RESET_ASSERT_US      5000
-#define PHY_RESET_SETTLE_US      15000
+#define PHY_RESET_GPIO       32
+#define PHY_RESET_ASSERT_US  5000
+#define PHY_RESET_SETTLE_US  15000
 
 //
 // Basic Mode Control Register
 //
-#define PHY_BMCR                 0x00
-#define  PHY_BMCR_RESET          BIT15
-#define  PHY_BMCR_ANE            BIT12
-#define  PHY_BMCR_RESTART_AN     BIT9
+#define PHY_BMCR              0x00
+#define  PHY_BMCR_RESET       BIT15
+#define  PHY_BMCR_ANE         BIT12
+#define  PHY_BMCR_RESTART_AN  BIT9
 
 //
 // Basic Mode Status Register
@@ -51,8 +51,8 @@
 //
 // PHY Identifier registers
 //
-#define PHY_IDR1                 0x02
-#define PHY_IDR2                 0x03
+#define PHY_IDR1  0x02
+#define PHY_IDR2  0x03
 
 //
 // Auto-Negotiation Advertisement Register
@@ -66,7 +66,7 @@
 //
 // Auto-Negotiation Link Partner Ability Register
 //
-#define PHY_ANLPAR               0x05
+#define PHY_ANLPAR  0x05
 
 //
 // 1000BASE-T Control Register
@@ -78,7 +78,7 @@
 //
 // 1000BASE-T Status Register (link partner abilities at bits 11:10)
 //
-#define PHY_GBSR                 0x0A
+#define PHY_GBSR  0x0A
 
 //
 // Broadcom BCM54xx vendor registers: the auxiliary control register at
@@ -89,17 +89,17 @@
 // reset pulse or nothing is received (TX may still work off strap
 // defaults, giving one-way traffic).
 //
-#define PHY_BCM_AUXCTL                  0x18
-#define  PHY_BCM_AUXCTL_SHD_MISC        0x0007
-#define  PHY_BCM_AUXCTL_MISC_WREN       0x8000
-#define  PHY_BCM_AUXCTL_MISC_RGMII_SKEW 0x0100
-#define PHY_BCM_SHD                     0x1C
-#define  PHY_BCM_SHD_WRITE              0x8000
-#define  PHY_BCM_SHD_CLK_CTL            0x03
-#define  PHY_BCM_SHD_CLK_CTL_GTXCLK_EN  BIT9
-#define PHY_ID1_BCM54XX                 0x600D
+#define PHY_BCM_AUXCTL                   0x18
+#define  PHY_BCM_AUXCTL_SHD_MISC         0x0007
+#define  PHY_BCM_AUXCTL_MISC_WREN        0x8000
+#define  PHY_BCM_AUXCTL_MISC_RGMII_SKEW  0x0100
+#define PHY_BCM_SHD                      0x1C
+#define  PHY_BCM_SHD_WRITE               0x8000
+#define  PHY_BCM_SHD_CLK_CTL             0x03
+#define  PHY_BCM_SHD_CLK_CTL_GTXCLK_EN   BIT9
+#define PHY_ID1_BCM54XX                  0x600D
 
-#define PHY_RESET_TIMEOUT        500   // x 1 ms
+#define PHY_RESET_TIMEOUT  500         // x 1 ms
 
 /**
   Detect the PHY: try the configured address first, then scan the whole
@@ -353,12 +353,12 @@ Rp1GemPhyConfigRgmiiDelays (
   }
 
   Value |= PHY_BCM_AUXCTL_MISC_WREN | PHY_BCM_AUXCTL_MISC_RGMII_SKEW;
-  Status  = GemMdioWrite (
-              Gem,
-              Gem->PhyAddr,
-              PHY_BCM_AUXCTL,
-              PHY_BCM_AUXCTL_SHD_MISC | Value
-              );
+  Status = GemMdioWrite (
+             Gem,
+             Gem->PhyAddr,
+             PHY_BCM_AUXCTL,
+             PHY_BCM_AUXCTL_SHD_MISC | Value
+             );
   if (EFI_ERROR (Status)) {
     return Status;
   }
@@ -382,7 +382,7 @@ Rp1GemPhyConfigRgmiiDelays (
     return Status;
   }
 
-  Value = (Value & 0x3FF) | PHY_BCM_SHD_CLK_CTL_GTXCLK_EN;
+  Value  = (Value & 0x3FF) | PHY_BCM_SHD_CLK_CTL_GTXCLK_EN;
   Status = GemMdioWrite (
              Gem,
              Gem->PhyAddr,
@@ -465,8 +465,8 @@ Rp1GemPhyAutoNegotiate (
     return Status;
   }
 
-  Gbcr |= PHY_GBCR_1000BASET_FDX;
-  Gbcr &= (UINT16)~PHY_GBCR_1000BASET;
+  Gbcr  |= PHY_GBCR_1000BASET_FDX;
+  Gbcr  &= (UINT16) ~PHY_GBCR_1000BASET;
   Status = GemMdioWrite (Gem, Gem->PhyAddr, PHY_GBCR, Gbcr);
   if (EFI_ERROR (Status)) {
     return Status;

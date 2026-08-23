@@ -29,6 +29,7 @@ SRC_URI = "git://github.com/OP-TEE/optee_os.git;protocol=https;nobranch=1 \
            file://plat-rpi5;subdir=git/core/arch/arm \
            file://0001-plat-rpi5-wire-up-GIC-secure-timer-callouts-and-the-.patch \
            file://0002-scmi-msg-add-Sensor-Management-protocol-0x15.patch \
+           file://0003-plat-rpi5-map-the-UEFI-varstore-FD-window-into-the-S.patch \
            "
 # Tag 4.10.0. The files/plat-rpi5/ overlay directory merges into the
 # checkout's core/arch/arm/plat-rpi5/ during do_unpack (new files only;
@@ -52,34 +53,26 @@ inherit deploy nopackages python3native
 # gen_tee_bin.py needs pyelftools.
 DEPENDS = "python3-pyelftools-native"
 
-# Opt-in: embed the EDK2 StandaloneMM RPMB firmware volume (BL32_AP_MM.fd,
-# built by the edk2-standalone-mm recipe) as an OP-TEE StMM secure partition
-# (CFG_STMM_PATH -> CFG_WITH_STMM_SP), and turn on the RPMB filesystem
-# backend that its EFI_VARS object lives in. StMM runs as an ordinary OP-TEE
-# pseudo-TA under the existing opteed dispatcher -- it does NOT need the FF-A
-# SPMC. The 2.5MB StMM FV is almost all padding, so gen_stmm_hex zlib-embeds
-# it in ~130KB: measured tee-raw.bin grows to ~290KB, still inside the
-# existing 0x80000 tee FD region in RPi5.fdf -- so NO FD-layout growth is
-# needed. Default off.
+# Opt-in: embed the EDK2 StandaloneMM firmware volume (BL32_AP_MM.fd, built by
+# the edk2-standalone-mm recipe from PlatformStandaloneMmRpi5.dsc) as an
+# OP-TEE StMM secure partition (CFG_STMM_PATH -> CFG_WITH_STMM_SP). StMM runs
+# as an ordinary OP-TEE pseudo-TA under the existing opteed dispatcher -- it
+# does NOT need the FF-A SPMC. The 2.5MB StMM FV is almost all padding, so
+# gen_stmm_hex zlib-embeds it in ~130KB: measured tee-raw.bin grows to ~290KB,
+# still inside the existing 0x80000 tee FD region in RPi5.fdf -- so NO
+# FD-layout growth is needed. Default off.
+#
+# STORAGE: none. The variable store is the RPi5.fdf NV window of the
+# VPU-loaded FD, which patch 0003 maps straight into the SP
+# (CFG_STMM_VARSTORE_*). StMM's FVB (RpiNvMemFvb) works on that memory
+# directly -- OP-TEE's storage service, RPMB FS and REE FS are all unused, so
+# no CFG_RPMB_FS/CFG_REE_FS choice exists here any more. Persistence back to
+# the file on the boot FAT is done by EDK2's MmCommunicationOpteeDxe.
 RPI5_OPTEE_STMM ??= "0"
 STMM_FV = "${STAGING_DATADIR}/edk2-standalone-mm/BL32_AP_MM.fd"
 DEPENDS += "${@'edk2-standalone-mm' if d.getVar('RPI5_OPTEE_STMM') == '1' else ''}"
 
-# Secure-storage backend for the StMM variable object (EFI_VARS):
-#   rpmb  - RPMB filesystem (CFG_RPMB_FS). Real hardware anti-rollback, but
-#           needs an RPMB-capable device (eMMC/CM5). CFG_RPMB_TESTKEY uses the
-#           well-known key until a HUK is wired to BCM2712 OTP -- INSECURE.
-#   reefs - REE filesystem (CFG_REE_FS, OP-TEE default). OP-TEE encrypts +
-#           hash-tree-integrity-protects the blob and stores it in the NORMAL
-#           world via the FS RPC (serviced by MmCommunicationOpteeDxe's ReeFs
-#           backend on the ESP). Works on a plain SD, but gives NO hardware
-#           anti-rollback (the on-disk state can be rolled back) -- see the
-#           note in Rpmb.c/ReeFs.c. This is OP-TEE's own "no RPMB" answer.
-# The two differ only in which storage id stmm_sp.c passes to sec_storage; the
-# reefs redirect is applied in do_compile (idempotent sed), keyed on this knob.
-RPI5_OPTEE_STMM_BACKEND ??= "rpmb"
-STMM_STORAGE_ARGS = "${@'CFG_RPMB_FS=y CFG_RPMB_TESTKEY=y' if d.getVar('RPI5_OPTEE_STMM_BACKEND') == 'rpmb' else 'CFG_REE_FS=y'}"
-STMM_MAKE_ARGS = "${@('%s CFG_STMM_PATH=%s' % (d.getVar('STMM_STORAGE_ARGS'), d.getVar('STMM_FV'))) if d.getVar('RPI5_OPTEE_STMM') == '1' else ''}"
+STMM_MAKE_ARGS = "${@('CFG_STMM_PATH=%s' % d.getVar('STMM_FV')) if d.getVar('RPI5_OPTEE_STMM') == '1' else ''}"
 
 # tee-raw.bin must fit the FD region TF-A copies verbatim (RPi5.fdf tee region
 # is 0x80000). Embedded StMM measured ~290KB, so it fits -- keep the guard at
@@ -88,14 +81,13 @@ OPTEE_MAX_SIZE ??= "0x80000"
 # Decimal form for the shell size check (bitbake's shell parser rejects $(( ))).
 OPTEE_MAX_BYTES = "${@int(d.getVar('OPTEE_MAX_SIZE'), 0)}"
 
-# Flipping these knobs (in kas.yml/local.conf) must rebuild the core: they
-# decide whether StMM is embedded and which secure-storage backend its
-# stmm_sp.c is patched for. bitbake's automatic signature tracking does pick up
-# the shell ${VAR} refs and literal d.getVar() uses, but the do_compile sed and
-# the inline-python STMM_MAKE_ARGS make that fragile -- so make the dependency
-# explicit and self-documenting. Without this a knob change could be masked by
-# an sstate hit and silently ship the wrong storage backend.
-do_compile[vardeps] += "RPI5_OPTEE_STMM RPI5_OPTEE_STMM_BACKEND"
+# Flipping the knob (in kas.yml/local.conf) must rebuild the core: it decides
+# whether StMM is embedded. bitbake's automatic signature tracking does pick
+# up the shell ${VAR} refs and literal d.getVar() uses, but the inline-python
+# STMM_MAKE_ARGS makes that fragile -- so make the dependency explicit and
+# self-documenting. Without this a knob change could be masked by an sstate
+# hit and silently ship a core without the StMM SP.
+do_compile[vardeps] += "RPI5_OPTEE_STMM"
 
 do_configure[noexec] = "1"
 
@@ -113,19 +105,6 @@ do_compile() {
     # keep bitbake's target sysroot flags out of the freestanding core
     # build, same as the arm-trusted-firmware recipe.
     unset CC CXX CPP AS AR LD RANLIB STRIP OBJCOPY CFLAGS CXXFLAGS CPPFLAGS LDFLAGS
-
-    # REE-FS backend: point the StMM storage service at TEE_STORAGE_PRIVATE_REE
-    # instead of _RPMB. stmm_sp.c hardcodes RPMB at the two sec_storage calls in
-    # stmm_handle_storage_service(); redirect only those (NOT the __FFA_SVC_RPMB
-    # case labels). Idempotent -- a second run finds no RPMB in those lines.
-    if [ "${RPI5_OPTEE_STMM}" = "1" ] && [ "${RPI5_OPTEE_STMM_BACKEND}" = "reefs" ]; then
-        sed -i \
-            -e 's/sec_storage_obj_read(TEE_STORAGE_PRIVATE_RPMB,/sec_storage_obj_read(TEE_STORAGE_PRIVATE_REE,/' \
-            -e 's/sec_storage_obj_write(TEE_STORAGE_PRIVATE_RPMB,/sec_storage_obj_write(TEE_STORAGE_PRIVATE_REE,/' \
-            "${S}/core/arch/arm/kernel/stmm_sp.c"
-        grep -q "sec_storage_obj_read(TEE_STORAGE_PRIVATE_REE," "${S}/core/arch/arm/kernel/stmm_sp.c" || \
-            bbfatal "REE-FS storage redirect sed matched nothing -- stmm_sp.c changed upstream; fix the sed"
-    fi
 
     oe_runmake -C ${S} O=${B}/out \
         PLATFORM=rpi5 \

@@ -4,11 +4,20 @@
   Relays the MM communication buffer to OP-TEE's StMM secure partition, which
   OP-TEE runs as an ordinary pseudo-TA under the opteed dispatcher (no FF-A
   SPMC). Session setup reuses ArmPkg/OpteeLib (proven on this board by
-  RpiOpteeSensorDxe); the InvokeCommand call is done here so the OP-TEE
-  normal-world RPC loop -- shared-memory alloc/free and the RPMB command
-  family that StMM's variable service needs to reach the RPMB store -- can be
-  serviced. Without that loop a GetVariable/SetVariable that touches storage
-  would never complete.
+  RpiOpteeSensorDxe); the OPEN_SESSION and InvokeCommand calls are built here
+  so the OP-TEE normal-world RPC loop (shared-memory alloc/free, foreign
+  interrupts) is serviced -- OpteeLib's loop drops RPCs.
+
+  Storage involves no RPCs at all: StMM's variable and FTW drivers work
+  directly on the VPU-loaded FD NV window OP-TEE maps into the SP
+  (CFG_STMM_VARSTORE_*, RpiNvMemFvb). This driver persists that window to
+  the boot FAT (VarStoreSync.c), marking it dirty on every successful
+  SetVariable communicate.
+
+  Runtime: DXE_RUNTIME_DRIVER so the protocol stays callable after
+  ExitBootServices, where it refuses cleanly (EFI_UNSUPPORTED) -- OS-runtime
+  variable access needs the OP-TEE SHM window in the runtime memory map and
+  an OS-side flush path, which is staged work, not silent breakage.
 
   Copyright (c) 2026, pi-bmc.  SPDX-License-Identifier: BSD-2-Clause-Patent
 **/
@@ -20,39 +29,25 @@
 #include <Library/DebugLib.h>
 #include <Library/OpteeLib.h>
 #include <Library/UefiBootServicesTableLib.h>
+#include <Library/UefiRuntimeServicesTableLib.h>
+#include <Guid/EventGroup.h>
+#include <Guid/SmmVariableCommon.h>
 #include <Protocol/MmCommunication2.h>
+#include <Protocol/SmmVariable.h>
 
 #include "MmCommunicationOptee.h"
-
-//
-// RPMB RPC servicer (Rpmb.c). Given the OPTEE_MSG_ARG of an
-// OPTEE_RPC_CMD_RPMB* request, performs the frame transport and fills the
-// result. Returns a TEE_* code composed into MsgArg->Ret.
-//
-UINT32
-OpteeRpmbServiceCmd (
-  IN OUT OPTEE_MSG_ARG  *MsgArg
-  );
-
-//
-// REE-FS RPC servicer (ReeFs.c). Services OPTEE_RPC_CMD_FS file ops for the
-// REE filesystem secure-storage backend, against the boot FAT volume.
-//
-UINT32
-OpteeReeFsServiceCmd (
-  IN OUT OPTEE_MSG_ARG  *MsgArg
-  );
 
 //
 // Cached OP-TEE static shared memory window (from GET_SHM_CONFIG) and the
 // per-call bump allocator over it. The window is the plat-rpi5 reserved SHM
 // (0x1F000000); OpteeInit() already remapped it WB and validated it.
 //
-STATIC UINTN    mShmBase   = 0;
-STATIC UINTN    mShmSize   = 0;
-STATIC UINTN    mShmNext   = 0;   // bump cursor, reset at each Communicate
-STATIC UINT32   mSession   = 0;
+STATIC UINTN    mShmBase     = 0;
+STATIC UINTN    mShmSize     = 0;
+STATIC UINTN    mShmNext     = 0; // bump cursor, reset at each Communicate
+STATIC UINT32   mSession     = 0;
 STATIC BOOLEAN  mHaveSession = FALSE;
+STATIC BOOLEAN  mAtRuntime   = FALSE;
 
 #define SHM_ALIGN_UP(x)  (((x) + 0xFUL) & ~0xFUL)
 
@@ -122,8 +117,8 @@ MmOpteeRpcCmd (
   IN OUT OPTEE_MSG_ARG  *MsgArg
   )
 {
-  UINTN  Buf;
-  UINT64 Size;
+  UINTN   Buf;
+  UINT64  Size;
 
   switch (MsgArg->Cmd) {
     case OPTEE_RPC_CMD_SHM_ALLOC:
@@ -142,11 +137,11 @@ MmOpteeRpcCmd (
         break;
       }
 
-      MsgArg->Params[0].Attr        = OPTEE_MSG_ATTR_TYPE_TMEM_OUTPUT;
+      MsgArg->Params[0].Attr          = OPTEE_MSG_ATTR_TYPE_TMEM_OUTPUT;
       MsgArg->Params[0].U.TMem.BufPtr = (UINT64)Buf;
       MsgArg->Params[0].U.TMem.Size   = Size;
       MsgArg->Params[0].U.TMem.ShmRef = (UINT64)Buf;   // cookie = PA
-      MsgArg->Ret = TEE_SUCCESS;
+      MsgArg->Ret                     = TEE_SUCCESS;
       break;
 
     case OPTEE_RPC_CMD_SHM_FREE:
@@ -157,23 +152,12 @@ MmOpteeRpcCmd (
       MsgArg->Ret = TEE_SUCCESS;
       break;
 
-    case OPTEE_RPC_CMD_RPMB:
-    case OPTEE_RPC_CMD_RPMB_PROBE_RESET:
-    case OPTEE_RPC_CMD_RPMB_PROBE_NEXT:
-    case OPTEE_RPC_CMD_RPMB_FRAMES:
-      MsgArg->Ret = OpteeRpmbServiceCmd (MsgArg);
-      break;
-
-    case OPTEE_RPC_CMD_FS:
-      //
-      // REE-FS backend (CFG_REE_FS): OP-TEE stores its encrypted, integrity-
-      // protected objects as files in the normal world. Which of RPMB / FS
-      // arrives is decided by how OP-TEE was built (RPI5_OPTEE_STMM_BACKEND);
-      // the transport services whichever it receives.
-      //
-      MsgArg->Ret = OpteeReeFsServiceCmd (MsgArg);
-      break;
-
+    //
+    // No storage RPCs are expected any more: StMM's variable stack works on
+    // the mapped FD NV window, and OP-TEE's storage service / REE-FS / RPMB
+    // paths sit unused. Anything else is answered, not dropped, so OP-TEE
+    // fails the operation cleanly instead of hanging.
+    //
     default:
       DEBUG ((DEBUG_WARN, "%a: unhandled OP-TEE RPC cmd %u\n", __func__, MsgArg->Cmd));
       MsgArg->Ret = TEE_ERROR_NOT_SUPPORTED;
@@ -285,6 +269,18 @@ MmCommunicationOpteeCommunicate (
     return EFI_INVALID_PARAMETER;
   }
 
+  //
+  // Post-ExitBootServices: the OP-TEE SHM window is not in the OS runtime
+  // memory map and the flush path is gone -- refuse cleanly rather than
+  // dereference physical addresses in a virtual world. The OS sees
+  // EFI_UNSUPPORTED from Get/SetVariable; boot-time variables (BDS, Setup,
+  // boot options) are unaffected. Lifting this needs the SHM window mapped
+  // runtime + pointer conversion + an OS-side flush service.
+  //
+  if (mAtRuntime) {
+    return EFI_UNSUPPORTED;
+  }
+
   Header     = (EFI_MM_COMMUNICATE_HEADER *)CommBufferVirtual;
   BufferSize = OFFSET_OF (EFI_MM_COMMUNICATE_HEADER, Data) +
                (UINTN)Header->MessageLength;
@@ -332,7 +328,9 @@ MmCommunicationOpteeCommunicate (
     DEBUG ((
       DEBUG_ERROR,
       "%a: StMM communicate failed smc=0x%x ret=0x%x\n",
-      __func__, Rc, MsgArg->Ret
+      __func__,
+      Rc,
+      MsgArg->Ret
       ));
     return EFI_DEVICE_ERROR;
   }
@@ -342,12 +340,69 @@ MmCommunicationOpteeCommunicate (
   //
   CopyMem ((VOID *)CommBufferPhysical, (VOID *)ShmComm, BufferSize);
 
+  //
+  // A successful SetVariable is the one path that changes the NV window --
+  // tell the persistence engine (VarStoreSync.c). The Function field is
+  // caller-owned and survives the round trip.
+  //
+  if (!EFI_ERROR ((EFI_STATUS)MsgArg->Params[1].U.Value.A) &&
+      CompareGuid (&Header->HeaderGuid, &gEfiSmmVariableProtocolGuid) &&
+      (Header->MessageLength >= SMM_VARIABLE_COMMUNICATE_HEADER_SIZE))
+  {
+    if (((SMM_VARIABLE_COMMUNICATE_HEADER *)Header->Data)->Function ==
+        SMM_VARIABLE_FUNCTION_SET_VARIABLE)
+    {
+      VarStoreSyncMarkDirty ();
+    }
+  }
+
   return (EFI_STATUS)MsgArg->Params[1].U.Value.A;
 }
 
 STATIC EFI_MM_COMMUNICATION2_PROTOCOL  mMmCommunication2 = {
   MmCommunicationOpteeCommunicate
 };
+
+//
+// Marker interface for gEfiSmmVariableProtocolGuid (see the install in the
+// entry point). VariableSmmRuntimeDxe only checks it exists; the function
+// pointers are deliberately NULL -- any future caller dereferencing them
+// should fail loudly, because MM-side variable access from DXE goes through
+// Communicate, never through this struct.
+//
+STATIC EFI_SMM_VARIABLE_PROTOCOL  mSmmVariableMarker;
+
+/**
+  ExitBootServices: no more MM communicates (see the guard in Communicate)
+  and no more flushing -- runtime variable access is refused from here on.
+**/
+STATIC
+VOID
+EFIAPI
+MmOpteeExitBootServices (
+  IN EFI_EVENT  Event,
+  IN VOID       *Context
+  )
+{
+  mAtRuntime = TRUE;
+}
+
+/**
+  SetVirtualAddressMap: the protocol struct lives in this runtime image and
+  the OS calls through it, so its function pointer must move to the virtual
+  world with us. Everything the runtime path touches beyond it is a plain
+  BOOLEAN.
+**/
+STATIC
+VOID
+EFIAPI
+MmOpteeVirtualAddressChange (
+  IN EFI_EVENT  Event,
+  IN VOID       *Context
+  )
+{
+  gRT->ConvertPointer (0, (VOID **)&mMmCommunication2.Communicate);
+}
 
 /**
   Open the StMM pseudo-TA session through OUR RPC-aware loop.
@@ -406,10 +461,10 @@ MmOpteeOpenStmmSession (
   // as OpteeLib's EfiGuidToRfc4122Uuid does, so OP-TEE's UUID match succeeds.
   //
   MsgArg->Params[0].Attr = OPTEE_MSG_ATTR_TYPE_VALUE_INPUT | OPTEE_MSG_ATTR_META;
-  Val = (UINT8 *)&MsgArg->Params[0].U.Value;
-  D1  = SwapBytes32 (Uuid->Data1);
-  D2  = SwapBytes16 (Uuid->Data2);
-  D3  = SwapBytes16 (Uuid->Data3);
+  Val                    = (UINT8 *)&MsgArg->Params[0].U.Value;
+  D1                     = SwapBytes32 (Uuid->Data1);
+  D2                     = SwapBytes16 (Uuid->Data2);
+  D3                     = SwapBytes16 (Uuid->Data3);
   CopyMem (Val + 0, &D1, sizeof (D1));
   CopyMem (Val + 4, &D2, sizeof (D2));
   CopyMem (Val + 6, &D3, sizeof (D3));
@@ -423,7 +478,9 @@ MmOpteeOpenStmmSession (
     DEBUG ((
       DEBUG_ERROR,
       "REEFS: OPEN_SESSION failed smc=0x%x ret=0x%x origin=0x%x\n",
-      Rc, MsgArg->Ret, MsgArg->RetOrigin
+      Rc,
+      MsgArg->Ret,
+      MsgArg->RetOrigin
       ));
     return EFI_NOT_FOUND;
   }
@@ -442,9 +499,10 @@ MmCommunicationOpteeInitialize (
   IN EFI_SYSTEM_TABLE  *SystemTable
   )
 {
-  EFI_STATUS              Status;
-  EFI_HANDLE              Handle;
-  STATIC CONST EFI_GUID   StmmUuid = PTA_STMM_UUID;
+  EFI_STATUS             Status;
+  EFI_HANDLE             Handle;
+  EFI_EVENT              Event;
+  STATIC CONST EFI_GUID  StmmUuid = PTA_STMM_UUID;
 
   if (!IsOpteePresent ()) {
     DEBUG ((DEBUG_WARN, "%a: OP-TEE not present; MM/variable store unavailable\n", __func__));
@@ -464,17 +522,19 @@ MmCommunicationOpteeInitialize (
   }
 
   //
-  // Open via our own RPC-aware loop, NOT OpteeLib's OpteeOpenSession: StMM does
-  // its storage-touching bring-up during OPEN_SESSION and OpteeLib drops the
-  // RPCs (see MmOpteeOpenStmmSession). The store is served from memory (ReeFs.c),
-  // so it is available here with no device dependency -- no ordering wait.
+  // Open via our own RPC-aware loop, NOT OpteeLib's OpteeOpenSession: StMM
+  // runs its whole bring-up during OPEN_SESSION and OpteeLib drops RPCs (see
+  // MmOpteeOpenStmmSession). The variable store is the FD NV window OP-TEE
+  // mapped into the SP -- available with no device dependency, so there is
+  // no ordering wait and no storage RPC traffic during bring-up either.
   //
   Status = MmOpteeOpenStmmSession (&StmmUuid, &mSession);
   if (EFI_ERROR (Status)) {
     DEBUG ((
       DEBUG_ERROR,
       "%a: open StMM session failed - %r (is CFG_STMM_PATH set in OP-TEE?)\n",
-      __func__, Status
+      __func__,
+      Status
       ));
     return EFI_NOT_FOUND;
   }
@@ -493,6 +553,64 @@ MmCommunicationOpteeInitialize (
     mHaveSession = FALSE;
     return Status;
   }
+
+  //
+  // Unblock VariableSmmRuntimeDxe. It arms protocol notifies on
+  // gEfiSmmVariableProtocolGuid and gSmmVariableWriteGuid in the DXE
+  // database and initializes nothing until they appear -- on x86 the
+  // traditional VariableSmm installs them itself through boot services,
+  // which a StandaloneMM image cannot do, so on this platform the MM
+  // transport does it. The session open above ran StMM's ENTIRE bring-up
+  // (FVB + FTW + variable driver on the mapped FD window), so both
+  // services are genuinely ready. The interfaces are markers only:
+  // VariableSmmRuntimeDxe locates them, never calls through them (all
+  // variable traffic goes through Communicate).
+  //
+  Status = gBS->InstallMultipleProtocolInterfaces (
+                  &Handle,
+                  &gEfiSmmVariableProtocolGuid,
+                  &mSmmVariableMarker,
+                  &gSmmVariableWriteGuid,
+                  NULL,
+                  NULL
+                  );
+  ASSERT_EFI_ERROR (Status);
+
+  //
+  // Persistence engine for the FD NV window (VarStoreSync.c). Not fatal if
+  // it cannot arm: variables still work for this boot, they just do not
+  // survive it -- loudly, not silently.
+  //
+  Status = VarStoreSyncInit ();
+  if (EFI_ERROR (Status)) {
+    DEBUG ((
+      DEBUG_ERROR,
+      "%a: variable persistence NOT armed - %r; "
+      "variable changes will not survive this boot\n",
+      __func__,
+      Status
+      ));
+  }
+
+  Status = gBS->CreateEventEx (
+                  EVT_NOTIFY_SIGNAL,
+                  TPL_NOTIFY,
+                  MmOpteeExitBootServices,
+                  NULL,
+                  &gEfiEventExitBootServicesGuid,
+                  &Event
+                  );
+  ASSERT_EFI_ERROR (Status);
+
+  Status = gBS->CreateEventEx (
+                  EVT_NOTIFY_SIGNAL,
+                  TPL_NOTIFY,
+                  MmOpteeVirtualAddressChange,
+                  NULL,
+                  &gEfiEventVirtualAddressChangeGuid,
+                  &Event
+                  );
+  ASSERT_EFI_ERROR (Status);
 
   DEBUG ((DEBUG_INFO, "%a: StMM MM transport up (session 0x%x)\n", __func__, mSession));
   return EFI_SUCCESS;

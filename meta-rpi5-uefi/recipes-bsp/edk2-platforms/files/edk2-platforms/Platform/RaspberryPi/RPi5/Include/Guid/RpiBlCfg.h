@@ -27,7 +27,7 @@
 #define RPI_BLCFG_FORMSET_GUID \
   { 0x8f3a5c12, 0x6b4d, 0x4e2a, { 0x9d, 0x07, 0x4b, 0xaa, 0x1c, 0x86, 0x33, 0xf5 } }
 
-#define RPI_BLCFG_VARIABLE_NAME         L"BlCfg"
+#define RPI_BLCFG_VARIABLE_NAME  L"BlCfg"
 
 //
 // Written when an EEPROM update has been staged to the boot partition;

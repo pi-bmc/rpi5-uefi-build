@@ -1,0 +1,165 @@
+From: pi-bmc contributors <nbatkins@gmail.com>
+Subject: [PATCH] plat-rpi5: map the UEFI varstore FD window into the StMM SP
+
+UEFI variables on this platform live in the NV region of the VPU-loaded FD
+(armstub8-2712.bin / RPI_EFI.fd, loaded at PA 0 before any ARM code runs):
+a pre-formatted variable store + FTW area baked into the image by RPi5.fdf.
+StMM serves it through a plain memory-window FVB (edk2
+PlatformStandaloneMmRpi5.dsc), so no storage device and no OP-TEE
+storage-service / RPMB / REE-FS traffic is involved at all -- the normal
+world persists the window back into the file on the boot FAT.
+
+The SP's address space only contains dynamically allocated fobj memory, so
+give it the window: register the PA range as non-secure RAM (plat-rpi5) and
+map it cached + non-secure at the fixed VA CFG_STMM_VARSTORE_VA during
+load_stmm(), before the SP is entered. Non-secure matters: with both worlds
+mapping the DRAM with the same security attribute, StMM's writes and the
+normal world's flush reads hit the same cache lines.
+
+The area type is MEM_AREA_RAM_NSEC, not MEM_AREA_NSEC_SHM: check_mem_map()
+confines every NSEC_SHM entry to the single CFG_SHMEM carve-out and panics
+otherwise ("NS_SHM can't fit in nsec_shared"), while RAM_NSEC is mapped
+with the same non-secure + cached attributes and carries no range
+constraint. mobj_phys_alloc() gains the corresponding CORE_MEM_NON_SEC ->
+MEM_AREA_RAM_NSEC case (and mobj_phys_matches() recognizes the new battr)
+so the window can be turned into a non-secure mobj for vm_map().
+
+CFG_STMM_VARSTORE_{PA,SIZE,VA} defaults match RPi5.fdf (0x3b0000..0x3d0000)
+and the PcdFlashNvStorage*Base64 values in PlatformStandaloneMmRpi5.dsc.
+
+--- a/core/arch/arm/kernel/stmm_sp.c
++++ b/core/arch/arm/kernel/stmm_sp.c
+@@ -14,6 +14,7 @@
+ #include <kernel/thread_private.h>
+ #include <kernel/user_mode_ctx.h>
+ #include <mempool.h>
++#include <mm/core_memprot.h>
+ #include <mm/fobj.h>
+ #include <mm/mobj.h>
+ #include <mm/vm.h>
+@@ -331,6 +332,51 @@
+ 	return hob_table;
+ }
+ 
++#ifdef CFG_STMM_VARSTORE_PA
++/*
++ * Map the platform's UEFI variable store window into the SP: a non-secure
++ * DRAM range the boot firmware loads before any ARM code runs (on RPi5 the
++ * NV region of the VPU-loaded FD). Mapped non-secure + cached at a fixed VA
++ * so the memory-window FVB inside StMM (its PcdFlashNvStorage*Base64 values
++ * equal CFG_STMM_VARSTORE_VA + region offset) accesses the same cache lines
++ * as the normal world, which persists the window to storage.
++ *
++ * The PA range must be registered as MEM_AREA_RAM_NSEC by the platform
++ * (see plat-rpi5/main.c) for mobj_phys_alloc() to resolve it. NSEC_SHM is
++ * not usable here: check_mem_map() requires every NSEC_SHM area to sit
++ * inside the single CFG_SHMEM carve-out and panics otherwise ("NS_SHM
++ * can't fit in nsec_shared").
++ */
++static TEE_Result map_uefi_varstore(struct stmm_ctx *spc)
++{
++	vaddr_t va = CFG_STMM_VARSTORE_VA;
++	struct mobj *mobj = NULL;
++	TEE_Result res = TEE_SUCCESS;
++
++	mobj = mobj_phys_alloc(CFG_STMM_VARSTORE_PA, CFG_STMM_VARSTORE_SIZE,
++			       TEE_MATTR_MEM_TYPE_CACHED, CORE_MEM_NON_SEC);
++	if (!mobj) {
++		EMSG("Can't create mobj for the UEFI varstore window");
++		return TEE_ERROR_OUT_OF_MEMORY;
++	}
++
++	res = vm_map(&spc->uctx, &va, CFG_STMM_VARSTORE_SIZE,
++		     TEE_MATTR_URW | TEE_MATTR_PRW, 0, mobj, 0);
++	if (res) {
++		EMSG("Can't map the UEFI varstore window: %#"PRIx32, res);
++		mobj_put(mobj);
++		return res;
++	}
++	assert(va == CFG_STMM_VARSTORE_VA);
++
++	DMSG("UEFI varstore %#lx size %#x mapped at va %#"PRIxVA,
++	     (unsigned long)CFG_STMM_VARSTORE_PA,
++	     (unsigned int)CFG_STMM_VARSTORE_SIZE, va);
++
++	return TEE_SUCCESS;
++}
++#endif /*CFG_STMM_VARSTORE_PA*/
++
+ static TEE_Result load_stmm(struct stmm_ctx *spc)
+ {
+ 	struct ffa_boot_info_header_1_1 *hdr = NULL;
+@@ -361,6 +407,12 @@
+ 	if (res)
+ 		return res;
+ 
++#ifdef CFG_STMM_VARSTORE_PA
++	res = map_uefi_varstore(spc);
++	if (res)
++		return res;
++#endif
++
+ 	hob_table = build_stmm_boot_hob_list(sp_addr, sp_size, &hob_table_size);
+ 	if (!hob_table)
+ 		return TEE_ERROR_NO_DATA;
+--- a/core/arch/arm/plat-rpi5/conf.mk
++++ b/core/arch/arm/plat-rpi5/conf.mk
+@@ -52,3 +52,14 @@
+ $(call force,CFG_SCMI_MSG_SMT_FASTCALL_ENTRY,y)
+ CFG_SCMI_MSG_SENSOR ?= y
+ CFG_SCMI_MSG_PERF_DOMAIN ?= y
++
++# pi-bmc UEFI variables in StMM: the RPi5.fdf NV window of the VPU-loaded FD
++# (armstub8-2712.bin / RPI_EFI.fd at PA 0), mapped non-secure + cached into
++# the StMM SP at a fixed VA. PA/SIZE must span the RPi5.fdf NV regions
++# (variable store + event log + FTW working + FTW spare, 0x3b0000..0x3d0000);
++# VA must equal the PcdFlashNvStorage*Base64 window base in edk2's
++# PlatformStandaloneMmRpi5.dsc. Consumed by stmm_sp.c (SP mapping) and
++# main.c (RAM_NSEC registration); only meaningful with CFG_STMM_PATH.
++CFG_STMM_VARSTORE_PA   ?= 0x003b0000
++CFG_STMM_VARSTORE_SIZE ?= 0x00020000
++CFG_STMM_VARSTORE_VA   ?= 0x48000000
+--- a/core/arch/arm/plat-rpi5/main.c
++++ b/core/arch/arm/plat-rpi5/main.c
+@@ -20,6 +20,20 @@
+ register_phys_mem_pgdir(MEM_AREA_IO_SEC, GICD_BASE, GIC_DIST_REG_SIZE);
+ register_phys_mem_pgdir(MEM_AREA_IO_SEC, GICC_BASE, GIC_CPU_REG_SIZE);
+ 
++#if defined(CFG_WITH_STMM_SP) && defined(CFG_STMM_VARSTORE_PA)
++/*
++ * UEFI variable store window: the NV region of the VPU-loaded FD
++ * (armstub8-2712.bin / RPI_EFI.fd at PA 0, RPi5.fdf layout). Registered
++ * non-secure RAM (NOT NSEC_SHM -- check_mem_map() confines NSEC_SHM to
++ * the CFG_SHMEM carve-out) so stmm_sp.c can mobj_phys_alloc() it and map
++ * it into the StMM SP cache-coherently with the normal world's own
++ * mapping, which both serves UEFI variable reads pre-DXE and persists
++ * the window back to the file on the boot FAT.
++ */
++register_phys_mem(MEM_AREA_RAM_NSEC, CFG_STMM_VARSTORE_PA,
++		  CFG_STMM_VARSTORE_SIZE);
++#endif
++
+ static struct pl011_data console_data __nex_bss;
+ 
+ void boot_primary_init_intc(void)
+--- a/core/mm/mobj.c
++++ b/core/mm/mobj.c
+@@ -95,7 +95,7 @@
+ 		return a == CORE_MEM_SEC || a == CORE_MEM_TEE_RAM ||
+ 		       a == CORE_MEM_SDP_MEM;
+ 	case CORE_MEM_NON_SEC:
+-		return a == CORE_MEM_NSEC_SHM;
++		return a == CORE_MEM_NSEC_SHM || a == CORE_MEM_NON_SEC;
+ 	case CORE_MEM_TEE_RAM:
+ 	case CORE_MEM_NSEC_SHM:
+ 	case CORE_MEM_SDP_MEM:
+@@ -185,6 +185,9 @@
+ 	case CORE_MEM_NSEC_SHM:
+ 		area_type = MEM_AREA_NSEC_SHM;
+ 		break;
++	case CORE_MEM_NON_SEC:
++		area_type = MEM_AREA_RAM_NSEC;
++		break;
+ 	case CORE_MEM_SDP_MEM:
+ 		area_type = MEM_AREA_SDP_MEM;
+ 		break;

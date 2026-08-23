@@ -6,7 +6,6 @@
  *
  **/
 
-
 #ifndef __BCM2712_GPIO_LIB_H__
 #define __BCM2712_GPIO_LIB_H__
 
@@ -30,9 +29,9 @@ typedef enum {
 } BCM2712_GPIO_ALT;
 
 typedef enum {
-  BCM2712_GPIO_PIN_PULL_NONE  = 0,
-  BCM2712_GPIO_PIN_PULL_DOWN  = 1,
-  BCM2712_GPIO_PIN_PULL_UP    = 2
+  BCM2712_GPIO_PIN_PULL_NONE = 0,
+  BCM2712_GPIO_PIN_PULL_DOWN = 1,
+  BCM2712_GPIO_PIN_PULL_UP   = 2
 } BCM2712_GPIO_PIN_PULL;
 
 typedef enum {
@@ -43,61 +42,61 @@ typedef enum {
 UINT8
 EFIAPI
 GpioGetFunction (
-  IN  BCM2712_GPIO_TYPE               Type,
-  IN  UINT8                           Pin
+  IN  BCM2712_GPIO_TYPE  Type,
+  IN  UINT8              Pin
   );
 
 VOID
 EFIAPI
 GpioSetFunction (
-  IN  BCM2712_GPIO_TYPE               Type,
-  IN  UINT8                           Pin,
-  IN  UINT8                           Function
+  IN  BCM2712_GPIO_TYPE  Type,
+  IN  UINT8              Pin,
+  IN  UINT8              Function
   );
 
 BCM2712_GPIO_PIN_PULL
 EFIAPI
 GpioGetPull (
-  IN  BCM2712_GPIO_TYPE               Type,
-  IN  UINT8                           Pin
+  IN  BCM2712_GPIO_TYPE  Type,
+  IN  UINT8              Pin
   );
 
 VOID
 EFIAPI
 GpioSetPull (
-  IN  BCM2712_GPIO_TYPE               Type,
-  IN  UINT8                           Pin,
-  IN  BCM2712_GPIO_PIN_PULL           Pull
+  IN  BCM2712_GPIO_TYPE      Type,
+  IN  UINT8                  Pin,
+  IN  BCM2712_GPIO_PIN_PULL  Pull
   );
 
 BOOLEAN
 EFIAPI
 GpioRead (
-  IN  BCM2712_GPIO_TYPE               Type,
-  IN  UINT8                           Pin
+  IN  BCM2712_GPIO_TYPE  Type,
+  IN  UINT8              Pin
   );
 
 VOID
 EFIAPI
 GpioWrite (
-  IN  BCM2712_GPIO_TYPE               Type,
-  IN  UINT8                           Pin,
-  IN  BOOLEAN                         Value
+  IN  BCM2712_GPIO_TYPE  Type,
+  IN  UINT8              Pin,
+  IN  BOOLEAN            Value
   );
 
 BCM2712_GPIO_PIN_DIRECTION
 EFIAPI
 GpioGetDirection (
-  IN  BCM2712_GPIO_TYPE               Type,
-  IN  UINT8                           Pin
+  IN  BCM2712_GPIO_TYPE  Type,
+  IN  UINT8              Pin
   );
 
 VOID
 EFIAPI
 GpioSetDirection (
-  IN  BCM2712_GPIO_TYPE               Type,
-  IN  UINT8                           Pin,
-  IN  BCM2712_GPIO_PIN_DIRECTION      Direction
+  IN  BCM2712_GPIO_TYPE           Type,
+  IN  UINT8                       Pin,
+  IN  BCM2712_GPIO_PIN_DIRECTION  Direction
   );
 
 #endif // __BCM2712_GPIO_LIB_H__

@@ -251,7 +251,7 @@ ReadPowerOffOnHalt (
   IN CONST VOID  *Fdt
   )
 {
-  STATIC CONST CHAR8    Key[] = "POWER_OFF_ON_HALT=";
+  STATIC CONST CHAR8    Key[]  = "POWER_OFF_ON_HALT=";
   CONST UINTN           KeyLen = sizeof (Key) - 1;
   INT32                 Node;
   UINT64                RegionAddress;
