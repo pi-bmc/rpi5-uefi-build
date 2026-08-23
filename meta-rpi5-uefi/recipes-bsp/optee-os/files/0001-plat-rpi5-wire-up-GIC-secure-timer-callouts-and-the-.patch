@@ -1,36 +1,47 @@
 From: pi-bmc <nbatkins@gmail.com>
-Subject: [PATCH] plat-rpi5: wire up GIC, secure-timer callouts and the BMC
- sensor service
+Subject: [PATCH] plat-rpi5: GIC, secure-timer callouts, async notif, SCMI
 
-The upstream rpi5 platform is console-only. The pi-bmc sensor push
-service needs: the GIC-400 probed (TF-A keeps ownership of the
-distributor), the secure physical timer as a native interrupt driving
-the callout service, async notifications to the normal world on the
-otherwise-unused SPI 200 (INTID 232), static+dynamic shared memory, and
-the two service sources (rp1_i2c.c, bmc_sensor_pta.c -- shipped as
-overlay files by the optee-os recipe) in the build. The shared-memory
-window also moves adjacent to TZDRAM so the firmware carves a single
-[0x1D000000, 0x1F400000) hole out of RAM.
+The upstream rpi5 platform is console-only. The pi-bmc secure services
+need more wired up in the four platform build files:
+
+ - the GIC-400 probed (TF-A keeps the distributor), the secure physical
+   timer as a native interrupt driving the callout service, and async
+   notifications to the normal world on the otherwise-unused SPI 200
+   (INTID 232) -- for the BMC sensor push service;
+ - the SCMI server over the SMT shared-memory transport driven by a fast
+   SiP SMC (Linux arm,scmi-smc; TF-A forwards it into OP-TEE): Sensor
+   Management (0x15, the BCM2712 die temperature) and Performance Domain
+   (0x13, the RP1 Active Cooler fan). The SMT channel is a dedicated page
+   (SCMI_SMT_BASE) at the top of the reserved SHM window;
+ - the shared-memory window moved adjacent to TZDRAM (minus that page).
+
+The service sources (rp1_periph.c, rp1_i2c.c, soc_temp.c,
+bmc_sensor_pta.c, scmi_server.c -- which also overrides tee_entry_fast to
+run the SMT channel -- and rp1_pwm.c) ship as the optee-os recipe's
+files/plat-rpi5 overlay; this patch only touches the four upstream
+platform files.
 
 ---
 diff --git a/core/arch/arm/plat-rpi5/conf.mk b/core/arch/arm/plat-rpi5/conf.mk
-index 4bc9635..f3d2f89 100644
+index 4bc9635..7840aaa 100644
 --- a/core/arch/arm/plat-rpi5/conf.mk
 +++ b/core/arch/arm/plat-rpi5/conf.mk
-@@ -6,7 +6,11 @@ $(call force,CFG_WITH_LPAE,y)
+@@ -6,8 +6,12 @@ $(call force,CFG_WITH_LPAE,y)
  $(call force,CFG_AUTO_MAX_PA_BITS,y)
  $(call force,CFG_LPAE_ADDR_SPACE_BITS,40)
  
 -CFG_SHMEM_START     ?= 0x08000000
+-CFG_SHMEM_SIZE      ?= 0x00400000
 +# pi-bmc: shared memory moved adjacent to TZDRAM so the firmware carves a
 +# single [0x1D000000, 0x1F400000) hole out of the below-1GB RAM (upstream
 +# default was 0x08000000). Must match the TF-A rpi5 BL32 defines, the EDK2
 +# RaspberryPiMem.c carve-out and the reserved-memory/optee DT node.
 +CFG_SHMEM_START     ?= 0x1F000000
- CFG_SHMEM_SIZE      ?= 0x00400000
++CFG_SHMEM_SIZE      ?= 0x003ff000  # top 4K page reserved for the SCMI SMT channel
  CFG_TZDRAM_START    ?= 0x1D000000
  CFG_TZDRAM_SIZE     ?= 0x02000000
-@@ -19,3 +23,21 @@ $(call force,CFG_SECURE_TIME_SOURCE_CNTPCT,y)
+ CFG_TEE_RAM_VA_SIZE ?= 0x00700000
+@@ -19,3 +23,32 @@ $(call force,CFG_SECURE_TIME_SOURCE_CNTPCT,y)
  $(call force,CFG_WITH_ARM_TRUSTED_FW,y)
  
  CFG_NUM_THREADS ?= 4
@@ -52,6 +63,17 @@ index 4bc9635..f3d2f89 100644
 +
 +# Pure pTA service; no user-mode TAs and no secure storage needed.
 +CFG_WITH_USER_TA ?= n
++
++# SCMI server exposed to Linux over the OP-TEE SCMI PTA transport
++# (Linux "arm,scmi-smc" via TF-A rpi_scmi_svc forwarding into OP-TEE): the
++# BCM2712 die temperature (Sensor Management protocol 0x15) and the RP1
++# Active Cooler fan (Performance Domain protocol 0x13). SMT fastcall
++# transport: a dedicated page at the top of the reserved SHM window.
++$(call force,CFG_SCMI_MSG_DRIVERS,y)
++$(call force,CFG_SCMI_MSG_SMT,y)
++$(call force,CFG_SCMI_MSG_SMT_FASTCALL_ENTRY,y)
++CFG_SCMI_MSG_SENSOR ?= y
++CFG_SCMI_MSG_PERF_DOMAIN ?= y
 diff --git a/core/arch/arm/plat-rpi5/main.c b/core/arch/arm/plat-rpi5/main.c
 index 32b8014..e828c77 100644
 --- a/core/arch/arm/plat-rpi5/main.c
@@ -106,10 +128,10 @@ index 32b8014..e828c77 100644
  {
  	pl011_init(&console_data, CONSOLE_UART_BASE, CONSOLE_UART_CLK_IN_HZ,
 diff --git a/core/arch/arm/plat-rpi5/platform_config.h b/core/arch/arm/plat-rpi5/platform_config.h
-index 913fe5a..142ca13 100644
+index 913fe5a..f450310 100644
 --- a/core/arch/arm/plat-rpi5/platform_config.h
 +++ b/core/arch/arm/plat-rpi5/platform_config.h
-@@ -19,4 +19,11 @@
+@@ -19,4 +19,21 @@
  #define DRAM0_BASE		0x00000000
  #define DRAM0_SIZE		0x200000000
  
@@ -120,13 +142,27 @@ index 913fe5a..142ca13 100644
 +/* Secure physical timer PPI, drives the callout service */
 +#define IT_SEC_PHY_TIMER	29
 +
++/*
++ * SCMI SMT shared-memory channel: one 4K page at the top of the reserved
++ * OP-TEE SHM window (CFG_SHMEM 0x1F000000..0x1F3FF000; this page
++ * 0x1F3FF000..0x1F400000). Non-secure -- Linux writes SCMI messages here
++ * and rings the SiP doorbell SMC. The whole 0x1F000000..0x1F400000 range
++ * is already reserved from the OS by EDK2 (PcdOpteeShmSize).
++ */
++#define SCMI_SMT_BASE		0x1f3ff000UL
++#define SCMI_SMT_SIZE		0x1000
++
  #endif /* PLATFORM_CONFIG_H */
 diff --git a/core/arch/arm/plat-rpi5/sub.mk b/core/arch/arm/plat-rpi5/sub.mk
-index 8ddc2fd..2986693 100644
+index 8ddc2fd..c272f28 100644
 --- a/core/arch/arm/plat-rpi5/sub.mk
 +++ b/core/arch/arm/plat-rpi5/sub.mk
-@@ -1,2 +1,4 @@
+@@ -1,2 +1,8 @@
  global-incdirs-y += .
  srcs-y += main.c
++srcs-y += rp1_periph.c
 +srcs-y += rp1_i2c.c
++srcs-y += soc_temp.c
 +srcs-y += bmc_sensor_pta.c
++srcs-$(CFG_SCMI_MSG_DRIVERS) += scmi_server.c
++srcs-$(CFG_SCMI_MSG_PERF_DOMAIN) += rp1_pwm.c

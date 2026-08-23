@@ -8,14 +8,20 @@ recipe (fetched by pinned `SRCREV`, no submodules) rather than a git submodule
 checked directly into this repo.
 
 Output: `rpi5-uefi-sd.img`, deployed to
-`build/tmp/deploy/images/raspberrypi5-uefi/` -- a flashable MBR image with a
-single FAT32 boot partition carrying `armstub8-2712.bin` (the UEFI firmware
-under the default BCM2712 armstub filename, auto-loaded by the VPU bootloader
-at address 0x0 with no `armstub=` line), `config.txt`, the `bcm2712*.dtb`
-device trees and `overlays/` (pinned raspberrypi/firmware release, see
+`build/tmp/deploy/images/raspberrypi5-uefi/` -- a `wic`-built MBR image with a
+single bootable FAT32 partition carrying `armstub8-2712.bin` (the UEFI firmware
+under the default BCM2712 armstub filename, auto-loaded by the VPU bootloader at
+address 0x0 with no `armstub=` line), `config.txt`, the `bcm2712*.dtb` device
+trees and `overlays/` (pinned raspberrypi/firmware release, see
 `rpi-boot-dtbs`). Write it with `dd`/Raspberry Pi Imager. The raw
 `RPI_EFI.fd`/`armstub8-2712.bin` + `config.txt` are deployed alongside for
 hand-made boot partitions.
+
+No RPMB / OP-TEE secure-storage partition is created: RPMB is an eMMC hardware
+partition, and the Pi 5 boots from SD/NVMe which have none, so no image can
+provision it. UEFI-variables-in-RPMB (StandaloneMM) needs eMMC and is out of
+scope; the firmware keeps its FD-backed authenticated variable store. See
+[`docs/optee-bmc-sensor.md`](docs/optee-bmc-sensor.md).
 
 This image is an **alternative bootloader** and deliberately incompatible
 with the u-boot-based image from `../nanokvm-build`: both stacks claim the
@@ -43,7 +49,8 @@ refused even then).
 | `meta-rpi5-uefi/recipes-bsp/arm-trusted-firmware/arm-trusted-firmware_git.bb` | `ARM-software/arm-trusted-firmware`, pinned commit (see caveat below) | `bl31.bin`, staged into the sysroot (and deployed) |
 | `meta-rpi5-uefi/recipes-bsp/edk2/edk2_git.bb` | `tianocore/edk2` @ tag `edk2-stable202608` | patched source tree, staged into the sysroot |
 | `meta-rpi5-uefi/recipes-bsp/edk2-platforms/edk2-platforms_git.bb` | `tianocore/edk2-platforms` `master` @ `9ef9bcef` (2026-08-21), plus this layer's RPi5 port | patched source tree, staged into the sysroot |
-| `meta-rpi5-uefi/recipes-bsp/edk2-non-osi/edk2-non-osi_git.bb` | `tianocore/edk2-non-osi` `master`, pinned, plus `bl31.bin` from `arm-trusted-firmware` | source tree, staged into the sysroot |
+| `meta-rpi5-uefi/recipes-bsp/optee-os/optee-os_git.bb` | `OP-TEE/optee_os` @ tag `4.10.0`, plus this layer's `plat-rpi5` BMC sensor + SCMI service | `tee-raw.bin` (BL32), staged into the sysroot (and deployed) |
+| `meta-rpi5-uefi/recipes-bsp/edk2-non-osi/edk2-non-osi_git.bb` | `tianocore/edk2-non-osi` `master`, pinned, plus `bl31.bin` from `arm-trusted-firmware` and `tee-raw.bin` from `optee-os` | source tree, staged into the sysroot |
 | `meta-rpi5-uefi/recipes-bsp/edk2-redfish-client/edk2-redfish-client_git.bb` | `tianocore/edk2-redfish-client` `main`, pinned | source tree, staged into the sysroot |
 | `meta-rpi5-uefi/recipes-bsp/rpi5-secureboot-keys/rpi5-secureboot-keys_1.0.bb` | this layer's PK + Microsoft's six KEK/db CA certificates, fetched and checksum-pinned | DER certificates, staged into the sysroot |
 | `meta-rpi5-uefi/recipes-bsp/rpi5-uefi-firmware/rpi5-uefi-firmware.bb` | none -- builds the trees above | `armstub8-2712.bin` / `RPI_EFI.fd`, `config.txt`, `RPi5Firmware.cap` |
@@ -174,3 +181,10 @@ Set any of these in `kas.yml`'s `local_conf_header` (or `local.conf`):
   (`-D FOO=BAR`, `--pcd ...`) without overriding `do_compile` wholesale.
 - `TFA_DEBUG` (default `"0"`) -- TF-A `DEBUG=1` build with UART crash
   logging.
+- `RPI5_OPTEE` (default `"1"`) -- build OP-TEE (BL32) with the BMC sensor
+  push service and the SCMI temperature/fan server, embed `tee-raw.bin` in
+  the FD, and run TF-A with `SPD=opteed`. `"0"` drops OP-TEE entirely
+  (byte-identical to the pre-OP-TEE firmware). See
+  [`docs/optee-bmc-sensor.md`](docs/optee-bmc-sensor.md).
+- `OPTEE_DEBUG` (default `"0"`) -- OP-TEE debug core with the full
+  DMSG/FMSG trace stream on the PL011.

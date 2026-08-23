@@ -1,0 +1,436 @@
+From: pi-bmc <nbatkins@gmail.com>
+Subject: [PATCH] scmi-msg: add Sensor Management protocol (0x15)
+
+The lightweight scmi-msg server has base/clock/reset/voltage/perf but no
+sensor protocol; sensor 0x15 otherwise only comes with the heavyweight
+SCP-firmware integration. Add a read-only single-axis Sensor Management
+server (PROTOCOL_VERSION/ATTRIBUTES/MESSAGE_ATTRIBUTES,
+SENSOR_DESCRIPTION_GET, SENSOR_READING_GET) modelled on voltage_domain.c,
+its plat_scmi_sensor_* hooks in the public header, the CFG_SCMI_MSG_SENSOR
+gate, sub.mk and entry.c dispatch.
+
+Also fixes a latent type mismatch in perf_domain.c
+(message_id_is_supported declared unsigned int, defined size_t) that
+GCC 13 rejects once CFG_SCMI_MSG_PERF_DOMAIN is actually built.
+
+---
+diff --git a/core/drivers/scmi-msg/entry.c b/core/drivers/scmi-msg/entry.c
+index 05a3e4d..e34a037 100644
+--- a/core/drivers/scmi-msg/entry.c
++++ b/core/drivers/scmi-msg/entry.c
+@@ -17,6 +17,7 @@
+ #include "common.h"
+ #include "perf_domain.h"
+ #include "reset_domain.h"
++#include "sensor.h"
+ #include "voltage_domain.h"
+ 
+ /* Provision input message payload buffers for each supported entry channel */
+@@ -89,6 +90,11 @@ void scmi_process_message(struct scmi_msg *msg)
+ 	case SCMI_PROTOCOL_ID_VOLTAGE_DOMAIN:
+ 		handler = scmi_msg_get_voltd_handler(msg);
+ 		break;
++#ifdef CFG_SCMI_MSG_SENSOR
++	case SCMI_PROTOCOL_ID_SENSOR:
++		handler = scmi_msg_get_sensor_handler(msg);
++		break;
++#endif
+ 	case SCMI_PROTOCOL_ID_PERF:
+ 		handler = scmi_msg_get_perf_handler(msg);
+ 		break;
+diff --git a/core/drivers/scmi-msg/perf_domain.c b/core/drivers/scmi-msg/perf_domain.c
+index 7006be1..67cec28 100644
+--- a/core/drivers/scmi-msg/perf_domain.c
++++ b/core/drivers/scmi-msg/perf_domain.c
+@@ -385,7 +385,7 @@ static const scmi_msg_handler_t scmi_perf_handler_table[] = {
+ 	[SCMI_PERF_LEVEL_GET] = scmi_perf_level_get,
+ };
+ 
+-static bool message_id_is_supported(size_t message_id)
++static bool message_id_is_supported(unsigned int message_id)
+ {
+ 	return message_id < ARRAY_SIZE(scmi_perf_handler_table) &&
+ 	       scmi_perf_handler_table[message_id];
+diff --git a/core/drivers/scmi-msg/sensor.c b/core/drivers/scmi-msg/sensor.c
+new file mode 100644
+index 0000000..0576609
+--- /dev/null
++++ b/core/drivers/scmi-msg/sensor.c
+@@ -0,0 +1,201 @@
++// SPDX-License-Identifier: BSD-3-Clause
++/*
++ * Copyright (c) 2026, pi-bmc contributors
++ *
++ * SCMI Sensor Management Protocol (0x15) server, read-only single-axis.
++ */
++
++#include <confine_array_index.h>
++#include <drivers/scmi-msg.h>
++#include <drivers/scmi.h>
++#include <string.h>
++#include <trace.h>
++#include <util.h>
++
++#include "common.h"
++#include "sensor.h"
++
++static bool message_id_is_supported(unsigned int message_id);
++
++static void report_version(struct scmi_msg *msg)
++{
++	struct scmi_protocol_version_p2a return_values = {
++		.status = SCMI_SUCCESS,
++		.version = SCMI_PROTOCOL_VERSION_SENSOR,
++	};
++
++	if (msg->in_size) {
++		scmi_status_response(msg, SCMI_PROTOCOL_ERROR);
++		return;
++	}
++
++	scmi_write_response(msg, &return_values, sizeof(return_values));
++}
++
++static void report_attributes(struct scmi_msg *msg)
++{
++	size_t count = plat_scmi_sensor_count(msg->channel_id);
++	struct scmi_sensor_protocol_attrs_p2a return_values = {
++		.status = SCMI_SUCCESS,
++		.attributes = count & SCMI_SENSOR_COUNT_MASK,
++	};
++
++	if (msg->in_size) {
++		scmi_status_response(msg, SCMI_PROTOCOL_ERROR);
++		return;
++	}
++
++	scmi_write_response(msg, &return_values, sizeof(return_values));
++}
++
++static void report_message_attributes(struct scmi_msg *msg)
++{
++	struct scmi_protocol_message_attributes_a2p *in_args = (void *)msg->in;
++	struct scmi_protocol_message_attributes_p2a return_values = {
++		.status = SCMI_SUCCESS,
++		.attributes = 0,
++	};
++
++	if (msg->in_size != sizeof(*in_args)) {
++		scmi_status_response(msg, SCMI_PROTOCOL_ERROR);
++		return;
++	}
++
++	if (!message_id_is_supported(in_args->message_id)) {
++		scmi_status_response(msg, SCMI_NOT_FOUND);
++		return;
++	}
++
++	scmi_write_response(msg, &return_values, sizeof(return_values));
++}
++
++static void sensor_description_get(struct scmi_msg *msg)
++{
++	const struct scmi_sensor_description_get_a2p *in_args = (void *)msg->in;
++	size_t count = plat_scmi_sensor_count(msg->channel_id);
++	unsigned int desc_index = 0;
++	struct scmi_sensor_description_get_p2a p2a = {
++		.status = SCMI_SUCCESS,
++	};
++	struct scmi_sensor_desc desc = { };
++	uint8_t type = 0;
++	int8_t scale = 0;
++	const char *name = NULL;
++	int32_t rc = 0;
++
++	if (msg->in_size != sizeof(*in_args)) {
++		scmi_status_response(msg, SCMI_PROTOCOL_ERROR);
++		return;
++	}
++
++	desc_index = confine_array_index(in_args->desc_index, count);
++	if (in_args->desc_index >= count) {
++		scmi_status_response(msg, SCMI_INVALID_PARAMETERS);
++		return;
++	}
++
++	/*
++	 * One descriptor per message keeps the output payload tiny and the
++	 * logic trivial; the agent iterates on the "remaining" count.
++	 */
++	if (msg->out_size < sizeof(p2a) + sizeof(desc)) {
++		scmi_status_response(msg, SCMI_PROTOCOL_ERROR);
++		return;
++	}
++
++	rc = plat_scmi_sensor_attributes(msg->channel_id, desc_index,
++					 &type, &scale);
++	if (rc) {
++		scmi_status_response(msg, rc);
++		return;
++	}
++	name = plat_scmi_sensor_name(msg->channel_id, desc_index);
++	if (!name) {
++		scmi_status_response(msg, SCMI_NOT_FOUND);
++		return;
++	}
++
++	desc.id = desc_index;
++	desc.attributes_low = 0;
++	desc.attributes_high =
++		SHIFT_U32(type, SCMI_SENSOR_ATTRS_HI_TYPE_POS) |
++		(SHIFT_U32((uint32_t)scale, SCMI_SENSOR_ATTRS_HI_SCALE_POS) &
++		 SCMI_SENSOR_ATTRS_HI_SCALE_MASK);
++	COPY_NAME_IDENTIFIER(desc.name, name);
++
++	p2a.num_sensor_flags = SHIFT_U32(count - 1 - desc_index,
++					 SCMI_SENSOR_DESCS_REMAINING_POS) | 1;
++
++	/* Response is the fixed head plus exactly one descriptor */
++	memcpy(msg->out, &p2a, sizeof(p2a));
++	memcpy(msg->out + sizeof(p2a), &desc, sizeof(desc));
++	msg->out_size_out = sizeof(p2a) + sizeof(desc);
++}
++
++static void sensor_reading_get(struct scmi_msg *msg)
++{
++	const struct scmi_sensor_reading_get_a2p *in_args = (void *)msg->in;
++	size_t count = plat_scmi_sensor_count(msg->channel_id);
++	unsigned int sensor_id = 0;
++	uint64_t value = 0;
++	int32_t rc = 0;
++	struct scmi_sensor_reading_get_p2a return_values = {
++		.status = SCMI_SUCCESS,
++	};
++
++	if (msg->in_size != sizeof(*in_args)) {
++		scmi_status_response(msg, SCMI_PROTOCOL_ERROR);
++		return;
++	}
++
++	if (in_args->flags & SCMI_SENSOR_READING_ASYNC) {
++		scmi_status_response(msg, SCMI_NOT_SUPPORTED);
++		return;
++	}
++
++	if (in_args->sensor_id >= count) {
++		scmi_status_response(msg, SCMI_NOT_FOUND);
++		return;
++	}
++	sensor_id = confine_array_index(in_args->sensor_id, count);
++
++	rc = plat_scmi_sensor_reading_get(msg->channel_id, sensor_id, &value);
++	if (rc) {
++		scmi_status_response(msg, rc);
++		return;
++	}
++
++	return_values.value_low = (uint32_t)value;
++	return_values.value_high = (uint32_t)(value >> 32);
++
++	scmi_write_response(msg, &return_values, sizeof(return_values));
++}
++
++static const scmi_msg_handler_t scmi_sensor_handler_table[] = {
++	[SCMI_PROTOCOL_VERSION] = report_version,
++	[SCMI_PROTOCOL_ATTRIBUTES] = report_attributes,
++	[SCMI_PROTOCOL_MESSAGE_ATTRIBUTES] = report_message_attributes,
++	[SCMI_SENSOR_DESCRIPTION_GET] = sensor_description_get,
++	[SCMI_SENSOR_READING_GET] = sensor_reading_get,
++};
++
++static bool message_id_is_supported(unsigned int message_id)
++{
++	return message_id < ARRAY_SIZE(scmi_sensor_handler_table) &&
++	       scmi_sensor_handler_table[message_id];
++}
++
++scmi_msg_handler_t scmi_msg_get_sensor_handler(struct scmi_msg *msg)
++{
++	const size_t array_size = ARRAY_SIZE(scmi_sensor_handler_table);
++	unsigned int message_id = 0;
++
++	if (msg->message_id >= array_size) {
++		DMSG("Sensor handle not found %u", msg->message_id);
++		return NULL;
++	}
++
++	message_id = confine_array_index(msg->message_id, array_size);
++
++	return scmi_sensor_handler_table[message_id];
++}
+diff --git a/core/drivers/scmi-msg/sensor.h b/core/drivers/scmi-msg/sensor.h
+new file mode 100644
+index 0000000..30f9df9
+--- /dev/null
++++ b/core/drivers/scmi-msg/sensor.h
+@@ -0,0 +1,87 @@
++/* SPDX-License-Identifier: BSD-3-Clause */
++/*
++ * Copyright (c) 2026, pi-bmc contributors
++ *
++ * SCMI Sensor Management Protocol (0x15), lightweight scmi-msg server.
++ * Read-only single-axis sensors, enough for Linux scmi-hwmon / the
++ * thermal framework to read values a platform exposes (e.g. the BCM2712
++ * die temperature). Modelled on voltage_domain.c / clock.c.
++ */
++
++#ifndef SCMI_MSG_SENSOR_H
++#define SCMI_MSG_SENSOR_H
++
++#include <stdint.h>
++#include <util.h>
++
++#include "common.h"
++
++#define SCMI_PROTOCOL_VERSION_SENSOR	0x20000
++
++/* SCMI Sensor Management Protocol command identifiers */
++enum scmi_sensor_command_id {
++	SCMI_SENSOR_DESCRIPTION_GET = 0x003,
++	SCMI_SENSOR_READING_GET = 0x006,
++};
++
++/* Sensor type: temperature in degrees Celsius (SCMI sensor type table) */
++#define SCMI_SENSOR_TYPE_DEGREES_C	0x2
++
++/* PROTOCOL_ATTRIBUTES: number of sensors is the low 16 bits */
++#define SCMI_SENSOR_COUNT_MASK		GENMASK_32(15, 0)
++
++struct scmi_sensor_protocol_attrs_p2a {
++	int32_t status;
++	uint32_t attributes;		/* [15:0] number of sensors */
++	uint32_t sensor_reg_addr_low;	/* no shared sensor value region */
++	uint32_t sensor_reg_addr_high;
++	uint32_t sensor_reg_len;
++};
++
++struct scmi_sensor_description_get_a2p {
++	uint32_t desc_index;
++};
++
++/* num_sensor_flags: [31:16] remaining descriptors, [11:0] in this message */
++#define SCMI_SENSOR_DESCS_REMAINING_POS	16
++#define SCMI_SENSOR_NAME_MAX		16
++
++/* attributes_high: [7:0] type, [15:11] signed power-of-10 scale (exponent) */
++#define SCMI_SENSOR_ATTRS_HI_TYPE_POS	0
++#define SCMI_SENSOR_ATTRS_HI_SCALE_POS	11
++#define SCMI_SENSOR_ATTRS_HI_SCALE_MASK	GENMASK_32(15, 11)
++
++struct scmi_sensor_desc {
++	uint32_t id;
++	uint32_t attributes_low;	/* 0: sync only, single axis, no ts */
++	uint32_t attributes_high;	/* type + scale */
++	char name[SCMI_SENSOR_NAME_MAX];
++};
++
++struct scmi_sensor_description_get_p2a {
++	int32_t status;
++	uint32_t num_sensor_flags;
++	struct scmi_sensor_desc desc[];
++};
++
++struct scmi_sensor_reading_get_a2p {
++	uint32_t sensor_id;
++	uint32_t flags;			/* bit0 = async; we support sync only */
++};
++
++#define SCMI_SENSOR_READING_ASYNC	BIT(0)
++
++struct scmi_sensor_reading_get_p2a {
++	int32_t status;
++	uint32_t value_low;
++	uint32_t value_high;
++};
++
++/*
++ * scmi_msg_get_sensor_handler - Return a handler for a sensor message
++ * @msg: Input message to be handled
++ * Return a function handler for the message or NULL
++ */
++scmi_msg_handler_t scmi_msg_get_sensor_handler(struct scmi_msg *msg);
++
++#endif /* SCMI_MSG_SENSOR_H */
+diff --git a/core/drivers/scmi-msg/sub.mk b/core/drivers/scmi-msg/sub.mk
+index 2601e00..b94741a 100644
+--- a/core/drivers/scmi-msg/sub.mk
++++ b/core/drivers/scmi-msg/sub.mk
+@@ -4,6 +4,7 @@ srcs-$(CFG_SCMI_MSG_USE_CLK) += clock_generic.c
+ srcs-y += entry.c
+ srcs-$(CFG_SCMI_MSG_PERF_DOMAIN) += perf_domain.c
+ srcs-$(CFG_SCMI_MSG_RESET_DOMAIN) += reset_domain.c
++srcs-$(CFG_SCMI_MSG_SENSOR) += sensor.c
+ srcs-$(CFG_SCMI_MSG_SHM_MSG) += shm_msg.c
+ srcs-$(CFG_SCMI_MSG_SMT) += smt.c
+ srcs-$(CFG_SCMI_MSG_VOLTAGE_DOMAIN) += voltage_domain.c
+diff --git a/core/include/drivers/scmi-msg.h b/core/include/drivers/scmi-msg.h
+index f56fe5a..9fb818a 100644
+--- a/core/include/drivers/scmi-msg.h
++++ b/core/include/drivers/scmi-msg.h
+@@ -408,6 +408,46 @@ int32_t plat_scmi_voltd_get_config(unsigned int channel_id,
+ int32_t plat_scmi_voltd_set_config(unsigned int channel_id,
+ 				   unsigned int scmi_id, uint32_t config);
+ 
++/* Handlers for SCMI Sensor Management protocol services */
++
++/*
++ * Return number of sensors for the channel
++ * @channel_id: SCMI channel ID
++ * Return number of sensors for the channel
++ */
++size_t plat_scmi_sensor_count(unsigned int channel_id);
++
++/*
++ * Get sensor string ID (aka name)
++ * @channel_id: SCMI channel ID
++ * @scmi_id: SCMI sensor ID
++ * Return pointer to name or NULL
++ */
++const char *plat_scmi_sensor_name(unsigned int channel_id,
++				  unsigned int scmi_id);
++
++/*
++ * Get sensor description: type and power-of-10 scale (exponent)
++ * @channel_id: SCMI channel ID
++ * @scmi_id: SCMI sensor ID
++ * @type: Output SCMI sensor type
++ * @scale: Output signed power-of-10 unit multiplier
++ * Return a compliant SCMI error code
++ */
++int32_t plat_scmi_sensor_attributes(unsigned int channel_id,
++				    unsigned int scmi_id,
++				    uint8_t *type, int8_t *scale);
++
++/*
++ * Read a sensor value (already scaled by its power-of-10 exponent)
++ * @channel_id: SCMI channel ID
++ * @scmi_id: SCMI sensor ID
++ * @value: Output 64-bit sensor reading
++ * Return a compliant SCMI error code
++ */
++int32_t plat_scmi_sensor_reading_get(unsigned int channel_id,
++				     unsigned int scmi_id, uint64_t *value);
++
+ /* Handlers for SCMI Performance Domain Management protocol services */
+ 
+ /*
+diff --git a/mk/config.mk b/mk/config.mk
+index ce156ed..d042d80 100644
+--- a/mk/config.mk
++++ b/mk/config.mk
+@@ -833,6 +833,7 @@ CFG_CORE_TPM_EVENT_LOG ?= n
+ #
+ # CFG_SCMI_MSG_CLOCK embeds SCMI clock protocol support.
+ # CFG_SCMI_MSG_RESET_DOMAIN embeds SCMI reset domain protocol support.
++# CFG_SCMI_MSG_SENSOR embeds SCMI sensor management protocol support.
+ # CFG_SCMI_MSG_SMT embeds a SMT header in shared device memory buffers
+ # CFG_SCMI_MSG_VOLTAGE_DOMAIN embeds SCMI voltage domain protocol support.
+ # CFG_SCMI_MSG_PERF_DOMAIN embeds SCMI performance domain management protocol
+@@ -844,6 +845,7 @@ CFG_SCMI_MSG_DRIVERS ?= n
+ ifeq ($(CFG_SCMI_MSG_DRIVERS),y)
+ CFG_SCMI_MSG_CLOCK ?= n
+ CFG_SCMI_MSG_RESET_DOMAIN ?= n
++CFG_SCMI_MSG_SENSOR ?= n
+ CFG_SCMI_MSG_SHM_MSG ?= n
+ CFG_SCMI_MSG_SMT ?= n
+ CFG_SCMI_MSG_SMT_FASTCALL_ENTRY ?= n

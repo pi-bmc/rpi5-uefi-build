@@ -1,134 +1,136 @@
-SUMMARY = "Bootable SD card image for the Raspberry Pi 5 UEFI firmware"
-DESCRIPTION = "Assembles rpi5-uefi-sd.img: an MBR disk image with a single \
-               bootable FAT32 partition carrying everything the Pi 5 VPU \
-               bootloader needs to start the alternative TF-A+EDK2 bootloader \
-               stack -- armstub8-2712.bin (RPI_EFI.fd under the default \
-               armstub filename, so config.txt needs no armstub= line), \
-               config.txt, the bcm2712 device trees (from the Talos kernel \
-               image, so they match the kernel that consumes them, both flat \
-               for the VPU bootloader and under dtb/<kernel release>/ for \
-               FdtDxe to pick from), and the overlays/ directory (from the Pi \
-               firmware release). \
+SUMMARY = "Bootable SD/NVMe image for the Raspberry Pi 5 UEFI firmware"
+DESCRIPTION = "Assembles rpi5-uefi-sd.img with wic: an MBR disk image whose \
+               first, bootable FAT32 partition carries everything the Pi 5 \
+               VPU bootloader needs to start the alternative TF-A+EDK2 \
+               bootloader stack -- armstub8-2712.bin (RPI_EFI.fd under the \
+               default armstub filename, so config.txt needs no armstub= \
+               line), config.txt, the bcm2712 device trees (from the Talos \
+               kernel image, both flat for the VPU bootloader and under \
+               dtb/<kernel release>/ for FdtDxe to pick from) and overlays/ \
+               (from the Pi firmware release). \
+\
+               The boot partition contents are assembled into a staging tree \
+               and handed to wic's rootfs source; the DTB layout (each tree \
+               at the root, under broadcom/ and under dtb/<release>/) does \
+               not map onto IMAGE_BOOT_FILES, so bootimg-partition is not \
+               used. \
+\
+               NOTE ON OP-TEE STORAGE: no RPMB partition is created here, \
+               because RPMB cannot be. RPMB is a hardware partition inside \
+               an eMMC device, provisioned with authenticated eMMC commands \
+               and a one-time key -- not a partition-table entry any image \
+               can create -- and the Pi 5 boots from SD/NVMe, which have no \
+               RPMB at all. UEFI-variables-in-RPMB (StandaloneMM) needs eMMC \
+               and stays out of scope; the firmware keeps its FD-backed \
+               authenticated variable store. If OP-TEE REE-FS secure storage \
+               is wanted later (needs an OS with tee-supplicant), add a data \
+               partition to the wks then. See docs/optee-bmc-sensor.md. \
 \
                This image is intentionally NOT compatible with the \
-               u-boot-based RPi image from ../nanokvm-build: both stacks claim \
-               the armstub8-2712.bin name with different payloads (bare BL31 \
-               + kernel=u-boot.bin there, BL31+UEFI here), so a card carries \
-               one bootloader or the other, never both. \
-\
-               Built with plain sfdisk/mkfs.vfat/mcopy rather than wic: the \
-               image has no rootfs (UEFI boots the OS from other media), so \
-               the image-class machinery would be pure overhead."
+               u-boot-based RPi image from ../nanokvm-build: both stacks \
+               claim the armstub8-2712.bin name with different payloads, so a \
+               card carries one bootloader or the other, never both."
 
 LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda2f7b4f302"
 
-DEPENDS = "dosfstools-native mtools-native util-linux-native"
+# Native tools wic drives: parted (partition table), mtools (vfat), mke2fs
+# -d (ext4), plus util-linux/gptfdisk helpers. These land in
+# ${RECIPE_SYSROOT_NATIVE}, which is what we hand wic as --native-sysroot.
+DEPENDS = "parted-native mtools-native dosfstools-native e2fsprogs-native \
+           util-linux-native gptfdisk-native"
 
 COMPATIBLE_MACHINE = "raspberrypi5-uefi"
 
-inherit deploy
+SRC_URI = "file://wic/rpi5-uefi.wks.in"
 
-# Everything comes from other recipes' deploy output.
+inherit deploy nopackages
+
+# Everything on the boot partition comes from other recipes' deploy output.
 do_fetch[noexec] = "1"
-do_unpack[noexec] = "1"
 do_patch[noexec] = "1"
 do_configure[noexec] = "1"
 do_install[noexec] = "1"
 
 do_compile[depends] += "rpi5-uefi-firmware:do_deploy rpi-boot-dtbs:do_deploy talos-boot-dtbs:do_deploy"
 
-# FAT32 boot partition size. Contents are ~9 MiB (3.8M firmware + ~4M
-# overlays + DTBs), plus ~160K for each extra kernel release in
-# TALOS_KERNEL_TAGS; 64 MiB leaves comfortable room for dtoverlay additions
-# and future FD growth without resizing the layout.
+# FAT32 boot partition size. Contents are ~9 MiB (3.9M firmware + ~4M
+# overlays + DTBs) plus ~160K per extra kernel release; 64 MiB leaves room
+# for dtoverlay additions and FD growth.
 SDIMG_BOOT_MB ?= "64"
-# Partition start offset, the conventional 4 MiB alignment.
-SDIMG_OFFSET_MB = "4"
 
 SDIMG_NAME = "rpi5-uefi-sd.img"
+WKS_TEMPLATE = "${UNPACKDIR}/wic/rpi5-uefi.wks.in"
+
+# UNPACKDIR only exists from styhead on; scarthgap unpacks into WORKDIR.
+UNPACKDIR ?= "${WORKDIR}"
 
 do_compile() {
-    part="${B}/boot.vfat"
-    img="${B}/${SDIMG_NAME}"
-    rm -f "${part}" "${img}"
+    boot="${B}/boot"
+    rm -rf "${boot}" "${B}/wic-out"
+    install -d "${boot}"
 
-    # --- FAT32 boot partition ------------------------------------------
-    truncate -s ${SDIMG_BOOT_MB}M "${part}"
-    mkfs.vfat -F 32 -n RPI5-UEFI -S 512 "${part}"
-
+    # --- Assemble the FAT32 boot partition tree ------------------------
     # RPI_EFI.fd under the default BCM2712 armstub filename: the VPU
-    # bootloader auto-loads armstub8-2712.bin at address 0x0 (exactly where
-    # RPi5.fdf links the FD, PcdFdBaseAddress=0), no armstub= line needed.
-    #
-    # This name is ALSO the NV variable store's backing file. VarBlockServiceDxe
-    # persists EFI variables by writing the FD's variable region back into the
-    # file it was loaded from, and it finds that file by name -- upstream looks
-    # only for RPI_EFI.fd, so 0013-VarBlockServiceDxe-find-the-variable-store-
-    # under-eith.patch in the edk2-platforms recipe teaches it this name too.
-    # Rename the target here and nothing set in Setup survives a reboot until
-    # that patch's candidate list is updated to match.
-    mcopy -i "${part}" "${DEPLOY_DIR_IMAGE}/RPI_EFI.fd" ::/armstub8-2712.bin
-    mcopy -i "${part}" "${DEPLOY_DIR_IMAGE}/config.txt" ::/config.txt
+    # bootloader auto-loads armstub8-2712.bin at 0x0 (where RPi5.fdf links
+    # the FD, PcdFdBaseAddress=0), no armstub= line needed. This name is
+    # ALSO the NV variable store's backing file (VarBlockServiceDxe writes
+    # the FD variable region back to the file it loaded, found by name --
+    # see 0013-VarBlockServiceDxe-... in the edk2-platforms recipe). Rename
+    # it here and Setup changes stop surviving reboot until that patch's
+    # candidate list is updated to match.
+    install -m 0644 "${DEPLOY_DIR_IMAGE}/RPI_EFI.fd" "${boot}/armstub8-2712.bin"
+    install -m 0644 "${DEPLOY_DIR_IMAGE}/config.txt" "${boot}/config.txt"
 
-    # Board device trees from the Talos kernel image, NOT from the Raspberry Pi
-    # firmware release (see talos-boot-dtbs).
-    #
-    # The VPU bootloader loads the board's .dtb, patches it (memory, MAC,
-    # bootloader config placement) and leaves it at device_tree_address for
-    # FdtDxe to hand on. Whatever lands here is therefore the tree Linux gets,
-    # and it has to match the kernel that consumes it -- the stock Raspberry Pi
-    # DTBs are built from the downstream kernel and describe hardware in ways a
-    # mainline-based kernel does not bind. Taking them from the Talos kernel's
-    # own OCI image keeps the two in step by construction.
-    #
-    # Overlays still come from the firmware release: they resolve against
-    # config.txt's dtoverlay= lines, which the VPU processes, and the Talos
-    # kernel image ships none.
-    # Twice: at the root, and under broadcom/ -- the layout mainline uses
-    # (arch/arm64/boot/dts/broadcom, which is also where the Talos kernel image
-    # keeps them and what U-Boot's DTB_DIR points at on arm64). config.txt sets
-    # upstream_kernel=1 so the VPU bootloader asks for mainline names; the two
-    # locations cover both conventions for where those names live. ~24 KiB each
-    # on a 64 MiB partition, which is cheaper than a board that does not boot.
-    mmd -i "${part}" ::/broadcom
+    # Board device trees from the Talos kernel image (see talos-boot-dtbs),
+    # so they match the kernel that consumes them. Twice: at the root and
+    # under broadcom/ (the layout mainline/U-Boot DTB_DIR use on arm64);
+    # config.txt sets upstream_kernel=1 so the VPU asks for mainline names,
+    # and the two locations cover both conventions.
+    install -d "${boot}/broadcom"
     for dtb in "${DEPLOY_DIR_IMAGE}/talos-boot-dtbs/"*.dtb; do
-        mcopy -i "${part}" "${dtb}" ::/
-        mcopy -i "${part}" "${dtb}" ::/broadcom/
+        install -m 0644 "${dtb}" "${boot}/"
+        install -m 0644 "${dtb}" "${boot}/broadcom/"
     done
 
-    # The same trees again, filed by the kernel release they belong to, which
-    # is where FdtDxe looks: \dtb\<release>\bcm2712-rpi-5-b.dtb, keyed off
-    # the .uname section of the UKI the boot manager is about to start. The
-    # copies above are for the VPU bootloader, which knows one filename and
-    # nothing about kernels; these are for picking between kernels once there
-    # is a kernel to pick for.
-    #
-    # Deliberately no unkeyed \dtb\bcm2712-rpi-5-b.dtb here. FdtDxe falls
-    # back to that path, but on this card the fallback is already better
-    # served: the tree at the root is the one the VPU loaded AND patched with
-    # this board's memory layout, MAC and blconfig placement, and FdtDxe has
-    # published it as the configuration table before any of this is reached.
-    # An unpatched duplicate under \dtb\ would only displace it. That path
-    # is for an OS that installs its own tree on its own volume.
-    mmd -i "${part}" ::/dtb
+    # The same trees keyed by kernel release, where FdtDxe looks:
+    # \dtb\<release>\bcm2712-rpi-5-b.dtb, chosen from the UKI's .uname
+    # section. Deliberately no unkeyed \dtb\ copy: FdtDxe's fallback is
+    # already better served by the VPU-patched tree at the root.
+    install -d "${boot}/dtb"
     for dir in "${DEPLOY_DIR_IMAGE}/talos-boot-dtbs/by-uname/"*/; do
         release=$(basename "${dir}")
-        mmd -i "${part}" ::/dtb/"${release}"
-        mcopy -i "${part}" "${dir}"*.dtb ::/dtb/"${release}"/
+        install -d "${boot}/dtb/${release}"
+        install -m 0644 "${dir}"*.dtb "${boot}/dtb/${release}/"
     done
 
-    mmd -i "${part}" ::/overlays
-    mcopy -i "${part}" -s "${DEPLOY_DIR_IMAGE}/rpi-boot-dtbs/overlays/"* ::/overlays/
+    # Overlays from the firmware release (resolve against config.txt
+    # dtoverlay= lines the VPU processes; the Talos image ships none).
+    install -d "${boot}/overlays"
+    cp -a "${DEPLOY_DIR_IMAGE}/rpi-boot-dtbs/overlays/." "${boot}/overlays/"
 
-    # --- MBR disk image -------------------------------------------------
-    # expr + printf-pipe rather than $(( )) arithmetic and a heredoc:
-    # bitbake's shell parser (pysh) rejects both constructs inside task
-    # functions.
-    total_mb=$(expr ${SDIMG_OFFSET_MB} + ${SDIMG_BOOT_MB} + 1)
-    truncate -s ${total_mb}M "${img}"
-    printf 'label: dos\n%sMiB,%sMiB,0x0c,*\n' "${SDIMG_OFFSET_MB}" "${SDIMG_BOOT_MB}" | sfdisk "${img}"
-    dd if="${part}" of="${img}" bs=1M seek=${SDIMG_OFFSET_MB} conv=notrunc,fsync
+    # --- Render the wks and build the image with wic -------------------
+    wks="${B}/rpi5-uefi.wks"
+    sed -e 's/@SDIMG_BOOT_MB@/${SDIMG_BOOT_MB}/g' \
+        "${WKS_TEMPLATE}" > "${wks}"
+
+    # Direct wic invocation (not do_image_wic: this recipe has no OS rootfs,
+    # so it does not inherit image.bbclass). The boot tree is the default
+    # ROOTFS_DIR. wic insists on BUILDDIR in its environment; everything
+    # else it needs is passed explicitly so it never shells back into
+    # bitbake.
+    export BUILDDIR="${TOPDIR}"
+    wic create "${wks}" \
+        --outdir "${B}/wic-out" \
+        --rootfs-dir "${boot}" \
+        --native-sysroot "${RECIPE_SYSROOT_NATIVE}" \
+        --bootimg-dir "${B}" \
+        --kernel-dir "${B}"
+
+    # wic names the output <wks>-<timestamp>.direct.
+    built=$(ls -1 ${B}/wic-out/*.direct | head -n1)
+    [ -n "${built}" ] || bbfatal "wic produced no .direct image -- check the log"
+    cp -f "${built}" "${B}/${SDIMG_NAME}"
 }
 
 do_deploy() {

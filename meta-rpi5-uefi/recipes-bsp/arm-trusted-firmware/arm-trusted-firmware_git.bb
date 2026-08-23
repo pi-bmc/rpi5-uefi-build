@@ -24,6 +24,7 @@ LIC_FILES_CHKSUM = "file://docs/license.rst;md5=6ed7bace7b0bc63021c6eba7b524039e
 
 SRC_URI = "git://github.com/ARM-software/arm-trusted-firmware.git;protocol=https;nobranch=1 \
            file://0001-rpi5-support-OP-TEE-as-BL32-via-SPD-opteed.patch \
+           file://0002-rpi5-forward-the-SCMI-doorbell-SiP-SMC-into-OP-TEE.patch \
            "
 # Pinned to the exact commit NumberOneGit/rpi5-uefi's .gitmodules records for
 # this submodule (branch 'rpi5', now deleted upstream -- see DESCRIPTION).

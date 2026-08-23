@@ -29,32 +29,16 @@
 #include <kernel/notif.h>
 #include <kernel/pseudo_ta.h>
 #include <kernel/spinlock.h>
-#include <mm/core_memprot.h>
-#include <mm/core_mmu.h>
 #include <stddef.h>
 #include <string.h>
 #include <trace.h>
 
 #include "pta_bmc_sensor.h"
 #include "rp1_i2c.h"
+#include "rp1_periph.h"
+#include "soc_temp.h"
 
 #define PTA_NAME "bmc_sensor.pta"
-
-/*
- * BCM2712 AVS monitor: AVS_RO_TEMP_STATUS at +0x200, bits 16|10 valid,
- * bits 9:0 raw code, milli-Celsius = 450000 - 550 * raw. Same register
- * and conversion as the platform's SsdtThermal.asl / ActiveCoolerDxe.
- */
-#define AVS_MONITOR_BASE	0x107d542000UL
-#define AVS_MONITOR_SIZE	0x1000
-#define AVS_RO_TEMP_STATUS	0x200
-#define AVS_TEMP_VALID_MASK	0x10400
-#define AVS_TEMP_RAW_MASK	0x3ff
-
-register_phys_mem_pgdir(MEM_AREA_IO_SEC, AVS_MONITOR_BASE, AVS_MONITOR_SIZE);
-
-/* RP1 BAR1 peripheral window size: sanity bound for the I2C offset */
-#define RP1_PERIPHERAL_WINDOW	0x400000
 
 #define DEFAULT_PERIOD_MS	1000
 #define MIN_PERIOD_MS		100
@@ -113,24 +97,6 @@ static uint32_t crc32_ieee(const void *buf, size_t len)
 	return ~crc;
 }
 
-static bool read_soc_temp_mc(int32_t *mc)
-{
-	vaddr_t va = (vaddr_t)phys_to_virt(AVS_MONITOR_BASE, MEM_AREA_IO_SEC,
-					   AVS_MONITOR_SIZE);
-	uint32_t sts = 0;
-
-	if (!va)
-		return false;
-
-	sts = io_read32(va + AVS_RO_TEMP_STATUS);
-	if ((sts & AVS_TEMP_VALID_MASK) != AVS_TEMP_VALID_MASK)
-		return false;
-
-	*mc = 450000 - 550 * (int32_t)(sts & AVS_TEMP_RAW_MASK);
-
-	return true;
-}
-
 static uint32_t uptime_s(void)
 {
 	return barrier_read_counter_timer() / read_cntfrq();
@@ -141,7 +107,7 @@ static void sample_locked(void)
 {
 	struct bmc_sensor_record *rec = &state.rec;
 	int32_t mc = 0;
-	bool valid = read_soc_temp_mc(&mc);
+	bool valid = soc_temp_read_mc(&mc);
 
 	rec->magic = BMC_SENSOR_RECORD_MAGIC;
 	rec->version = BMC_SENSOR_RECORD_VERSION;
@@ -273,7 +239,6 @@ static TEE_Result cmd_init(uint32_t types, TEE_Param params[TEE_NUM_PARAMS])
 	uint32_t slave = 0;
 	uint32_t eeprom_offset = 0;
 	uint32_t period = 0;
-	void *va = NULL;
 
 	if (types != TEE_PARAM_TYPES(TEE_PARAM_TYPE_VALUE_INPUT,
 				     TEE_PARAM_TYPE_VALUE_INPUT,
@@ -287,9 +252,7 @@ static TEE_Result cmd_init(uint32_t types, TEE_Param params[TEE_NUM_PARAMS])
 	eeprom_offset = params[2].value.a;
 	period = params[2].value.b;
 
-	if (!bar_pa || (bar_pa & SMALL_PAGE_MASK) ||
-	    (i2c_offset & SMALL_PAGE_MASK) ||
-	    i2c_offset >= RP1_PERIPHERAL_WINDOW ||
+	if (i2c_offset >= RP1_PERIPH_WINDOW_SIZE ||
 	    !slave || slave > 0x7f || eeprom_offset > UINT16_MAX)
 		return TEE_ERROR_BAD_PARAMETERS;
 
@@ -301,27 +264,12 @@ static TEE_Result cmd_init(uint32_t types, TEE_Param params[TEE_NUM_PARAMS])
 	if (period && (period < MIN_PERIOD_MS || period > MAX_PERIOD_MS))
 		return TEE_ERROR_BAD_PARAMETERS;
 
-	if (state.i2c_ready && bar_pa == state.bar_pa &&
-	    i2c_offset == state.i2c_offset) {
-		/* Same mapping; possibly a new period below */
-		va = (void *)state.i2c.base;
-	} else {
-		/*
-		 * A previous mapping (BAR moved by the OS) is
-		 * deliberately leaked: it is one small page, at most
-		 * once per boot, and removal would race the callout.
-		 */
-		va = core_mmu_add_mapping(MEM_AREA_IO_SEC,
-					  bar_pa + i2c_offset,
-					  SMALL_PAGE_SIZE);
-		if (!va) {
-			EMSG(PTA_NAME ": cannot map RP1 I2C at %#"PRIxPA,
-			     bar_pa + i2c_offset);
-			return TEE_ERROR_OUT_OF_MEMORY;
-		}
-	}
+	/* Map the RP1 window (shared with the SCMI fan controller). */
+	res = rp1_periph_map(bar_pa);
+	if (res)
+		return res;
 
-	res = rp1_i2c_init(&i2c, (vaddr_t)va);
+	res = rp1_i2c_init(&i2c, rp1_periph_base() + i2c_offset);
 	if (res)
 		return res;
 

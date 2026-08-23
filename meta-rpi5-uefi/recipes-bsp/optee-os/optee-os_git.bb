@@ -28,6 +28,7 @@ LIC_FILES_CHKSUM = "file://LICENSE;md5=c1f21c4f72f372ef38a5a4aee55ec173"
 SRC_URI = "git://github.com/OP-TEE/optee_os.git;protocol=https;nobranch=1 \
            file://plat-rpi5;subdir=git/core/arch/arm \
            file://0001-plat-rpi5-wire-up-GIC-secure-timer-callouts-and-the-.patch \
+           file://0002-scmi-msg-add-Sensor-Management-protocol-0x15.patch \
            "
 # Tag 4.10.0. The files/plat-rpi5/ overlay directory merges into the
 # checkout's core/arch/arm/plat-rpi5/ during do_unpack (new files only;

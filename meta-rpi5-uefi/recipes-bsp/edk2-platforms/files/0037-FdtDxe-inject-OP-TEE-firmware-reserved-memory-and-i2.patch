@@ -1,0 +1,299 @@
+From: pi-bmc <nbatkins@gmail.com>
+Subject: [PATCH] FdtDxe: inject OP-TEE/SCMI device-tree nodes and hand I2C1
+ to the secure world
+
+The OP-TEE (BL32) secure services need the OS device tree to describe
+them. Add AddOpteeNodes(), applied to every OS-supplied tree (via the
+fixup chokepoint UpdateFdtFromFw) and to the firmware fallback tree:
+
+  - /firmware/optee (linaro,optee-tz) with the async-notification SPI in
+    its interrupts property -- for the Linux OP-TEE driver and the BMC
+    sensor push service;
+  - an mmio-sram wrapping an arm,scmi-shmem node over the SMT page, and
+    /firmware/scmi (arm,scmi-smc, arm,smc-id = the SiP doorbell TF-A
+    forwards into OP-TEE) with protocol@15 (Sensor) and protocol@13
+    (Performance Domain) -- so Linux reaches the OP-TEE SCMI server (die
+    temperature, Active Cooler fan). The shmem phandle is generated with
+    FdtFindMaxPhandle+1 to avoid collisions;
+  - /reserved-memory/optee over the secure carve-out (no-map);
+  - i2c@74000 (GPIO2/3) status="disabled" so no non-secure driver
+    collides with the secure BMC push.
+
+All keyed on PcdOpteeTzdramSize, so a build without OP-TEE (size 0)
+changes nothing. Fixup headroom grows to 8 KB for the added nodes.
+
+Sources here are CRLF; patch generated with line endings preserved.
+
+---
+--- a/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.c
++++ b/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.c
+@@ -84,7 +84,7 @@
+ // for has to be enough the second time round -- a page is far more than the
+ // dozen small properties below can consume.
+ //
+-#define FDT_FIXUP_HEADROOM  SIZE_4KB
++#define FDT_FIXUP_HEADROOM  SIZE_8KB
+ 
+ //
+ // Where a device tree may be placed on a filesystem we can see.
+@@ -547,6 +547,213 @@
+   u-boot likewise runs against whatever tree it is handed.
+ 
+ **/
++/**
++  Describe OP-TEE to the OS in @Fdt.
++
++  OP-TEE (BL32) is already resident -- TF-A placed it in the secure DRAM
++  carve-out at boot -- but the normal-world OS only learns of it from the
++  device tree. This adds, all keyed on PcdOpteeTzdramSize (no-op when
++  OP-TEE is not built in) and each guarded on the target node existing:
++
++    - /firmware/optee (linaro,optee-tz) + the async-notification SPI, for
++      the Linux OP-TEE driver and the BMC sensor push service;
++    - an mmio-sram wrapping an arm,scmi-shmem node over the SMT page, plus
++      /firmware/scmi (arm,scmi-smc) with arm,smc-id = the SiP doorbell
++      TF-A forwards into OP-TEE, shmem = the SMT node, and the Sensor
++      (0x15) and Performance Domain (0x13) protocol sub-nodes;
++    - /reserved-memory/optee over the secure carve-out (no-map);
++    - i2c@74000 (GPIO2/3, the BMC bus) disabled -- OP-TEE owns it.
++**/
++STATIC
++VOID
++AddOpteeNodes (
++  IN OUT VOID  *Fdt
++  )
++{
++  UINT64  TzBase;
++  UINT64  TzSize;
++  UINT64  ShmSize;
++  UINT64  SmtBase;
++  INT32   Firmware;
++  INT32   Node;
++  INT32   Sub;
++  INT32   Resv;
++  INT32   AddrCells;
++  INT32   SizeCells;
++  UINT32  Cells[4];
++  UINTN   RegLen;
++  UINT32  Interrupts[3];
++  UINT32  ShmemPhandle;
++  UINT32  MaxPhandle;
++
++  TzBase = FixedPcdGet64 (PcdOpteeTzdramBase);
++  TzSize = FixedPcdGet32 (PcdOpteeTzdramSize);
++  ShmSize = FixedPcdGet32 (PcdOpteeShmSize);
++  if (TzSize == 0) {
++    return;
++  }
++
++  //
++  // The SCMI SMT channel is the top 4 KiB page of the reserved SHM window
++  // (TZDRAM base + TZDRAM size + SHM size - one page). Keep in step with
++  // OP-TEE plat-rpi5 SCMI_SMT_BASE.
++  //
++  SmtBase = TzBase + TzSize + ShmSize - SIZE_4KB;
++
++  MaxPhandle = 0;
++  FdtFindMaxPhandle (Fdt, &MaxPhandle);
++  ShmemPhandle = MaxPhandle + 1;
++
++  Firmware = FdtPathOffset (Fdt, "/firmware");
++  if (Firmware < 0) {
++    Firmware = FdtAddSubnode (Fdt, 0, "firmware");
++  }
++
++  //
++  // /firmware/optee { compatible = "linaro,optee-tz"; method = "smc";
++  //                   interrupts = <GIC_SPI PcdOpteeNotifSpi EDGE_RISING>; }
++  //
++  if (Firmware >= 0) {
++    Node = FdtSubnodeOffset (Fdt, Firmware, "optee");
++    if (Node < 0) {
++      Node = FdtAddSubnode (Fdt, Firmware, "optee");
++    }
++    if (Node >= 0) {
++      FdtSetPropString (Fdt, Node, "compatible", "linaro,optee-tz");
++      FdtSetPropString (Fdt, Node, "method", "smc");
++      Interrupts[0] = CpuToFdt32 (0);   // GIC_SPI
++      Interrupts[1] = CpuToFdt32 (FixedPcdGet32 (PcdOpteeNotifSpi));
++      Interrupts[2] = CpuToFdt32 (1);   // IRQ_TYPE_EDGE_RISING
++      FdtSetProp (Fdt, Node, "interrupts", Interrupts, sizeof (Interrupts));
++    }
++  }
++
++  //
++  // mmio-sram wrapping the SCMI SMT page, with an arm,scmi-shmem child the
++  // scmi node references by phandle.
++  //   sram@<smt> { compatible="mmio-sram"; reg=<smt 0x1000>;
++  //     #address-cells=<1>; #size-cells=<1>; ranges=<0 smt 0x1000>;
++  //     scmi-shmem@0 { compatible="arm,scmi-shmem"; reg=<0 0x1000>;
++  //                    phandle=<ShmemPhandle>; } }
++  //
++  Node = FdtAddSubnode (Fdt, 0, "scmi-sram@1f3ff000");
++  if (Node >= 0) {
++    FdtSetPropString (Fdt, Node, "compatible", "mmio-sram");
++    Cells[0] = CpuToFdt32 ((UINT32)(SmtBase >> 32));
++    Cells[1] = CpuToFdt32 ((UINT32)SmtBase);
++    Cells[2] = CpuToFdt32 (0);
++    Cells[3] = CpuToFdt32 (SIZE_4KB);
++    FdtSetProp (Fdt, Node, "reg", Cells, 4 * sizeof (UINT32));
++    Cells[0] = CpuToFdt32 (1);
++    FdtSetProp (Fdt, Node, "#address-cells", Cells, sizeof (UINT32));
++    Cells[0] = CpuToFdt32 (1);
++    FdtSetProp (Fdt, Node, "#size-cells", Cells, sizeof (UINT32));
++    Cells[0] = CpuToFdt32 (0);
++    Cells[1] = CpuToFdt32 ((UINT32)(SmtBase >> 32));
++    Cells[2] = CpuToFdt32 ((UINT32)SmtBase);
++    Cells[3] = CpuToFdt32 (SIZE_4KB);
++    FdtSetProp (Fdt, Node, "ranges", Cells, 4 * sizeof (UINT32));
++
++    Sub = FdtAddSubnode (Fdt, Node, "scmi-shmem@0");
++    if (Sub >= 0) {
++      FdtSetPropString (Fdt, Sub, "compatible", "arm,scmi-shmem");
++      Cells[0] = CpuToFdt32 (0);
++      Cells[1] = CpuToFdt32 (SIZE_4KB);
++      FdtSetProp (Fdt, Sub, "reg", Cells, 2 * sizeof (UINT32));
++      Cells[0] = CpuToFdt32 (ShmemPhandle);
++      FdtSetProp (Fdt, Sub, "phandle", Cells, sizeof (UINT32));
++    }
++  }
++
++  //
++  // /firmware/scmi { compatible = "arm,scmi-smc";
++  //                  arm,smc-id = <0x82000010>; shmem = <&scmi_shmem>;
++  //                  protocol@15 {...}; protocol@13 {...}; }
++  //
++  if (Firmware >= 0) {
++    Node = FdtSubnodeOffset (Fdt, Firmware, "scmi");
++    if (Node < 0) {
++      Node = FdtAddSubnode (Fdt, Firmware, "scmi");
++    }
++    if (Node >= 0) {
++      FdtSetPropString (Fdt, Node, "compatible", "arm,scmi-smc");
++      Cells[0] = CpuToFdt32 (0x82000010);
++      FdtSetProp (Fdt, Node, "arm,smc-id", Cells, sizeof (UINT32));
++      Cells[0] = CpuToFdt32 (ShmemPhandle);
++      FdtSetProp (Fdt, Node, "shmem", Cells, sizeof (UINT32));
++      Cells[0] = CpuToFdt32 (1);
++      FdtSetProp (Fdt, Node, "#address-cells", Cells, sizeof (UINT32));
++      Cells[0] = CpuToFdt32 (0);
++      FdtSetProp (Fdt, Node, "#size-cells", Cells, sizeof (UINT32));
++
++      Sub = FdtSubnodeOffset (Fdt, Node, "protocol@15");
++      if (Sub < 0) {
++        Sub = FdtAddSubnode (Fdt, Node, "protocol@15");
++      }
++      if (Sub >= 0) {
++        Cells[0] = CpuToFdt32 (0x15);
++        FdtSetProp (Fdt, Sub, "reg", Cells, sizeof (UINT32));
++        Cells[0] = CpuToFdt32 (1);
++        FdtSetProp (Fdt, Sub, "#thermal-sensor-cells", Cells, sizeof (UINT32));
++      }
++
++      Sub = FdtSubnodeOffset (Fdt, Node, "protocol@13");
++      if (Sub < 0) {
++        Sub = FdtAddSubnode (Fdt, Node, "protocol@13");
++      }
++      if (Sub >= 0) {
++        Cells[0] = CpuToFdt32 (0x13);
++        FdtSetProp (Fdt, Sub, "reg", Cells, sizeof (UINT32));
++        Cells[0] = CpuToFdt32 (1);
++        FdtSetProp (Fdt, Sub, "#performance-domain-cells", Cells,
++                    sizeof (UINT32));
++      }
++    }
++  }
++
++  //
++  // /reserved-memory/optee { reg = <base size>; no-map; }, using the
++  // parent node's own #address-cells/#size-cells.
++  //
++  Resv = FdtPathOffset (Fdt, "/reserved-memory");
++  if (Resv >= 0) {
++    AddrCells = FdtAddressCells (Fdt, Resv);
++    SizeCells = FdtSizeCells (Fdt, Resv);
++    if ((AddrCells >= 1) && (AddrCells <= 2) &&
++        (SizeCells >= 1) && (SizeCells <= 2)) {
++      Node = FdtSubnodeOffset (Fdt, Resv, "optee");
++      if (Node < 0) {
++        Node = FdtAddSubnode (Fdt, Resv, "optee");
++      }
++      if (Node >= 0) {
++        RegLen = 0;
++        if (AddrCells == 2) {
++          Cells[RegLen++] = CpuToFdt32 ((UINT32)(TzBase >> 32));
++        }
++        Cells[RegLen++] = CpuToFdt32 ((UINT32)TzBase);
++        if (SizeCells == 2) {
++          Cells[RegLen++] = CpuToFdt32 ((UINT32)(TzSize >> 32));
++        }
++        Cells[RegLen++] = CpuToFdt32 ((UINT32)TzSize);
++        FdtSetProp (Fdt, Node, "reg", Cells, (UINT32)(RegLen * sizeof (UINT32)));
++        FdtSetPropEmpty (Fdt, Node, "no-map");
++      }
++    }
++  }
++
++  //
++  // Hand I2C1 (GPIO2/3, the BMC bus) to OP-TEE alone. Downstream path
++  // first, then the i2c1 alias for a mainline-shaped tree.
++  //
++  Node = FdtPathOffset (Fdt, "/axi/pcie@1000120000/rp1/i2c@74000");
++  if (Node < 0) {
++    Node = FdtPathOffset (Fdt, "i2c1");
++  }
++  if (Node >= 0) {
++    FdtSetPropString (Fdt, Node, "status", "disabled");
++  }
++}
++
+ STATIC
+ VOID
+ UpdateFdtFromFw (
+@@ -597,6 +804,12 @@
+   CopyFwProperty (Fdt, "/soc@107c000000/serial@7d50c000/bluetooth", "local-bd-address");
+ 
+   CopyFwProperty (Fdt, "/clocks/clk-uart", "clock-frequency");
++
++  //
++  // OP-TEE nodes are independent of the firmware tree, but this is the
++  // single fixup chokepoint every OS-provided tree passes through.
++  //
++  AddOpteeNodes (Fdt);
+ }
+ 
+ /**
+@@ -1654,6 +1867,12 @@
+   // will not bind. Anything that brings its own tree replaces this table, and
+   // should -- that is what the fixup protocol above is for.
+   //
++  //
++  // The OS-provided-tree path gets these through the fixup protocol; the
++  // firmware fallback tree needs them too for a plain DT boot.
++  //
++  AddOpteeNodes (mFdtImage);
++
+   DEBUG ((DEBUG_INFO, "Installed devicetree at address %p\n", mFdtImage));
+   Status = gBS->InstallConfigurationTable (&gFdtTableGuid, mFdtImage);
+   if (EFI_ERROR (Status)) {
+--- a/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.inf
++++ b/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.inf
+@@ -24,6 +24,7 @@
+   MdeModulePkg/MdeModulePkg.dec
+   Platform/RaspberryPi/RaspberryPi.dec
+   Silicon/Broadcom/Bcm27xx/Bcm27xx.dec
++  Platform/RaspberryPi/RPi5/RPi5.dec
+ 
+ [LibraryClasses]
+   BaseLib
+@@ -54,6 +55,10 @@
+ 
+ [FixedPcd]
+   gRaspberryPiTokenSpaceGuid.PcdFdtBaseAddress
++  gRpiOpteeTokenSpaceGuid.PcdOpteeTzdramBase
++  gRpiOpteeTokenSpaceGuid.PcdOpteeTzdramSize
++  gRpiOpteeTokenSpaceGuid.PcdOpteeShmSize
++  gRpiOpteeTokenSpaceGuid.PcdOpteeNotifSpi
+   gBcm27xxTokenSpaceGuid.PcdBcm27xxPciRegBase
+   gBcm27xxTokenSpaceGuid.PcdBcm27xxPciBusMmioAdr
+   gBcm27xxTokenSpaceGuid.PcdBcm27xxPciBusMmioLen
