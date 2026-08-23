@@ -1,11 +1,11 @@
 SUMMARY = "crane, the go-containerregistry CLI"
 DESCRIPTION = "Pulls and inspects OCI images. talos-boot-dtbs uses it to lift \
-the bcm2712 device trees out of the Talos kernel image, so that the DTB the \
-board boots is the one the kernel it boots was built against. \
+               the bcm2712 device trees out of the Talos kernel image, so that the DTB the \
+               board boots is the one the kernel it boots was built against. \
 \
-The upstream release binary rather than a Go build: this is a build-host tool \
-that never ships in an image, and building it from source would drag a whole \
-Go toolchain into a firmware build for one 'crane export' invocation."
+               The upstream release binary rather than a Go build: this is a build-host tool \
+               that never ships in an image, and building it from source would drag a whole \
+               Go toolchain into a firmware build for one 'crane export' invocation."
 HOMEPAGE = "https://github.com/google/go-containerregistry"
 
 LICENSE = "Apache-2.0"
