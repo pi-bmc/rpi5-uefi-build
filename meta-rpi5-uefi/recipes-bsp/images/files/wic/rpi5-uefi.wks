@@ -1,0 +1,21 @@
+# Raspberry Pi 5 UEFI firmware SD/NVMe image (WIC kickstart).
+#
+# MBR (msdos) to match the proven layout the VPU bootloader reads; the
+# single boot partition is FAT32 LBA, active, 4 MiB aligned, 64 MiB (room
+# for dtoverlay additions and FD growth; contents are ~13 MiB).
+#
+# Populated from the boot-staging tree the recipe assembles and passes as
+# the default ROOTFS_DIR (WIC_CREATE_EXTRA_ARGS), not from the (empty) OS
+# rootfs, and not via IMAGE_BOOT_FILES: the DTB layout (each tree at the
+# root, under broadcom/, and under dtb/<release>/) does not map onto
+# IMAGE_BOOT_FILES cleanly.
+#
+# xz compression of the output image is NOT a wic kickstart directive; it
+# is set in the recipe via IMAGE_FSTYPES = "wic.xz".
+#
+# Keep the part directive on one line: wic's kickstart parser shlex-splits
+# each line and does not join backslash continuations.
+
+bootloader --ptable msdos
+
+part /boot --source rootfs --rootfs-dir=ROOTFS_DIR --fstype=vfat --label RPI5-UEFI --align 4096 --active

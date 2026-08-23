@@ -11,13 +11,53 @@ handoff. rpi3_common.c already maps BL32_MEM and provides the SPSR
 helper once BL32_BASE/SPD_opteed are defined. MAX_MMAP_REGIONS and
 MAX_XLAT_TABLES grow to cover the added BL32 region.
 
+Also drop the platform's erroring plat_ic_get_pending_interrupt_type()
+stub when SPD=opteed: the port assumed no interrupt ever reaches EL3,
+but OP-TEE's S-EL1 CNTPS timer (its callout service) is taken to EL3
+while the normal world runs and must be dispatched to the secure
+payload. Without a real classifier the interrupt is never acknowledged
+and re-fires forever ("rpi3: Interrupt routed to EL3"). Falling through
+to the GICv2 driver's weak plat_ic_get_pending_interrupt_type() (from
+plat/common/plat_gicv2.c, already in BL31_SOURCES) returns
+INTR_TYPE_S_EL1 for the Group 0 interrupt so opteed can forward it.
+
 Guarded by SPD_opteed throughout: a build without SPD=opteed is
 bit-identical to before.
 
 ---
-diff -ur a/plat/rpi/common/rpi4_bl31_setup.c b/plat/rpi/common/rpi4_bl31_setup.c
---- a/plat/rpi/common/rpi4_bl31_setup.c	2026-08-22 20:47:17.067695866 -0500
-+++ b/plat/rpi/common/rpi4_bl31_setup.c	2026-08-22 20:47:17.078931128 -0500
+diff --git a/plat/rpi/common/rpi3_common.c b/plat/rpi/common/rpi3_common.c
+index 490835402..abfde8175 100644
+--- a/plat/rpi/common/rpi3_common.c
++++ b/plat/rpi/common/rpi3_common.c
+@@ -209,11 +209,24 @@ unsigned int plat_get_syscnt_freq2(void)
+ 	return SYS_COUNTER_FREQ_IN_TICKS;
+ }
+ 
++#ifndef SPD_opteed
++/*
++ * BL31-only builds route no interrupts to EL3, so this "can't happen"
++ * stub is enough. With SPD=opteed, OP-TEE's secure interrupts (e.g. the
++ * S-EL1 CNTPS timer that drives its callout service) are taken to EL3
++ * while the normal world runs and must be dispatched to the secure
++ * payload. Drop the stub in that case and use the GICv2 driver's real
++ * classifier from plat/common/plat_gicv2.c (weak), which reads
++ * GICC_HPPIR and returns INTR_TYPE_S_EL1 for the Group 0 interrupt so
++ * the opteed dispatcher can forward it. Without this the interrupt is
++ * never acknowledged and re-fires forever ("Interrupt routed to EL3").
++ */
+ uint32_t plat_ic_get_pending_interrupt_type(void)
+ {
+ 	ERROR("rpi3: Interrupt routed to EL3.\n");
+ 	return INTR_TYPE_INVAL;
+ }
++#endif
+ 
+ uint32_t plat_interrupt_type_to_line(uint32_t type, uint32_t security_state)
+ {
+diff --git a/plat/rpi/common/rpi4_bl31_setup.c b/plat/rpi/common/rpi4_bl31_setup.c
+index a7228fd4f..78b853198 100644
+--- a/plat/rpi/common/rpi4_bl31_setup.c
++++ b/plat/rpi/common/rpi4_bl31_setup.c
 @@ -7,6 +7,7 @@
  #include <assert.h>
  #include <inttypes.h>
@@ -26,7 +66,7 @@ diff -ur a/plat/rpi/common/rpi4_bl31_setup.c b/plat/rpi/common/rpi4_bl31_setup.c
  
  #include <arch_helpers.h>
  #include <common/bl_common.h>
-@@ -136,6 +137,27 @@
+@@ -136,6 +137,27 @@ void bl31_early_platform_setup2(u_register_t arg0, u_register_t arg1,
  	bl33_image_ep_info.spsr = rpi3_get_spsr_for_bl33_entry();
  	SET_SECURITY_STATE(bl33_image_ep_info.h.attr, NON_SECURE);
  
@@ -54,10 +94,11 @@ diff -ur a/plat/rpi/common/rpi4_bl31_setup.c b/plat/rpi/common/rpi4_bl31_setup.c
  #if RPI3_DIRECT_LINUX_BOOT
  # if RPI3_BL33_IN_AARCH32
  	/*
-diff -ur a/plat/rpi/rpi5/include/platform_def.h b/plat/rpi/rpi5/include/platform_def.h
---- a/plat/rpi/rpi5/include/platform_def.h	2026-08-22 20:47:17.067103455 -0500
-+++ b/plat/rpi/rpi5/include/platform_def.h	2026-08-22 20:47:17.078880836 -0500
-@@ -117,8 +117,8 @@
+diff --git a/plat/rpi/rpi5/include/platform_def.h b/plat/rpi/rpi5/include/platform_def.h
+index a4c2f5b9d..e05415795 100644
+--- a/plat/rpi/rpi5/include/platform_def.h
++++ b/plat/rpi/rpi5/include/platform_def.h
+@@ -117,14 +117,33 @@
  #define PLAT_PHY_ADDR_SPACE_SIZE	(ULL(1) << 40)
  #define PLAT_VIRT_ADDR_SPACE_SIZE	(ULL(1) << 40)
  
@@ -68,10 +109,10 @@ diff -ur a/plat/rpi/rpi5/include/platform_def.h b/plat/rpi/rpi5/include/platform
  
  #define MAX_IO_DEVICES			U(3)
  #define MAX_IO_HANDLES			U(4)
-@@ -126,6 +126,25 @@
+ 
  #define MAX_IO_BLOCK_DEVICES		U(1)
  
- /*
++/*
 + * BL32: OP-TEE, entered via SPD=opteed. The image rides inside the
 + * RPI_EFI.fd blob the VPU loads at 0x0 (a dedicated FD region at offset
 + * RPI5_OPTEE_IMAGE_OFFSET, see RPi5.fdf); bl31_early_platform_setup2
@@ -90,7 +131,6 @@ diff -ur a/plat/rpi/rpi5/include/platform_def.h b/plat/rpi/rpi5/include/platform
 +#define BL32_LIMIT			(BL32_MEM_BASE + BL32_MEM_SIZE)
 +#endif
 +
-+/*
+ /*
   * Serial-related constants.
   */
- #define PLAT_RPI_PL011_UART_BASE	RPI4_PL011_UART_BASE

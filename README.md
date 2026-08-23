@@ -7,13 +7,15 @@ for the Raspberry Pi 5, structured the same way as
 recipe (fetched by pinned `SRCREV`, no submodules) rather than a git submodule
 checked directly into this repo.
 
-Output: `rpi5-uefi-sd.img`, deployed to
-`build/tmp/deploy/images/raspberrypi5-uefi/` -- a `wic`-built MBR image with a
-single bootable FAT32 partition carrying `armstub8-2712.bin` (the UEFI firmware
-under the default BCM2712 armstub filename, auto-loaded by the VPU bootloader at
-address 0x0 with no `armstub=` line), `config.txt`, the `bcm2712*.dtb` device
-trees and `overlays/` (pinned raspberrypi/firmware release, see
-`rpi-boot-dtbs`). Write it with `dd`/Raspberry Pi Imager. The raw
+Output: `rpi5-uefi-sd.img.xz`, deployed to
+`build/tmp/deploy/images/raspberrypi5-uefi/` -- an xz-compressed, `wic`-built
+(`do_image_wic`) MBR image with a single bootable FAT32 partition carrying
+`armstub8-2712.bin` (the UEFI firmware under the default BCM2712 armstub
+filename, auto-loaded by the VPU bootloader at address 0x0 with no `armstub=`
+line), `config.txt`, the `bcm2712*.dtb` device trees and `overlays/` (pinned
+raspberrypi/firmware release, see `rpi-boot-dtbs`). Flash it with
+`hack/flash-sd.sh` (decompresses on the fly) or
+`xzcat rpi5-uefi-sd.img.xz | sudo dd of=/dev/sdX bs=4M`. The raw
 `RPI_EFI.fd`/`armstub8-2712.bin` + `config.txt` are deployed alongside for
 hand-made boot partitions.
 
@@ -34,7 +36,7 @@ bootloader.
 ```sh
 pip3 install kas
 kas build kas.yml
-hack/flash-sd.sh        # write rpi5-uefi-sd.img to the first SD card found
+hack/flash-sd.sh        # write rpi5-uefi-sd.img.xz to the first SD card found
 ```
 
 `hack/flash-sd.sh` picks the first non-system SD/MMC disk (then removable USB

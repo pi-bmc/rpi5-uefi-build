@@ -1,30 +1,34 @@
 SUMMARY = "Bootable SD/NVMe image for the Raspberry Pi 5 UEFI firmware"
-DESCRIPTION = "Assembles rpi5-uefi-sd.img with wic: an MBR disk image whose \
-               first, bootable FAT32 partition carries everything the Pi 5 \
-               VPU bootloader needs to start the alternative TF-A+EDK2 \
-               bootloader stack -- armstub8-2712.bin (RPI_EFI.fd under the \
-               default armstub filename, so config.txt needs no armstub= \
-               line), config.txt, the bcm2712 device trees (from the Talos \
-               kernel image, both flat for the VPU bootloader and under \
-               dtb/<kernel release>/ for FdtDxe to pick from) and overlays/ \
-               (from the Pi firmware release). \
+DESCRIPTION = "Assembles rpi5-uefi-sd.img with wic (do_image_wic): an MBR \
+               disk whose single bootable FAT32 partition carries \
+               everything the Pi 5 VPU bootloader needs to start the \
+               alternative TF-A+EDK2 bootloader stack -- armstub8-2712.bin \
+               (RPI_EFI.fd under the default armstub filename, so config.txt \
+               needs no armstub= line), config.txt, the bcm2712 device trees \
+               (from the Talos kernel image, both flat for the VPU \
+               bootloader and under dtb/<kernel release>/ for FdtDxe to pick \
+               from) and overlays/ (from the Pi firmware release). \
 \
-               The boot partition contents are assembled into a staging tree \
-               and handed to wic's rootfs source; the DTB layout (each tree \
-               at the root, under broadcom/ and under dtb/<release>/) does \
-               not map onto IMAGE_BOOT_FILES, so bootimg-partition is not \
-               used. \
+               This is an image recipe purely to reuse do_image_wic: running \
+               wic by hand inside a normal task deadlocks, because wic \
+               resolves HOSTTOOLS_DIR/TARGET_SYS/BBLAYERS by shelling out to \
+               'bitbake -e', which blocks on the build's cooker lock the \
+               running task already holds. do_image_wic feeds those to wic \
+               through the imgdata env it generates from WICVARS, so no \
+               nested bitbake is spawned. The OS rootfs this recipe builds \
+               is empty and unused: the boot partition is populated from the \
+               'boottree' staging tree (do_stage_bootfiles), passed to wic \
+               as a named --rootfs-dir; the DTB layout (each tree at the \
+               root, under broadcom/ and under dtb/<release>/) does not map \
+               onto IMAGE_BOOT_FILES, so bootimg-partition is not used. \
 \
-               NOTE ON OP-TEE STORAGE: no RPMB partition is created here, \
-               because RPMB cannot be. RPMB is a hardware partition inside \
-               an eMMC device, provisioned with authenticated eMMC commands \
-               and a one-time key -- not a partition-table entry any image \
-               can create -- and the Pi 5 boots from SD/NVMe, which have no \
-               RPMB at all. UEFI-variables-in-RPMB (StandaloneMM) needs eMMC \
-               and stays out of scope; the firmware keeps its FD-backed \
-               authenticated variable store. If OP-TEE REE-FS secure storage \
-               is wanted later (needs an OS with tee-supplicant), add a data \
-               partition to the wks then. See docs/optee-bmc-sensor.md. \
+               NOTE ON OP-TEE STORAGE: no RPMB partition is created, because \
+               RPMB cannot be. RPMB is a hardware partition inside an eMMC \
+               device -- not a partition-table entry any image can create -- \
+               and the Pi 5 boots from SD/NVMe, which have none. \
+               UEFI-variables-in-RPMB (StandaloneMM) needs eMMC and stays \
+               out of scope; the firmware keeps its FD-backed authenticated \
+               variable store. See docs/optee-bmc-sensor.md. \
 \
                This image is intentionally NOT compatible with the \
                u-boot-based RPi image from ../nanokvm-build: both stacks \
@@ -32,45 +36,39 @@ DESCRIPTION = "Assembles rpi5-uefi-sd.img with wic: an MBR disk image whose \
                card carries one bootloader or the other, never both."
 
 LICENSE = "MIT"
-LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda2f7b4f302"
-
-# Native tools wic drives: parted (partition table), mtools (vfat), mke2fs
-# -d (ext4), plus util-linux/gptfdisk helpers. These land in
-# ${RECIPE_SYSROOT_NATIVE}, which is what we hand wic as --native-sysroot.
-DEPENDS = "parted-native mtools-native dosfstools-native e2fsprogs-native \
-           util-linux-native gptfdisk-native"
 
 COMPATIBLE_MACHINE = "raspberrypi5-uefi"
 
-SRC_URI = "file://wic/rpi5-uefi.wks.in"
+# xz-compressed wic image; the OS rootfs stays empty (the boot partition
+# comes from the boot-staging dir, see below).
+IMAGE_FSTYPES = "wic.xz"
+IMAGE_INSTALL = ""
+IMAGE_FEATURES = ""
+IMAGE_LINGUAS = ""
+PACKAGE_INSTALL = ""
+# Nothing here should end up in a package feed or need one.
+NO_RECOMMENDATIONS = "1"
 
-inherit deploy nopackages
+# Plain kickstart (boot partition fixed at 64 MiB -- contents are ~13 MiB,
+# leaving room for dtoverlay additions and FD growth).
+WKS_FILE = "rpi5-uefi.wks"
+WKS_SEARCH_PATH = "${THISDIR}/files/wic"
 
-# Everything on the boot partition comes from other recipes' deploy output.
-do_fetch[noexec] = "1"
-do_patch[noexec] = "1"
-do_configure[noexec] = "1"
-do_install[noexec] = "1"
+# The boot partition is the boot-staging dir (passed as the default
+# ROOTFS_DIR the .wks references), not the empty OS rootfs.
+WIC_CREATE_EXTRA_ARGS = "--rootfs-dir ${WORKDIR}/boot-staging"
 
-do_compile[depends] += "rpi5-uefi-firmware:do_deploy rpi-boot-dtbs:do_deploy talos-boot-dtbs:do_deploy"
+inherit image
 
-# FAT32 boot partition size. Contents are ~9 MiB (3.9M firmware + ~4M
-# overlays + DTBs) plus ~160K per extra kernel release; 64 MiB leaves room
-# for dtoverlay additions and FD growth.
-SDIMG_BOOT_MB ?= "64"
+BOOT_STAGING = "${WORKDIR}/boot-staging"
 
-SDIMG_NAME = "rpi5-uefi-sd.img"
-WKS_TEMPLATE = "${UNPACKDIR}/wic/rpi5-uefi.wks.in"
-
-# UNPACKDIR only exists from styhead on; scarthgap unpacks into WORKDIR.
-UNPACKDIR ?= "${WORKDIR}"
-
-do_compile() {
-    boot="${B}/boot"
-    rm -rf "${boot}" "${B}/wic-out"
+# Assemble the FAT32 boot partition tree from other recipes' deploy output.
+do_stage_bootfiles[depends] += "rpi5-uefi-firmware:do_deploy rpi-boot-dtbs:do_deploy talos-boot-dtbs:do_deploy"
+do_stage_bootfiles () {
+    boot="${BOOT_STAGING}"
+    rm -rf "${boot}"
     install -d "${boot}"
 
-    # --- Assemble the FAT32 boot partition tree ------------------------
     # RPI_EFI.fd under the default BCM2712 armstub filename: the VPU
     # bootloader auto-loads armstub8-2712.bin at 0x0 (where RPi5.fdf links
     # the FD, PcdFdBaseAddress=0), no armstub= line needed. This name is
@@ -108,34 +106,13 @@ do_compile() {
     # dtoverlay= lines the VPU processes; the Talos image ships none).
     install -d "${boot}/overlays"
     cp -a "${DEPLOY_DIR_IMAGE}/rpi-boot-dtbs/overlays/." "${boot}/overlays/"
-
-    # --- Render the wks and build the image with wic -------------------
-    wks="${B}/rpi5-uefi.wks"
-    sed -e 's/@SDIMG_BOOT_MB@/${SDIMG_BOOT_MB}/g' \
-        "${WKS_TEMPLATE}" > "${wks}"
-
-    # Direct wic invocation (not do_image_wic: this recipe has no OS rootfs,
-    # so it does not inherit image.bbclass). The boot tree is the default
-    # ROOTFS_DIR. wic insists on BUILDDIR in its environment; everything
-    # else it needs is passed explicitly so it never shells back into
-    # bitbake.
-    export BUILDDIR="${TOPDIR}"
-    wic create "${wks}" \
-        --outdir "${B}/wic-out" \
-        --rootfs-dir "${boot}" \
-        --native-sysroot "${RECIPE_SYSROOT_NATIVE}" \
-        --bootimg-dir "${B}" \
-        --kernel-dir "${B}"
-
-    # wic names the output <wks>-<timestamp>.direct.
-    built=$(ls -1 ${B}/wic-out/*.direct | head -n1)
-    [ -n "${built}" ] || bbfatal "wic produced no .direct image -- check the log"
-    cp -f "${built}" "${B}/${SDIMG_NAME}"
 }
+addtask stage_bootfiles after do_rootfs before do_image_wic
 
-do_deploy() {
-    install -d ${DEPLOYDIR}
-    install -m 0644 ${B}/${SDIMG_NAME} ${DEPLOYDIR}/${SDIMG_NAME}
+# Deploy the stable legacy name (compressed): rpi5-uefi-sd.img.xz.
+# Decompress before flashing, e.g. `xzcat rpi5-uefi-sd.img.xz | sudo dd of=...`.
+rename_wic_legacy () {
+    cp --dereference "${IMGDEPLOYDIR}/${IMAGE_LINK_NAME}.wic.xz" \
+        "${IMGDEPLOYDIR}/rpi5-uefi-sd.img.xz"
 }
-
-addtask deploy after do_compile
+do_image_wic[postfuncs] += "rename_wic_legacy"

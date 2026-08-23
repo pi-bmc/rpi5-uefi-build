@@ -16,7 +16,12 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-IMG="${REPO_ROOT}/build/tmp/deploy/images/raspberrypi5-uefi/rpi5-uefi-sd.img"
+IMG_DIR="${REPO_ROOT}/build/tmp/deploy/images/raspberrypi5-uefi"
+# The build deploys an xz-compressed image (IMAGE_FSTYPES=wic.xz); flashed
+# by streaming through xzcat below. An uncompressed .img (if one is present
+# or passed with -i) still works.
+DEFAULT_IMG="${IMG_DIR}/rpi5-uefi-sd.img.xz"
+IMG="${DEFAULT_IMG}"
 DEVICE=""
 ASSUME_YES=0
 DRY_RUN=0
@@ -39,6 +44,13 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
+
+# If the default compressed image isn't there but an uncompressed one is,
+# use it. (A path given with -i is honoured as-is.)
+if [ "${IMG}" = "${DEFAULT_IMG}" ] && [ ! -r "${IMG}" ] && \
+   [ -r "${IMG_DIR}/rpi5-uefi-sd.img" ]; then
+    IMG="${IMG_DIR}/rpi5-uefi-sd.img"
+fi
 
 [ -r "${IMG}" ] || die "image not found: ${IMG}
 run 'kas build kas.yml' first, or point -i at an image"
@@ -123,7 +135,12 @@ unmount_all() {
 # Unmount anything auto-mounted from the card.
 unmount_all
 
-${SUDO} dd if="${IMG}" of="${DEVICE}" bs=4M conv=fsync oflag=direct status=progress
+# Decompress on the fly for the xz image; write raw otherwise. pipefail
+# (set above) makes an xzcat failure abort the flash.
+case "${IMG}" in
+    *.xz) xzcat "${IMG}" | ${SUDO} dd of="${DEVICE}" bs=4M conv=fsync oflag=direct status=progress ;;
+    *)    ${SUDO} dd if="${IMG}" of="${DEVICE}" bs=4M conv=fsync oflag=direct status=progress ;;
+esac
 sync
 ${SUDO} blockdev --rereadpt "${DEVICE}" 2>/dev/null || true
 
