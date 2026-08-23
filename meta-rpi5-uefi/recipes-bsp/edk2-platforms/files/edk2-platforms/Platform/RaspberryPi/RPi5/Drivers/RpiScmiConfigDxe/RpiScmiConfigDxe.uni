@@ -1,0 +1,20 @@
+/** @file
+ *
+ *  Strings for the SCMI power-profile configuration formset.
+ *
+ *  SPDX-License-Identifier: BSD-2-Clause-Patent
+ *
+ **/
+
+#langdef en-US "English"
+
+#string STR_FORM_SET_TITLE       #language en-US "Power Profile"
+#string STR_FORM_SET_TITLE_HELP  #language en-US "High-level power and cooling profile for the Raspberry Pi 5, applied through the OP-TEE SCMI server. Changes apply immediately on save; no reset is needed."
+#string STR_FORM_TITLE           #language en-US "Power Profile Configuration"
+
+#string STR_PROFILE_PROMPT       #language en-US "Power Profile"
+#string STR_PROFILE_HELP         #language en-US "Balanced is the platform default fan curve. Quiet raises the fan trip temperatures so the fan runs later and more quietly. Cool lowers them so the fan engages early and holds a lower temperature. Manual hands fan control to the Active Cooler page. A BMC fan override staged over Redfish still takes precedence until released."
+#string STR_PROFILE_BALANCED     #language en-US "Balanced"
+#string STR_PROFILE_QUIET        #language en-US "Quiet"
+#string STR_PROFILE_COOL         #language en-US "Cool"
+#string STR_PROFILE_MANUAL       #language en-US "Manual (use Active Cooler page)"

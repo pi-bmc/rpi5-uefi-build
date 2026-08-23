@@ -55,7 +55,7 @@
 //
 // Vendor SYSTEM_POWER_STATE_SET states that deliver the power-button
 // policy to OP-TEE (which executes the press through EL3 after a grace
-// window). PowerButtonScmiDxe sends one at boot from the blconfig
+// window). RpiScmiConfigDxe sends one at boot from the blconfig
 // POWER_OFF_ON_HALT verdict.
 //
 #define RPI_SCMI_SYS_SET_POLICY_OFF    0x80000002

@@ -1,0 +1,45 @@
+/** @file
+ *
+ *  SCMI power-profile formset, bound to the PowerProfile variable
+ *  (efivarstore - the browser edits the variable directly, no callbacks).
+ *  ActiveCoolerScmiDxe re-reads it every second, so a saved change takes
+ *  effect immediately.
+ *
+ *  SPDX-License-Identifier: BSD-2-Clause-Patent
+ *
+ **/
+
+#include <Guid/HiiPlatformSetupFormset.h>
+#include <Guid/RpiScmiConfig.h>
+
+#define EFI_VARIABLE_NON_VOLATILE       0x00000001
+#define EFI_VARIABLE_BOOTSERVICE_ACCESS 0x00000002
+#define EFI_VARIABLE_RUNTIME_ACCESS     0x00000004
+
+formset
+    guid      = RPI_SCMI_CONFIG_FORMSET_GUID,
+    title     = STRING_TOKEN(STR_FORM_SET_TITLE),
+    help      = STRING_TOKEN(STR_FORM_SET_TITLE_HELP),
+    classguid = EFI_HII_PLATFORM_SETUP_FORMSET_GUID,
+
+    efivarstore RPI_POWER_PROFILE,
+      attribute = EFI_VARIABLE_BOOTSERVICE_ACCESS | EFI_VARIABLE_RUNTIME_ACCESS | EFI_VARIABLE_NON_VOLATILE,
+      name  = PowerProfile,
+      guid  = RPI_SCMI_CONFIG_FORMSET_GUID;
+
+    form formid = 1,
+        title = STRING_TOKEN(STR_FORM_TITLE);
+
+        oneof varid = PowerProfile.Profile,
+            prompt      = STRING_TOKEN(STR_PROFILE_PROMPT),
+            help        = STRING_TOKEN(STR_PROFILE_HELP),
+            flags       = NUMERIC_SIZE_1,
+            option text = STRING_TOKEN(STR_PROFILE_BALANCED), value = 0, flags = DEFAULT;
+            option text = STRING_TOKEN(STR_PROFILE_QUIET),    value = 1, flags = 0;
+            option text = STRING_TOKEN(STR_PROFILE_COOL),     value = 2, flags = 0;
+            option text = STRING_TOKEN(STR_PROFILE_MANUAL),   value = 3, flags = 0;
+        endoneof;
+
+    endform;
+
+endformset;

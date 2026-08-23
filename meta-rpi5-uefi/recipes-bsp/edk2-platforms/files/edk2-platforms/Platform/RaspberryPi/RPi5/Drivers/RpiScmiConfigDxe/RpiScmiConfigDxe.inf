@@ -1,0 +1,59 @@
+## @file
+#
+#  RpiScmiConfigDxe - the "Power Profile" Setup page (Device Manager) and
+#  the one-shot SCMI power-policy handoff to OP-TEE. Publishes the
+#  PowerProfile variable (consumed live by ActiveCoolerScmiDxe and exposed
+#  as a Redfish BIOS attribute), and delivers the blconfig POWER_OFF_ON_HALT
+#  verdict to OP-TEE over SCMI System Power. Successor to the button-policy
+#  half of the retired PowerButtonScmiDxe.
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+#
+##
+
+[Defines]
+  INF_VERSION                    = 0x0001001A
+  BASE_NAME                      = RpiScmiConfigDxe
+  FILE_GUID                      = 3f8e1a06-5b47-4c92-9d0e-6a71c283e4f5
+  MODULE_TYPE                    = DXE_DRIVER
+  VERSION_STRING                 = 1.0
+  ENTRY_POINT                    = RpiScmiConfigEntryPoint
+
+[Sources]
+  RpiScmiConfigDxe.c
+  RpiScmiConfigHii.vfr
+  RpiScmiConfigDxe.uni
+  RpiScmiConfigDxeMap.uni
+
+[Packages]
+  MdeModulePkg/MdeModulePkg.dec
+  MdePkg/MdePkg.dec
+  Platform/RaspberryPi/RPi5/RPi5.dec
+  Platform/RaspberryPi/RaspberryPi.dec
+
+[LibraryClasses]
+  BaseLib
+  BaseMemoryLib
+  DebugLib
+  DevicePathLib
+  FdtLib
+  HiiLib
+  MemoryAllocationLib
+  PcdLib
+  RpiScmiLib
+  UefiBootServicesTableLib
+  UefiDriverEntryPoint
+  UefiRuntimeServicesTableLib
+
+[Protocols]
+  gEfiDevicePathProtocolGuid                    ## PRODUCES
+
+[Guids]
+  gRpiScmiConfigFormSetGuid                     ## PRODUCES ## Variable:L"PowerProfile"
+  gEfiHiiPlatformSetupFormsetGuid               ## CONSUMES ## GUID
+
+[FixedPcd]
+  gRaspberryPiTokenSpaceGuid.PcdFdtBaseAddress  ## CONSUMES
+
+[Depex]
+  gEfiVariableArchProtocolGuid AND gEfiVariableWriteArchProtocolGuid

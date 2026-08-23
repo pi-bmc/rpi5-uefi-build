@@ -1,0 +1,25 @@
+/** @file
+ *
+ *  x-UEFI-redfish configure-language map for the Power Profile formset.
+ *
+ *  RedfishPlatformConfigDxe harvests these strings from the HII database:
+ *  the PowerProfile prompt labeled in the x-UEFI-redfish-Bios.v1_1_0
+ *  language becomes the BIOS attribute /redfish/v1/Systems/1/Bios ->
+ *  PowerProfile, and the option strings are the enum value names the BMC
+ *  reads and writes. Storage stays the PowerProfile efivarstore, which the
+ *  client's HiiUtilityLib reads and writes directly; ActiveCoolerScmiDxe
+ *  re-reads it every second.
+ *
+ *  SPDX-License-Identifier: BSD-2-Clause-Patent
+ *
+ **/
+
+/=#
+#langdef   x-UEFI-redfish-Bios.v1_1_0 "Bios.v1_1_0"
+
+#string STR_PROFILE_PROMPT       #language x-UEFI-redfish-Bios.v1_1_0   "/Bios/Attributes/PowerProfile"
+
+#string STR_PROFILE_BALANCED     #language x-UEFI-redfish-Bios.v1_1_0   "Balanced"
+#string STR_PROFILE_QUIET        #language x-UEFI-redfish-Bios.v1_1_0   "Quiet"
+#string STR_PROFILE_COOL         #language x-UEFI-redfish-Bios.v1_1_0   "Cool"
+#string STR_PROFILE_MANUAL       #language x-UEFI-redfish-Bios.v1_1_0   "Manual"

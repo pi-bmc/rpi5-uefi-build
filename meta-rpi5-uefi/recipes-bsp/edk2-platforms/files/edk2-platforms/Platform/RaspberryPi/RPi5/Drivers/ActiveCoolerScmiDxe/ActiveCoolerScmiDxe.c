@@ -47,7 +47,7 @@
   but no Sensor protocol, so a custom client is needed either way.)
 
   The SMT + doorbell wire lives in RpiScmiLib (shared with
-  PowerButtonScmiDxe); see RpiScmiLib.h for the cross-component contract.
+  RpiScmiConfigDxe); see RpiScmiLib.h for the cross-component contract.
 
   The fan set path returns SCMI errors until EDK2's RpiOpteeSensorDxe
   delivers the RP1 BAR to OP-TEE (the PCIe late-init handshake); the loop
@@ -65,6 +65,7 @@
 #include <Library/UefiRuntimeServicesTableLib.h>
 
 #include <Guid/RpiFanPolicy.h>
+#include <Guid/RpiScmiConfig.h>
 #include <Protocol/RpiFan.h>
 
 //
@@ -196,9 +197,10 @@ ReadPolicy (
   VOID
   )
 {
-  RPI_FAN_POLICY  Var;
-  UINTN           Size;
-  EFI_STATUS      Status;
+  RPI_FAN_POLICY     Var;
+  RPI_POWER_PROFILE  Profile;
+  UINTN              Size;
+  EFI_STATUS         Status;
 
   mPolicy.Mode       = RPI_FAN_MODE_AUTO;
   mPolicy.FixedLevel = FAN_LEVEL_SAFE;
@@ -206,6 +208,39 @@ ReadPolicy (
   mPolicy.Trip2C     = 60;
   mPolicy.Trip3C     = 68;
   mPolicy.Trip4C     = 75;
+
+  //
+  // The high-level PowerProfile (RpiScmiConfigDxe) decides the fan curve
+  // for every profile but Manual. A non-Manual profile is resolved to a
+  // CUSTOM trip set here and wins over FanPolicy; Manual (or an absent /
+  // malformed PowerProfile) falls through to the detailed FanPolicy below.
+  //
+  Size   = sizeof (Profile);
+  Status = gRT->GetVariable (
+                  RPI_POWER_PROFILE_VARIABLE_NAME,
+                  &gRpiScmiConfigFormSetGuid,
+                  NULL,
+                  &Size,
+                  &Profile
+                  );
+  if (!EFI_ERROR (Status) && (Size == sizeof (Profile)) &&
+      (Profile.Profile != RPI_POWER_PROFILE_MANUAL))
+  {
+    STATIC CONST UINT8  ProfileTrips[][4] = {
+      [RPI_POWER_PROFILE_BALANCED] = { 50, 60, 68, 75 },
+      [RPI_POWER_PROFILE_QUIET]    = { 58, 68, 76, 84 },
+      [RPI_POWER_PROFILE_COOL]     = { 42, 50, 58, 66 },
+    };
+
+    if (Profile.Profile < ARRAY_SIZE (ProfileTrips)) {
+      mPolicy.Mode   = RPI_FAN_MODE_CUSTOM;
+      mPolicy.Trip1C = ProfileTrips[Profile.Profile][0];
+      mPolicy.Trip2C = ProfileTrips[Profile.Profile][1];
+      mPolicy.Trip3C = ProfileTrips[Profile.Profile][2];
+      mPolicy.Trip4C = ProfileTrips[Profile.Profile][3];
+      return;
+    }
+  }
 
   Size   = sizeof (Var);
   Status = gRT->GetVariable (

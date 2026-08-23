@@ -388,7 +388,7 @@ READ_LOCK_STATUS   = TRUE
   # Board integration (see the matching block in RPi5.dsc).
   #
   INF Platform/RaspberryPi/RPi5/Drivers/BootloaderConfigDxe/BootloaderConfigDxe.inf
-  INF Platform/RaspberryPi/RPi5/Drivers/PowerButtonScmiDxe/PowerButtonScmiDxe.inf
+  INF Platform/RaspberryPi/RPi5/Drivers/RpiScmiConfigDxe/RpiScmiConfigDxe.inf
   INF Platform/RaspberryPi/RPi5/Drivers/ActiveCoolerScmiDxe/ActiveCoolerScmiDxe.inf
   INF Platform/RaspberryPi/RPi5/Drivers/FanConfigDxe/FanConfigDxe.inf
 !if $(RPI5_OPTEE) == TRUE

@@ -441,7 +441,7 @@
 
   #
   # SCMI agent wire to OP-TEE's server, shared by ActiveCoolerScmiDxe and
-  # PowerButtonScmiDxe. See RpiScmiLib.h for the cross-component contract.
+  # RpiScmiConfigDxe. See RpiScmiLib.h for the cross-component contract.
   #
   RpiScmiLib|Platform/RaspberryPi/RPi5/Library/RpiScmiLib/RpiScmiLib.inf
 
@@ -1013,7 +1013,7 @@
   # variables published for the BMC.
   #
   Platform/RaspberryPi/RPi5/Drivers/BootloaderConfigDxe/BootloaderConfigDxe.inf
-  Platform/RaspberryPi/RPi5/Drivers/PowerButtonScmiDxe/PowerButtonScmiDxe.inf
+  Platform/RaspberryPi/RPi5/Drivers/RpiScmiConfigDxe/RpiScmiConfigDxe.inf
   Platform/RaspberryPi/RPi5/Drivers/ActiveCoolerScmiDxe/ActiveCoolerScmiDxe.inf
   Platform/RaspberryPi/RPi5/Drivers/FanConfigDxe/FanConfigDxe.inf
 !if $(RPI5_OPTEE) == TRUE

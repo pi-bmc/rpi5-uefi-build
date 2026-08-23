@@ -39,6 +39,7 @@
 [Guids]
   gEfiEventExitBootServicesGuid                 ## CONSUMES ## Event
   gRpiFanConfigFormSetGuid                      ## CONSUMES ## Variable:L"FanPolicy"
+  gRpiScmiConfigFormSetGuid                     ## CONSUMES ## Variable:L"PowerProfile"
 
 [Depex]
   TRUE
