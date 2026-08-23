@@ -52,6 +52,30 @@ inherit deploy nopackages python3native
 # gen_tee_bin.py needs pyelftools.
 DEPENDS = "python3-pyelftools-native"
 
+# Opt-in: embed the EDK2 StandaloneMM RPMB firmware volume (BL32_AP_MM.fd,
+# built by the edk2-standalone-mm recipe) as an OP-TEE StMM secure partition
+# (CFG_STMM_PATH -> CFG_WITH_STMM_SP), and turn on the RPMB filesystem
+# backend that its EFI_VARS object lives in. StMM runs as an ordinary OP-TEE
+# pseudo-TA under the existing opteed dispatcher -- it does NOT need the FF-A
+# SPMC. The 2.5MB StMM FV is almost all padding, so gen_stmm_hex zlib-embeds
+# it in ~130KB: measured tee-raw.bin grows to ~290KB, still inside the
+# existing 0x80000 tee FD region in RPi5.fdf -- so NO FD-layout growth is
+# needed. Default off.
+RPI5_OPTEE_STMM ??= "0"
+STMM_FV = "${STAGING_DATADIR}/edk2-standalone-mm/BL32_AP_MM.fd"
+DEPENDS += "${@'edk2-standalone-mm' if d.getVar('RPI5_OPTEE_STMM') == '1' else ''}"
+
+# CFG_RPMB_TESTKEY: use the well-known RPMB test key so a build/boot works
+# before a real HUK is wired to the BCM2712 OTP -- INSECURE, measurement only.
+STMM_MAKE_ARGS = "${@('CFG_RPMB_FS=y CFG_RPMB_TESTKEY=y CFG_STMM_PATH=%s' % d.getVar('STMM_FV')) if d.getVar('RPI5_OPTEE_STMM') == '1' else ''}"
+
+# tee-raw.bin must fit the FD region TF-A copies verbatim (RPi5.fdf tee region
+# is 0x80000). Embedded StMM measured ~290KB, so it fits -- keep the guard at
+# the real FD-region size in both modes to catch any future overflow.
+OPTEE_MAX_SIZE ??= "0x80000"
+# Decimal form for the shell size check (bitbake's shell parser rejects $(( ))).
+OPTEE_MAX_BYTES = "${@int(d.getVar('OPTEE_MAX_SIZE'), 0)}"
+
 do_configure[noexec] = "1"
 
 # Set to "1" (e.g. via a local.conf override) for a debug core with the
@@ -74,16 +98,20 @@ do_compile() {
         CROSS_COMPILE64="${TARGET_PREFIX}" \
         CFG_TEE_CORE_LOG_LEVEL=${OPTEE_LOG_LEVEL} \
         CFG_TEE_CORE_DEBUG=${OPTEE_CORE_DEBUG} \
+        ${STMM_MAKE_ARGS} \
         all
 
     [ -s "${B}/out/core/tee-raw.bin" ] || \
         bbfatal "OP-TEE produced no out/core/tee-raw.bin -- check the build log"
 
-    # RPi5.fdf gives the image 0x80000 bytes and TF-A copies exactly that
-    # much; a bigger core would be silently truncated at boot.
+    # RPi5.fdf gives the image OPTEE_MAX_SIZE bytes and TF-A copies exactly
+    # that much; a bigger core would be silently truncated at boot. The limit
+    # grows with RPI5_OPTEE_STMM (StMM is embedded in the core), and RPi5.fdf +
+    # the TF-A RPI5_OPTEE_IMAGE_* window must be grown to match.
     TEE_SIZE=$(stat -Lc %s ${B}/out/core/tee-raw.bin)
-    if [ "$TEE_SIZE" -gt 524288 ]; then
-        bbfatal "tee-raw.bin is $TEE_SIZE bytes, over the 0x80000 FD region -- grow the region in RPi5.fdf and RPI5_OPTEE_IMAGE_MAX_SIZE in the TF-A patch together"
+    bbnote "tee-raw.bin is ${TEE_SIZE} bytes (limit ${OPTEE_MAX_BYTES} = ${OPTEE_MAX_SIZE})"
+    if [ "$TEE_SIZE" -gt "${OPTEE_MAX_BYTES}" ]; then
+        bbfatal "tee-raw.bin is $TEE_SIZE bytes, over the ${OPTEE_MAX_SIZE} FD region -- grow the region in RPi5.fdf and RPI5_OPTEE_IMAGE_MAX_SIZE in the TF-A patch together"
     fi
 }
 
