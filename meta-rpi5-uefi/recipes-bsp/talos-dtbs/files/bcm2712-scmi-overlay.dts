@@ -30,6 +30,17 @@
  * thermal zone below reference the sensor by phandle at build time, which
  * runtime injection could never offer.
  *
+ * MAILBOX OWNERSHIP: fragments 2 and 3 disable the VPU mailbox and the
+ * raspberrypi firmware node (raspberrypi-clk and friends). The mailbox
+ * has no bus firewall, so exclusivity is enforced here, by convention:
+ * EDK2 drives it natively through the firmware phase and hands it to
+ * OP-TEE at ExitBootServices (PTA_BMC_SENSOR_CMD_MBOX_HANDOFF), after
+ * which OP-TEE is its ONLY user -- polled, no interrupt to lose (the
+ * fw-clk-arm -110 storm this replaces was a lost mailbox response) --
+ * and the firmware clocks appear on SCMI clock ids 2+ instead. Costs on
+ * a stripped Talos tree: no native cpufreq (CPU stays at the VPU boot
+ * frequency; SCMI perf DVFS is the follow-up), no vcmailbox/hwmon.
+ *
  * The zone mirrors the retired thermal overlay: monitoring plus a critical
  * trip, no cooling maps -- Linux has no standard cooling-device binding
  * for an SCMI perf domain, and firmware-side closed-loop control already
@@ -79,6 +90,11 @@
 					scmi_perf: protocol@13 {
 						reg = <0x13>;
 					};
+
+				scmi_clk: protocol@14 {
+					reg = <0x14>;
+					#clock-cells = <1>;
+				};
 				};
 			};
 
@@ -101,6 +117,20 @@
 					};
 				};
 			};
+		};
+	};
+
+	fragment@2 {
+		target-path = "/soc@107c000000/mailbox@7c013880";
+		__overlay__ {
+			status = "disabled";
+		};
+	};
+
+	fragment@3 {
+		target-path = "/soc@107c000000/firmware";
+		__overlay__ {
+			status = "disabled";
 		};
 	};
 };

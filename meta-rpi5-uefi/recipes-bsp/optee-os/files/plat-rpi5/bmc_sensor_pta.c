@@ -37,6 +37,7 @@
 #include "rp1_i2c.h"
 #include "rp1_periph.h"
 #include "soc_temp.h"
+#include "vpu_mbox.h"
 
 #define PTA_NAME "bmc_sensor.pta"
 
@@ -65,6 +66,7 @@ struct bmc_sensor_state {
 	uint16_t eeprom_offset;
 
 	uint32_t period_ms;
+	bool power_button;
 	bool callout_added;
 	struct callout callout;
 
@@ -125,6 +127,7 @@ static void sample_locked(void)
 	rec->uptime_s = uptime_s();
 	rec->status = (valid ? PTA_BMC_SENSOR_STATUS_TEMP_VALID : 0) |
 		      (state.i2c_ready ? PTA_BMC_SENSOR_STATUS_I2C_READY : 0) |
+		      (state.power_button ? PTA_BMC_SENSOR_STATUS_POWER_BUTTON : 0) |
 		      (rec->status & PTA_BMC_SENSOR_STATUS_LAST_PUSH_OK);
 	rec->reserved = 0;
 	rec->crc32 = crc32_ieee(rec, offsetof(struct bmc_sensor_record, crc32));
@@ -152,6 +155,24 @@ static void push_record_locked(void)
 		state.rec.status |= PTA_BMC_SENSOR_STATUS_LAST_PUSH_OK;
 	}
 	/* status changed after the fact; recompute the wire CRC next push */
+}
+
+void bmc_sensor_flag_power_button(void)
+{
+	uint32_t exceptions = cpu_spin_lock_xsave(&state.lock);
+	bool defer = state.notif_started;
+
+	state.power_button = true;
+	sample_locked();
+	if (defer)
+		state.push_pending = true;
+	else
+		push_record_locked();
+
+	cpu_spin_unlock_xrestore(&state.lock, exceptions);
+
+	if (defer)
+		notif_send_async(NOTIF_VALUE_DO_BOTTOM_HALF, 0);
 }
 
 static bool sensor_callout_cb(struct callout *co __unused)
@@ -383,6 +404,14 @@ static TEE_Result invoke_command(void *sess_ctx __unused, uint32_t cmd,
 		return cmd_get(types, params);
 	case PTA_BMC_SENSOR_CMD_WAIT:
 		return cmd_wait(types, params);
+	case PTA_BMC_SENSOR_CMD_MBOX_HANDOFF:
+		if (types != TEE_PARAM_TYPES(TEE_PARAM_TYPE_NONE,
+					     TEE_PARAM_TYPE_NONE,
+					     TEE_PARAM_TYPE_NONE,
+					     TEE_PARAM_TYPE_NONE))
+			return TEE_ERROR_BAD_PARAMETERS;
+		vpu_mbox_set_owned();
+		return TEE_SUCCESS;
 	default:
 		return TEE_ERROR_NOT_IMPLEMENTED;
 	}

@@ -35,4 +35,11 @@ unsigned int rp1_fan_get_level(void);
 /* The 0..255 duty a level maps to (for SCMI descriptors). */
 unsigned int rp1_fan_level_duty255(unsigned int level);
 
+/*
+ * True when clk_pwm1 is running (either brought up by the fan init above
+ * or left running by the VPU). For the SCMI clock protocol's read-only
+ * view; returns false while the RP1 window is unmapped.
+ */
+bool rp1_pwm1_clk_enabled(void);
+
 #endif /* RP1_PWM_H */

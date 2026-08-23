@@ -1,10 +1,11 @@
 ## @file
 #
-#  ActiveCoolerScmiDxe - temperature-driven fan control for the Raspberry Pi 5
-#  active cooler during the firmware phase, as an SCMI agent: temperature
-#  and fan level go through OP-TEE's SCMI server (SMT page + SiP doorbell
-#  SMC), the same interface Linux's arm,scmi-smc uses - OP-TEE is the only
-#  owner of the RP1 fan PWM. See ActiveCoolerDxe.c for the wire contract.
+#  ActiveCoolerScmiDxe - temperature-driven fan control for the Raspberry
+#  Pi 5 active cooler during the firmware phase, as an SCMI agent:
+#  temperature and fan level go through OP-TEE's SCMI server (RpiScmiLib),
+#  the same interface Linux's arm,scmi-smc uses - OP-TEE is the only owner
+#  of the RP1 fan PWM. Successor to ActiveCoolerDxe (kept in the tree,
+#  unbuilt, as the direct-PWM reference for OP-TEE-less configurations).
 #
 #  SPDX-License-Identifier: BSD-2-Clause-Patent
 #
@@ -22,17 +23,12 @@
   ActiveCoolerScmiDxe.c
 
 [Packages]
-  ArmPkg/ArmPkg.dec
   MdePkg/MdePkg.dec
   Platform/RaspberryPi/RPi5/RPi5.dec
 
 [LibraryClasses]
-  ArmSmcLib
-  BaseMemoryLib
   DebugLib
-  DxeServicesTableLib
-  IoLib
-  PcdLib
+  RpiScmiLib
   UefiBootServicesTableLib
   UefiDriverEntryPoint
   UefiRuntimeServicesTableLib
@@ -43,11 +39,6 @@
 [Guids]
   gEfiEventExitBootServicesGuid                 ## CONSUMES ## Event
   gRpiFanConfigFormSetGuid                      ## CONSUMES ## Variable:L"FanPolicy"
-
-[FixedPcd]
-  gRpiOpteeTokenSpaceGuid.PcdOpteeShmSize
-  gRpiOpteeTokenSpaceGuid.PcdOpteeTzdramBase
-  gRpiOpteeTokenSpaceGuid.PcdOpteeTzdramSize
 
 [Depex]
   TRUE

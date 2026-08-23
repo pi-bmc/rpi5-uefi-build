@@ -46,14 +46,8 @@
   it brings the Base/Clock/Performance protocols over an ArmMtlLib port
   but no Sensor protocol, so a custom client is needed either way.)
 
-  Wire contract, kept in step across four places (TF-A 0002 rpi_scmi_svc.c,
-  OP-TEE plat-rpi5 scmi_server.c, the bcm2712-scmi DTB overlay, here):
-  doorbell SMC 0x82000010; SMT slot = the top 4 KB page of the OP-TEE
-  reserved SHM window (derived from the carve-out PCDs below = 0x1F3FF000);
-  message layout per the SCMI platform shared-memory spec, matching OP-TEE
-  core/drivers/scmi-msg/smt.c's struct smt_header. The page must be mapped
-  uncached here because OP-TEE (MEM_AREA_IO_NSEC) and Linux (no-map +
-  ioremap) both use device mappings - a cached view would be incoherent.
+  The SMT + doorbell wire lives in RpiScmiLib (shared with
+  PowerButtonScmiDxe); see RpiScmiLib.h for the cross-component contract.
 
   The fan set path returns SCMI errors until EDK2's RpiOpteeSensorDxe
   delivers the RP1 BAR to OP-TEE (the PCIe late-init handshake); the loop
@@ -65,12 +59,8 @@
 
 #include <Uefi.h>
 
-#include <Library/ArmSmcLib.h>
-#include <Library/BaseMemoryLib.h>
 #include <Library/DebugLib.h>
-#include <Library/DxeServicesTableLib.h>
-#include <Library/IoLib.h>
-#include <Library/PcdLib.h>
+#include <Library/RpiScmiLib.h>
 #include <Library/UefiBootServicesTableLib.h>
 #include <Library/UefiRuntimeServicesTableLib.h>
 
@@ -78,143 +68,8 @@
 #include <Protocol/RpiFan.h>
 
 //
-// --- SCMI-lite agent -------------------------------------------------------
+// --- SCMI access (RpiScmiLib does the SMT + doorbell wire) ---------------
 //
-
-//
-// SiP fast SMC the SMT channel is rung with (RPI_SIP_SCMI_AGENT0).
-//
-#define SCMI_DOORBELL_SMC_FID  0x82000010
-
-//
-// SMT slot layout (SCMI platform design document shared-memory transfer;
-// field-for-field OP-TEE's core/drivers/scmi-msg/smt.c struct smt_header).
-//
-#pragma pack(1)
-typedef struct {
-  UINT32    Reserved0;
-  UINT32    Status;         // bit0 FREE, bit1 ERROR
-  UINT64    Reserved1;
-  UINT32    Flags;          // bit1 interrupt completion; 0 = polled
-  UINT32    Length;         // MessageHeader + payload, in bytes
-  UINT32    MessageHeader;  // msg id [7:0], type [9:8], protocol [17:10]
-  UINT32    Payload[30];    // rest of the 128-byte slot
-} SCMI_SMT_SLOT;
-#pragma pack()
-
-#define SMT_STATUS_FREE   BIT0
-#define SMT_STATUS_ERROR  BIT1
-
-#define SCMI_MSG_HEADER(Protocol, MsgId)  \
-  (((UINT32)(Protocol) << 10) | (UINT32)(MsgId))
-
-//
-// Protocols and messages used (ids per the SCMI spec, verified against
-// OP-TEE's scmi-msg sensor.h / perf_domain.h).
-//
-#define SCMI_PROTOCOL_SENSOR      0x15
-#define SCMI_SENSOR_READING_GET   0x6
-
-#define SCMI_PROTOCOL_PERF        0x13
-#define SCMI_PERF_LEVEL_SET       0x7
-
-#define SCMI_SENSOR_ID_SOC_TEMP   0
-#define SCMI_PERF_DOMAIN_FAN      0
-
-STATIC volatile SCMI_SMT_SLOT  *mSmtSlot;   // NULL until the page is UC-mapped
-
-/**
-  The SMT slot address: the top 4 KB page of the OP-TEE reserved SHM window,
-  derived from the same carve-out PCDs RaspberryPiMem.c reserves it with.
-**/
-STATIC
-EFI_PHYSICAL_ADDRESS
-ScmiSmtBase (
-  VOID
-  )
-{
-  return PcdGet64 (PcdOpteeTzdramBase) + PcdGet32 (PcdOpteeTzdramSize) +
-         PcdGet32 (PcdOpteeShmSize) - SIZE_4KB;
-}
-
-/**
-  One synchronous SCMI command over the SMT slot: build the message, ring
-  the doorbell, return the payload. The fastcall is served synchronously
-  inside the SMC, so the response is in place when ArmCallSmc returns.
-
-  @param[in]  Protocol  SCMI protocol id.
-  @param[in]  MsgId     Message id within the protocol.
-  @param[in]  In        Payload words to send.
-  @param[in]  InCount   Number of payload words to send.
-  @param[out] Out       Response payload words (first is the SCMI status).
-  @param[in]  OutCount  Number of response words to read back.
-
-  @retval EFI_SUCCESS       Transport round trip completed; Out[0] carries
-                            the SCMI status.
-  @retval EFI_NOT_READY     Channel not free (server never released it).
-  @retval EFI_DEVICE_ERROR  Doorbell SMC or channel-level error.
-**/
-STATIC
-EFI_STATUS
-ScmiCall (
-  IN  UINT8         Protocol,
-  IN  UINT8         MsgId,
-  IN  CONST UINT32  *In,
-  IN  UINTN         InCount,
-  OUT UINT32        *Out,
-  IN  UINTN         OutCount
-  )
-{
-  ARM_SMC_ARGS  Args;
-  UINTN         Index;
-
-  ASSERT (mSmtSlot != NULL);
-  ASSERT (InCount <= ARRAY_SIZE (mSmtSlot->Payload));
-  ASSERT (OutCount <= ARRAY_SIZE (mSmtSlot->Payload));
-
-  //
-  // The channel must be free: the platform sets FREE after every message,
-  // and this driver is the only agent before the OS. Anything else means
-  // the server side is wedged - do not write over an in-flight slot.
-  //
-  if ((mSmtSlot->Status & SMT_STATUS_FREE) == 0) {
-    return EFI_NOT_READY;
-  }
-
-  for (Index = 0; Index < InCount; Index++) {
-    mSmtSlot->Payload[Index] = In[Index];
-  }
-
-  mSmtSlot->Flags         = 0;
-  mSmtSlot->Length        = (UINT32)(sizeof (UINT32) * (1 + InCount));
-  mSmtSlot->MessageHeader = SCMI_MSG_HEADER (Protocol, MsgId);
-  mSmtSlot->Status        = 0;                     // claim the channel
-
-  ZeroMem (&Args, sizeof (Args));
-  Args.Arg0 = SCMI_DOORBELL_SMC_FID;
-  ArmCallSmc (&Args);
-
-  if (Args.Arg0 != 0) {
-    //
-    // TF-A refused the forward (OP-TEE not up?): release our claim so the
-    // next tick can try again.
-    //
-    mSmtSlot->Status = SMT_STATUS_FREE;
-    return EFI_DEVICE_ERROR;
-  }
-
-  if (((mSmtSlot->Status & SMT_STATUS_FREE) == 0) ||
-      ((mSmtSlot->Status & SMT_STATUS_ERROR) != 0))
-  {
-    return EFI_DEVICE_ERROR;
-  }
-
-  for (Index = 0; Index < OutCount; Index++) {
-    Out[Index] = mSmtSlot->Payload[Index];
-  }
-
-  return EFI_SUCCESS;
-}
 
 /**
   Read the SoC temperature over SCMI. Returns FALSE while the transport or
@@ -229,21 +84,19 @@ ScmiReadMilliCelsius (
   UINT32  In[2];
   UINT32  Out[3];
 
-  if (mSmtSlot == NULL) {
-    return FALSE;
-  }
-
-  In[0] = SCMI_SENSOR_ID_SOC_TEMP;
+  In[0] = RPI_SCMI_SENSOR_ID_SOC_TEMP;
   In[1] = 0;                                       // synchronous read
 
-  if (EFI_ERROR (ScmiCall (
-                   SCMI_PROTOCOL_SENSOR,
-                   SCMI_SENSOR_READING_GET,
-                   In,
-                   2,
-                   Out,
-                   3
-                   )) ||
+  if (EFI_ERROR (
+        RpiScmiCall (
+          RPI_SCMI_PROTOCOL_SENSOR,
+          RPI_SCMI_SENSOR_READING_GET,
+          In,
+          2,
+          Out,
+          3
+          )
+        ) ||
       ((INT32)Out[0] != 0))
   {
     return FALSE;
@@ -270,60 +123,23 @@ ScmiFanSetLevel (
   UINT32  In[2];
   UINT32  Out[1];
 
-  if (mSmtSlot == NULL) {
-    return FALSE;
-  }
-
-  In[0] = SCMI_PERF_DOMAIN_FAN;
+  In[0] = RPI_SCMI_PERF_DOMAIN_FAN;
   In[1] = (UINT32)Level;
 
-  if (EFI_ERROR (ScmiCall (
-                   SCMI_PROTOCOL_PERF,
-                   SCMI_PERF_LEVEL_SET,
-                   In,
-                   2,
-                   Out,
-                   1
-                   )) ||
+  if (EFI_ERROR (
+        RpiScmiCall (
+          RPI_SCMI_PROTOCOL_PERF,
+          RPI_SCMI_PERF_LEVEL_SET,
+          In,
+          2,
+          Out,
+          1
+          )
+        ) ||
       ((INT32)Out[0] != 0))
   {
     return FALSE;
   }
-
-  return TRUE;
-}
-
-/**
-  Map the SMT page uncached and arm the client. Retried from the poll tick
-  until it succeeds (SetMemorySpaceAttributes needs the CPU arch protocol,
-  which may dispatch after this driver).
-**/
-STATIC
-BOOLEAN
-ScmiChannelInit (
-  VOID
-  )
-{
-  EFI_PHYSICAL_ADDRESS  Base;
-  EFI_STATUS            Status;
-
-  if (mSmtSlot != NULL) {
-    return TRUE;
-  }
-
-  Base = ScmiSmtBase ();
-
-  //
-  // Uncached, or nothing: a write-back view of a page OP-TEE and Linux
-  // access through device mappings corrupts messages via stale lines.
-  //
-  Status = gDS->SetMemorySpaceAttributes (Base, SIZE_4KB, EFI_MEMORY_UC);
-  if (EFI_ERROR (Status)) {
-    return FALSE;
-  }
-
-  mSmtSlot = (volatile SCMI_SMT_SLOT *)(UINTN)Base;
-  DEBUG ((DEBUG_INFO, "ActiveCoolerScmiDxe: SCMI SMT channel at 0x%lx\n", Base));
 
   return TRUE;
 }
@@ -497,7 +313,7 @@ FanPollTick (
   UINTN  Target;
   UINTN  Index;
 
-  if (!ScmiChannelInit ()) {
+  if (!RpiScmiReady ()) {
     return;   // CPU arch protocol not up yet; try again next tick
   }
 
@@ -572,7 +388,7 @@ FanOnExitBootServices (
 {
   gBS->SetTimer (mPollTimer, TimerCancel, 0);
 
-  if ((mSmtSlot != NULL) && (mLevel < 1)) {
+  if (RpiScmiReady () && (mLevel < 1)) {
     ScmiFanSetLevel (1);
   }
 }
@@ -603,7 +419,7 @@ FanGetInfo (
   Info->MaxLevel       = (UINT8)FAN_LEVEL_MAX;
   Info->OverrideActive = (BOOLEAN)(mOverride >= 0);
 
-  if ((mSmtSlot == NULL) || (mLevel < 0)) {
+  if (!RpiScmiReady () || (mLevel < 0)) {
     Info->Level   = 0;
     Info->Duty255 = 0;
     return EFI_NOT_READY;
@@ -635,7 +451,7 @@ FanSetOverride (
   // Apply now rather than waiting out the poll interval; the timer keeps
   // it asserted afterwards.
   //
-  if ((mSmtSlot != NULL) && (mLevel != mOverride)) {
+  if (RpiScmiReady () && (mLevel != mOverride)) {
     FanSetLevel ((UINTN)mOverride);
   }
 

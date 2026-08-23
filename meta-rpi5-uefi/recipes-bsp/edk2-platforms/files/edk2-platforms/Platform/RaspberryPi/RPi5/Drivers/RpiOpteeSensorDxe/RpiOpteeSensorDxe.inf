@@ -2,7 +2,10 @@
 #
 #  EDK2 -> OP-TEE late-initialization handshake for the BMC sensor push
 #  service: waits for Rp1BusDxe (PCIe enumerated, RP1 BAR assigned),
-#  muxes GPIO2/3 to I2C1 and hands the BAR to the sensor pTA.
+#  muxes GPIO2/3 to I2C1 and hands the BAR to the sensor pTA. Also hands
+#  the VPU mailbox to OP-TEE at ExitBootServices (phase ownership: EDK2's
+#  RpiFirmwareDxe drives it natively until then; the OS consumes firmware
+#  services over SCMI).
 #
 #  Copyright (c) 2026, pi-bmc contributors
 #
@@ -35,6 +38,9 @@
   Rp1GpioLib
   UefiBootServicesTableLib
   UefiDriverEntryPoint
+
+[Guids]
+  gEfiEventExitBootServicesGuid ## CONSUMES ## Event
 
 [Protocols]
   gRp1BusProtocolGuid           ## CONSUMES

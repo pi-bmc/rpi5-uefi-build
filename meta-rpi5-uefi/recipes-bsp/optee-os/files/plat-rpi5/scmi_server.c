@@ -34,6 +34,9 @@
 #include <trace.h>
 #include <util.h>
 
+#include "pwr_button.h"
+#include "vpu_mbox.h"
+#include "rp1_periph.h"
 #include "rp1_pwm.h"
 #include "soc_temp.h"
 
@@ -58,6 +61,12 @@ static const uint8_t rpi5_scmi_protocols[] = {
 	SCMI_PROTOCOL_ID_SENSOR,
 #ifdef CFG_SCMI_MSG_PERF_DOMAIN
 	SCMI_PROTOCOL_ID_PERF,
+#endif
+#ifdef CFG_SCMI_MSG_SYSTEM_POWER
+	SCMI_PROTOCOL_ID_SYS_POWER,
+#endif
+#ifdef CFG_SCMI_MSG_CLOCK
+	SCMI_PROTOCOL_ID_CLOCK,
 #endif
 	0,
 };
@@ -264,3 +273,218 @@ int32_t plat_scmi_perf_level_set(unsigned int channel_id __unused,
 }
 
 #endif /* CFG_SCMI_MSG_PERF_DOMAIN */
+
+/* --- System Power Management protocol (0x12) --- */
+
+#ifdef CFG_SCMI_MSG_SYSTEM_POWER
+
+/*
+ * Vendor system states for SYSTEM_POWER_STATE_GET (0x80000000+ is the
+ * spec's vendor range). RUNNING is the quiescent answer;
+ * BUTTON_SHUTDOWN reports a latched power-button press, which
+ * PowerButtonScmiDxe polls for during the firmware phase and acts on
+ * through gRT->ResetSystem (honoring the blconfig POWER_OFF_ON_HALT
+ * policy and the reset-notification flush). At OS runtime nothing polls
+ * this; the same press reaches the BMC through the sensor record's
+ * POWER_BUTTON status bit, and the BMC orchestrates a graceful shutdown.
+ */
+#define RPI5_SYS_POWER_STATE_RUNNING		0x80000000
+#define RPI5_SYS_POWER_STATE_BUTTON_SHUTDOWN	0x80000001
+
+/*
+ * Vendor SYSTEM_POWER_STATE_SET states carrying the power-button policy
+ * (PowerButtonScmiDxe delivers the blconfig POWER_OFF_ON_HALT verdict at
+ * boot). Keep in step with EDK2's RpiScmiLib.h.
+ */
+#define RPI5_SYS_POWER_SET_POLICY_OFF	0x80000002
+#define RPI5_SYS_POWER_SET_POLICY_RESET	0x80000003
+
+/* Architectural states from the System Power module (0x12) we act on. */
+#define SCMI_SYS_POWER_STATE_SHUTDOWN	0
+#define SCMI_SYS_POWER_STATE_COLD_RESET	1
+#define SCMI_SYS_POWER_STATE_WARM_RESET	2
+
+int32_t plat_scmi_sys_power_state_set(unsigned int channel_id __unused,
+				      uint32_t flags __unused,
+				      uint32_t system_state)
+{
+	/*
+	 * Power actions run THROUGH EL3 (TF-A SiP secure-caller wrappers
+	 * over psci_system_off/reset -- plain PSCI is rejected from the
+	 * secure world). Agents wanting a flush-first orderly path still
+	 * use gRT->ResetSystem/PSCI themselves; this is for delegation
+	 * and for the button policy delivery.
+	 */
+	switch (system_state) {
+	case SCMI_SYS_POWER_STATE_SHUTDOWN:
+		rpi5_power_act(true);
+		return SCMI_HARDWARE_ERROR;	/* only reached on failure */
+	case SCMI_SYS_POWER_STATE_COLD_RESET:
+	case SCMI_SYS_POWER_STATE_WARM_RESET:
+		rpi5_power_act(false);
+		return SCMI_HARDWARE_ERROR;
+	case RPI5_SYS_POWER_SET_POLICY_OFF:
+		rpi5_pwr_button_set_policy(true);
+		return SCMI_SUCCESS;
+	case RPI5_SYS_POWER_SET_POLICY_RESET:
+		rpi5_pwr_button_set_policy(false);
+		return SCMI_SUCCESS;
+	default:
+		return SCMI_NOT_SUPPORTED;
+	}
+}
+
+int32_t plat_scmi_sys_power_state_get(unsigned int channel_id __unused,
+				      uint32_t *system_state)
+{
+	if (rpi5_pwr_button_pending())
+		*system_state = RPI5_SYS_POWER_STATE_BUTTON_SHUTDOWN;
+	else
+		*system_state = RPI5_SYS_POWER_STATE_RUNNING;
+
+	return SCMI_SUCCESS;
+}
+
+#endif /* CFG_SCMI_MSG_SYSTEM_POWER */
+
+/* --- Clock Management protocol (0x14): read-only RP1 observability --- */
+
+#ifdef CFG_SCMI_MSG_CLOCK
+
+/*
+ * Two RP1 clocks, observability only -- mutation is denied because both
+ * have hard owners (clk_pwm1: the fan controller above; clk_sys: the RP1
+ * fabric and the I2C timing constants in rp1_i2c.c). Rates are the fixed
+ * values this platform programs: clk_pwm1 runs xosc/1 = 50 MHz when
+ * enabled, clk_sys is the RP1's fixed 200 MHz system clock. Both report
+ * 0 / disabled until the RP1 BAR handshake maps the window.
+ */
+#define RPI5_CLK_PWM1		0
+#define RPI5_CLK_SYS		1
+#define RPI5_CLK_FW_ARM		2
+#define RPI5_CLK_FW_CORE	3
+#define RPI5_CLK_FW_V3D		4
+#define RPI5_CLK_FW_EMMC2	5
+#define RPI5_CLK_COUNT		6
+
+/*
+ * Ids 2+ are VPU firmware clocks, served over the secure mailbox
+ * (vpu_mbox.c). They read 0 / disabled until EDK2 hands the mailbox
+ * over at ExitBootServices -- exactly the phase in which the OS, whose
+ * device tree has no native firmware-clock driver any more, starts
+ * asking for them over SCMI.
+ */
+static const uint32_t rpi5_fw_clock_id[RPI5_CLK_COUNT] = {
+	[RPI5_CLK_FW_ARM] = VPU_CLOCK_ARM,
+	[RPI5_CLK_FW_CORE] = VPU_CLOCK_CORE,
+	[RPI5_CLK_FW_V3D] = VPU_CLOCK_V3D,
+	[RPI5_CLK_FW_EMMC2] = VPU_CLOCK_EMMC2,
+};
+
+#define RPI5_CLK_PWM1_HZ	50000000UL
+#define RPI5_CLK_SYS_HZ		200000000UL
+
+size_t plat_scmi_clock_count(unsigned int channel_id __unused)
+{
+	return RPI5_CLK_COUNT;
+}
+
+const char *plat_scmi_clock_get_name(unsigned int channel_id __unused,
+				     unsigned int scmi_id)
+{
+	switch (scmi_id) {
+	case RPI5_CLK_PWM1:
+		return "clk_pwm1";
+	case RPI5_CLK_SYS:
+		return "clk_sys";
+	case RPI5_CLK_FW_ARM:
+		return "fw-clk-arm";
+	case RPI5_CLK_FW_CORE:
+		return "fw-clk-core";
+	case RPI5_CLK_FW_V3D:
+		return "fw-clk-v3d";
+	case RPI5_CLK_FW_EMMC2:
+		return "fw-clk-emmc2";
+	default:
+		return NULL;
+	}
+}
+
+unsigned long plat_scmi_clock_get_rate(unsigned int channel_id __unused,
+				       unsigned int scmi_id)
+{
+	switch (scmi_id) {
+	case RPI5_CLK_PWM1:
+		return rp1_pwm1_clk_enabled() ? RPI5_CLK_PWM1_HZ : 0;
+	case RPI5_CLK_SYS:
+		return rp1_periph_base() ? RPI5_CLK_SYS_HZ : 0;
+	case RPI5_CLK_FW_ARM:
+	case RPI5_CLK_FW_CORE:
+	case RPI5_CLK_FW_V3D:
+	case RPI5_CLK_FW_EMMC2:
+		return vpu_clock_get_rate(rpi5_fw_clock_id[scmi_id]);
+	default:
+		return 0;
+	}
+}
+
+int32_t plat_scmi_clock_rates_array(unsigned int channel_id,
+				    unsigned int scmi_id, size_t start_index,
+				    unsigned long *rates, size_t *nb_elts)
+{
+	if (scmi_id >= RPI5_CLK_COUNT)
+		return SCMI_NOT_FOUND;
+
+	if (!rates) {
+		*nb_elts = 1;
+		return SCMI_SUCCESS;
+	}
+
+	if (start_index || !*nb_elts)
+		return SCMI_INVALID_PARAMETERS;
+
+	rates[0] = plat_scmi_clock_get_rate(channel_id, scmi_id);
+	*nb_elts = 1;
+
+	return SCMI_SUCCESS;
+}
+
+int32_t plat_scmi_clock_get_state(unsigned int channel_id __unused,
+				  unsigned int scmi_id)
+{
+	switch (scmi_id) {
+	case RPI5_CLK_PWM1:
+		return rp1_pwm1_clk_enabled() ? 1 : 0;
+	case RPI5_CLK_SYS:
+		return rp1_periph_base() ? 1 : 0;
+	case RPI5_CLK_FW_ARM:
+	case RPI5_CLK_FW_CORE:
+	case RPI5_CLK_FW_V3D:
+	case RPI5_CLK_FW_EMMC2:
+		return vpu_mbox_owned() ? 1 : 0;
+	default:
+		return SCMI_NOT_FOUND;
+	}
+}
+
+int32_t plat_scmi_clock_set_rate(unsigned int channel_id __unused,
+				 unsigned int scmi_id,
+				 unsigned long rate __unused)
+{
+	if (scmi_id >= RPI5_CLK_COUNT)
+		return SCMI_NOT_FOUND;
+
+	return SCMI_DENIED;
+}
+
+int32_t plat_scmi_clock_set_state(unsigned int channel_id __unused,
+				  unsigned int scmi_id,
+				  bool enable_not_disable __unused)
+{
+	if (scmi_id >= RPI5_CLK_COUNT)
+		return SCMI_NOT_FOUND;
+
+	return SCMI_DENIED;
+}
+
+#endif /* CFG_SCMI_MSG_CLOCK */

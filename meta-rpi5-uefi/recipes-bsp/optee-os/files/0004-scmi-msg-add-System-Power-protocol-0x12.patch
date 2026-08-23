@@ -1,0 +1,303 @@
+From: pi-bmc contributors <nbatkins@gmail.com>
+Subject: [PATCH] scmi-msg: add System Power protocol (0x12)
+
+New protocol module for the lightweight scmi-msg framework, modelled on
+the Sensor Management module: PROTOCOL_VERSION / PROTOCOL_ATTRIBUTES /
+PROTOCOL_MESSAGE_ATTRIBUTES plus SYSTEM_POWER_STATE_SET and
+SYSTEM_POWER_STATE_GET, dispatched to two platform hooks
+(plat_scmi_sys_power_state_set/get). SYSTEM_POWER_STATE_NOTIFY needs a
+P2A notification channel the framework does not have and is not
+implemented.
+
+STATE_GET gives a platform a way to surface a pending system power
+request (e.g. a latched power-button press) to agents that poll it;
+STATE_SET carries agent requests to the platform hook, which decides
+what it can honour. Gated behind CFG_SCMI_MSG_SYSTEM_POWER (default n).
+
+--- /dev/null
++++ b/core/drivers/scmi-msg/system_power.c
+@@ -0,0 +1,139 @@
++// SPDX-License-Identifier: BSD-3-Clause
++/*
++ * Copyright (c) 2026, pi-bmc contributors
++ *
++ * SCMI System Power Management Protocol (0x12) server.
++ */
++
++#include <confine_array_index.h>
++#include <drivers/scmi-msg.h>
++#include <drivers/scmi.h>
++#include <string.h>
++#include <trace.h>
++#include <util.h>
++
++#include "common.h"
++#include "system_power.h"
++
++static bool message_id_is_supported(unsigned int message_id);
++
++static void report_version(struct scmi_msg *msg)
++{
++	struct scmi_protocol_version_p2a return_values = {
++		.status = SCMI_SUCCESS,
++		.version = SCMI_PROTOCOL_VERSION_SYS_POWER,
++	};
++
++	if (msg->in_size) {
++		scmi_status_response(msg, SCMI_PROTOCOL_ERROR);
++		return;
++	}
++
++	scmi_write_response(msg, &return_values, sizeof(return_values));
++}
++
++static void report_attributes(struct scmi_msg *msg)
++{
++	struct scmi_protocol_attributes_p2a return_values = {
++		.status = SCMI_SUCCESS,
++		.attributes = 0,
++	};
++
++	if (msg->in_size) {
++		scmi_status_response(msg, SCMI_PROTOCOL_ERROR);
++		return;
++	}
++
++	scmi_write_response(msg, &return_values, sizeof(return_values));
++}
++
++static void report_message_attributes(struct scmi_msg *msg)
++{
++	struct scmi_protocol_message_attributes_a2p *in_args = (void *)msg->in;
++	struct scmi_protocol_message_attributes_p2a return_values = {
++		.status = SCMI_SUCCESS,
++		/* For SYSTEM_POWER_STATE_SET: no suspend, no warm reset flags */
++		.attributes = 0,
++	};
++
++	if (msg->in_size != sizeof(*in_args)) {
++		scmi_status_response(msg, SCMI_PROTOCOL_ERROR);
++		return;
++	}
++
++	if (!message_id_is_supported(in_args->message_id)) {
++		scmi_status_response(msg, SCMI_NOT_FOUND);
++		return;
++	}
++
++	scmi_write_response(msg, &return_values, sizeof(return_values));
++}
++
++static void sys_power_state_set(struct scmi_msg *msg)
++{
++	const struct scmi_sys_power_state_set_a2p *in_args = (void *)msg->in;
++	int32_t rc = SCMI_NOT_SUPPORTED;
++
++	if (msg->in_size != sizeof(*in_args)) {
++		scmi_status_response(msg, SCMI_PROTOCOL_ERROR);
++		return;
++	}
++
++	rc = plat_scmi_sys_power_state_set(msg->channel_id, in_args->flags,
++					   in_args->system_state);
++
++	scmi_status_response(msg, rc);
++}
++
++static void sys_power_state_get(struct scmi_msg *msg)
++{
++	uint32_t state = 0;
++	int32_t rc = SCMI_NOT_SUPPORTED;
++	struct scmi_sys_power_state_get_p2a return_values = {
++		.status = SCMI_SUCCESS,
++	};
++
++	if (msg->in_size) {
++		scmi_status_response(msg, SCMI_PROTOCOL_ERROR);
++		return;
++	}
++
++	rc = plat_scmi_sys_power_state_get(msg->channel_id, &state);
++	if (rc) {
++		scmi_status_response(msg, rc);
++		return;
++	}
++
++	return_values.system_state = state;
++
++	scmi_write_response(msg, &return_values, sizeof(return_values));
++}
++
++static const scmi_msg_handler_t scmi_syspower_handler_table[] = {
++	[SCMI_PROTOCOL_VERSION] = report_version,
++	[SCMI_PROTOCOL_ATTRIBUTES] = report_attributes,
++	[SCMI_PROTOCOL_MESSAGE_ATTRIBUTES] = report_message_attributes,
++	[SCMI_SYS_POWER_STATE_SET] = sys_power_state_set,
++	[SCMI_SYS_POWER_STATE_GET] = sys_power_state_get,
++};
++
++static bool message_id_is_supported(unsigned int message_id)
++{
++	return message_id < ARRAY_SIZE(scmi_syspower_handler_table) &&
++	       scmi_syspower_handler_table[message_id];
++}
++
++scmi_msg_handler_t scmi_msg_get_syspower_handler(struct scmi_msg *msg)
++{
++	const size_t array_size = ARRAY_SIZE(scmi_syspower_handler_table);
++	unsigned int message_id = 0;
++
++	if (msg->message_id >= array_size) {
++		DMSG("System power handle not found %u", msg->message_id);
++		return NULL;
++	}
++
++	message_id = confine_array_index(msg->message_id, array_size);
++
++	return scmi_syspower_handler_table[message_id];
++}
+--- /dev/null
++++ b/core/drivers/scmi-msg/system_power.h
+@@ -0,0 +1,63 @@
++/* SPDX-License-Identifier: BSD-3-Clause */
++/*
++ * Copyright (c) 2026, pi-bmc contributors
++ *
++ * SCMI System Power Management Protocol (0x12), lightweight scmi-msg
++ * server. Carries agent-visible system power state: state-change requests
++ * from agents (SYSTEM_POWER_STATE_SET) and the platform's view of the
++ * system state (SYSTEM_POWER_STATE_GET), which a platform can use to
++ * surface a pending power-button request to a polling agent.
++ * SYSTEM_POWER_STATE_NOTIFY needs a P2A notification channel and is not
++ * supported. Modelled on sensor.c.
++ */
++
++#ifndef SCMI_MSG_SYSTEM_POWER_H
++#define SCMI_MSG_SYSTEM_POWER_H
++
++#include <stdint.h>
++#include <util.h>
++
++#include "common.h"
++
++#define SCMI_PROTOCOL_VERSION_SYS_POWER	0x20000
++
++/* SCMI System Power Management Protocol command identifiers */
++enum scmi_sys_power_command_id {
++	SCMI_SYS_POWER_STATE_SET = 0x003,
++	SCMI_SYS_POWER_STATE_GET = 0x004,
++};
++
++/* Architectural system power states (SCMI spec); 0x80000000+ is vendor */
++#define SCMI_SYS_POWER_STATE_SHUTDOWN		0
++#define SCMI_SYS_POWER_STATE_COLD_RESET		1
++#define SCMI_SYS_POWER_STATE_WARM_RESET		2
++#define SCMI_SYS_POWER_STATE_POWER_UP		3
++#define SCMI_SYS_POWER_STATE_SUSPEND		4
++
++/* SYSTEM_POWER_STATE_SET flags */
++#define SCMI_SYS_POWER_FLAG_GRACEFUL		BIT(0)
++
++struct scmi_sys_power_state_set_a2p {
++	uint32_t flags;
++	uint32_t system_state;
++};
++
++struct scmi_sys_power_state_set_p2a {
++	int32_t status;
++};
++
++struct scmi_sys_power_state_get_p2a {
++	int32_t status;
++	uint32_t system_state;
++};
++
++#ifdef CFG_SCMI_MSG_SYSTEM_POWER
++/*
++ * scmi_msg_get_syspower_handler - Return a handler for a system power message
++ * @msg: Input message to be handled
++ * Return a function handler for the message or NULL
++ */
++scmi_msg_handler_t scmi_msg_get_syspower_handler(struct scmi_msg *msg);
++#endif
++
++#endif /* SCMI_MSG_SYSTEM_POWER_H */
+--- a/core/drivers/scmi-msg/entry.c
++++ b/core/drivers/scmi-msg/entry.c
+@@ -18,6 +18,7 @@
+ #include "perf_domain.h"
+ #include "reset_domain.h"
+ #include "sensor.h"
++#include "system_power.h"
+ #include "voltage_domain.h"
+ 
+ /* Provision input message payload buffers for each supported entry channel */
+@@ -95,6 +96,11 @@
+ 		handler = scmi_msg_get_sensor_handler(msg);
+ 		break;
+ #endif
++#ifdef CFG_SCMI_MSG_SYSTEM_POWER
++	case SCMI_PROTOCOL_ID_SYS_POWER:
++		handler = scmi_msg_get_syspower_handler(msg);
++		break;
++#endif
+ 	case SCMI_PROTOCOL_ID_PERF:
+ 		handler = scmi_msg_get_perf_handler(msg);
+ 		break;
+--- a/core/drivers/scmi-msg/sub.mk
++++ b/core/drivers/scmi-msg/sub.mk
+@@ -7,4 +7,5 @@
+ srcs-$(CFG_SCMI_MSG_SENSOR) += sensor.c
+ srcs-$(CFG_SCMI_MSG_SHM_MSG) += shm_msg.c
+ srcs-$(CFG_SCMI_MSG_SMT) += smt.c
++srcs-$(CFG_SCMI_MSG_SYSTEM_POWER) += system_power.c
+ srcs-$(CFG_SCMI_MSG_VOLTAGE_DOMAIN) += voltage_domain.c
+--- a/core/include/drivers/scmi-msg.h
++++ b/core/include/drivers/scmi-msg.h
+@@ -448,6 +448,27 @@
+ int32_t plat_scmi_sensor_reading_get(unsigned int channel_id,
+ 				     unsigned int scmi_id, uint64_t *value);
+ 
++/* Handlers for SCMI System Power Management protocol services */
++
++/*
++ * Agent requests a system power state change (shutdown, reset, ...)
++ * @channel_id: SCMI channel ID
++ * @flags: SYSTEM_POWER_STATE_SET flags (bit 0: graceful)
++ * @system_state: Requested state (SCMI_SYS_POWER_STATE_* or vendor)
++ * Return a compliant SCMI error code
++ */
++int32_t plat_scmi_sys_power_state_set(unsigned int channel_id, uint32_t flags,
++				      uint32_t system_state);
++
++/*
++ * Report the platform's view of the system power state
++ * @channel_id: SCMI channel ID
++ * @system_state: Output state (SCMI_SYS_POWER_STATE_* or vendor)
++ * Return a compliant SCMI error code
++ */
++int32_t plat_scmi_sys_power_state_get(unsigned int channel_id,
++				      uint32_t *system_state);
++
+ /* Handlers for SCMI Performance Domain Management protocol services */
+ 
+ /*
+--- a/mk/config.mk
++++ b/mk/config.mk
+@@ -834,6 +834,8 @@
+ # CFG_SCMI_MSG_CLOCK embeds SCMI clock protocol support.
+ # CFG_SCMI_MSG_RESET_DOMAIN embeds SCMI reset domain protocol support.
+ # CFG_SCMI_MSG_SENSOR embeds SCMI sensor management protocol support.
++# CFG_SCMI_MSG_SYSTEM_POWER embeds SCMI system power management protocol
++# support.
+ # CFG_SCMI_MSG_SMT embeds a SMT header in shared device memory buffers
+ # CFG_SCMI_MSG_VOLTAGE_DOMAIN embeds SCMI voltage domain protocol support.
+ # CFG_SCMI_MSG_PERF_DOMAIN embeds SCMI performance domain management protocol
+@@ -847,6 +849,7 @@
+ CFG_SCMI_MSG_RESET_DOMAIN ?= n
+ CFG_SCMI_MSG_SENSOR ?= n
+ CFG_SCMI_MSG_SHM_MSG ?= n
++CFG_SCMI_MSG_SYSTEM_POWER ?= n
+ CFG_SCMI_MSG_SMT ?= n
+ CFG_SCMI_MSG_SMT_FASTCALL_ENTRY ?= n
+ CFG_SCMI_MSG_SMT_INTERRUPT_ENTRY ?= n

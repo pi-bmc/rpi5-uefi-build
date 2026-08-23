@@ -1,0 +1,48 @@
+From: pi-bmc contributors <nbatkins@gmail.com>
+Subject: [PATCH] plat-rpi5: enable System Power and Clock SCMI protocols
+
+Turns on the System Power (0x12) and Clock (0x14) protocol modules for
+the platform's SCMI server and builds the power-button monitor
+(pwr_button.c) plus the VPU mailbox driver (vpu_mbox.c), both from the
+files/plat-rpi5 overlay. The mailbox is phase-owned: the normal world
+(EDK2's RpiFirmwareDxe) drives it natively through the firmware phase
+and hands it to OP-TEE at ExitBootServices, after which OP-TEE is the
+only user and serves the firmware clocks over SCMI to an OS whose
+device tree carries no native mailbox consumers. Power-state execution
+deliberately stays with the normal-world agents (TF-A rejects PSCI from
+the secure world, and bypassing EDK2 would skip its reset-notification
+variable-store flush).
+
+--- a/core/arch/arm/plat-rpi5/conf.mk
++++ b/core/arch/arm/plat-rpi5/conf.mk
+@@ -52,6 +52,20 @@
+ $(call force,CFG_SCMI_MSG_SMT_FASTCALL_ENTRY,y)
+ CFG_SCMI_MSG_SENSOR ?= y
+ CFG_SCMI_MSG_PERF_DOMAIN ?= y
++# System Power (0x12): surfaces the latched power-button press to polling
++# agents via SYSTEM_POWER_STATE_GET (execution stays with the agents --
++# TF-A rejects PSCI from the secure world). Clock (0x14): read-only view
++# of the RP1 clk_pwm1/clk_sys plus the VPU firmware clocks, served over
++# the secure mailbox once EDK2 hands it over at ExitBootServices
++# (vpu_mbox.c). Served by scmi_server.c + pwr_button.c.
++CFG_SCMI_MSG_SYSTEM_POWER ?= y
++CFG_SCMI_MSG_CLOCK ?= y
++# System Power (0x12): surfaces the latched power-button press to polling
++# agents via SYSTEM_POWER_STATE_GET (execution stays with the agents --
++# TF-A rejects PSCI from the secure world). Clock (0x14): read-only view
++# of the RP1 clk_pwm1/clk_sys. Both served by scmi_server.c + pwr_button.c.
++CFG_SCMI_MSG_SYSTEM_POWER ?= y
++CFG_SCMI_MSG_CLOCK ?= y
+ 
+ # pi-bmc UEFI variables in StMM: the RPi5.fdf NV window of the VPU-loaded FD
+ # (armstub8-2712.bin / RPI_EFI.fd at PA 0), mapped non-secure + cached into
+--- a/core/arch/arm/plat-rpi5/sub.mk
++++ b/core/arch/arm/plat-rpi5/sub.mk
+@@ -4,5 +4,7 @@
+ srcs-y += rp1_i2c.c
+ srcs-y += soc_temp.c
+ srcs-y += bmc_sensor_pta.c
++srcs-y += pwr_button.c
++srcs-y += vpu_mbox.c
+ srcs-$(CFG_SCMI_MSG_DRIVERS) += scmi_server.c
+ srcs-$(CFG_SCMI_MSG_PERF_DOMAIN) += rp1_pwm.c

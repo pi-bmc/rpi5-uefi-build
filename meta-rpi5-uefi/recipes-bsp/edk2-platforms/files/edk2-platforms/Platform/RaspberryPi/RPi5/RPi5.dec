@@ -15,6 +15,11 @@
 [Includes]
   Include
 
+[LibraryClasses]
+  ##  @libraryclass SCMI agent client for the OP-TEE SCMI server (SMT slot
+  #   in the reserved SHM window + SiP doorbell SMC).
+  RpiScmiLib|Include/Library/RpiScmiLib.h
+
 [Guids]
   gRpiPlatformFormSetGuid = { 0x677a7ac5, 0x7d92, 0x4288, { 0x8b, 0xf0, 0x97, 0x04, 0x81, 0x02, 0xd1, 0x1c } }
 

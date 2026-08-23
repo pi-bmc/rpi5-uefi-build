@@ -184,3 +184,13 @@ unsigned int rp1_fan_level_duty255(unsigned int level)
 
 	return fan_duty255[level];
 }
+
+bool rp1_pwm1_clk_enabled(void)
+{
+	vaddr_t clk = clk_base();
+
+	if (!clk)
+		return false;
+
+	return io_read32(clk + CLK_PWM1_CTRL) & CLK_CTRL_ENABLE;
+}

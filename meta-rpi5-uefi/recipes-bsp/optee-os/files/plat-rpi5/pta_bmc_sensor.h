@@ -73,10 +73,28 @@
  */
 #define PTA_BMC_SENSOR_CMD_WAIT		2
 
+/*
+ * PTA_BMC_SENSOR_CMD_MBOX_HANDOFF - Normal world hands the VPU mailbox over
+ *
+ * Invoked by EDK2 at ExitBootServices: from here on OP-TEE is the only
+ * mailbox user (the OS device tree disables the mailbox and firmware
+ * nodes and consumes firmware services over SCMI). One-way; no params.
+ */
+#define PTA_BMC_SENSOR_CMD_MBOX_HANDOFF	3
+
 /* Status flags */
 #define PTA_BMC_SENSOR_STATUS_TEMP_VALID	BIT(0) /* AVS read valid */
 #define PTA_BMC_SENSOR_STATUS_I2C_READY		BIT(1) /* INIT done */
 #define PTA_BMC_SENSOR_STATUS_LAST_PUSH_OK	BIT(2) /* last I2C write ok */
+#define PTA_BMC_SENSOR_STATUS_POWER_BUTTON	BIT(3) /* press latched (sticky) */
+
+/*
+ * Core-internal (pwr_button.c -> bmc_sensor_pta.c): latch the power-button
+ * status bit into the record and push it to the BMC immediately, so the
+ * BMC can act on the press without waiting out the sample period. Safe
+ * from callout context.
+ */
+void bmc_sensor_flag_power_button(void);
 
 /*
  * The record written to the BMC EEPROM at the configured offset.

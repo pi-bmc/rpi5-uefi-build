@@ -40,7 +40,8 @@
   { 0x575d6607, 0x5a2b, 0x4384, \
     { 0x82, 0x7e, 0xc1, 0x6a, 0x25, 0xac, 0x4f, 0xa5 } }
 
-#define PTA_BMC_SENSOR_CMD_INIT  0
+#define PTA_BMC_SENSOR_CMD_INIT          0
+#define PTA_BMC_SENSOR_CMD_MBOX_HANDOFF  3
 
 //
 // The pi-bmc EEPROM wire contract: BMC-emulated 24c256 at 0x50 on RP1
@@ -61,6 +62,7 @@ STATIC CONST EFI_GUID  mPtaBmcSensorGuid = PTA_BMC_SENSOR_UUID;
 
 STATIC EFI_EVENT  mRp1BusEvent;
 STATIC VOID       *mRp1BusRegistration;
+STATIC EFI_EVENT  mExitBootServicesEvent;
 
 STATIC
 EFI_STATUS
@@ -198,6 +200,50 @@ OnRp1BusInstalled (
   mRp1BusEvent = NULL;
 }
 
+/**
+  ExitBootServices: hand the VPU mailbox to OP-TEE. Until this moment the
+  normal world (RpiFirmwareDxe) drives the mailbox natively; from here on
+  OP-TEE is its ONLY user -- the OS device tree disables the mailbox and
+  firmware nodes and consumes the firmware services (clocks, later PMIC
+  telemetry) over SCMI. Best-effort: on failure OP-TEE simply keeps
+  refusing mailbox-backed SCMI requests, which the agents treat as
+  "not available" rather than an error.
+**/
+STATIC
+VOID
+EFIAPI
+OnExitBootServices (
+  IN EFI_EVENT  Event,
+  IN VOID       *Context
+  )
+{
+  EFI_STATUS                 Status;
+  OPTEE_OPEN_SESSION_ARG     OpenArg;
+  OPTEE_INVOKE_FUNCTION_ARG  InvokeArg;
+
+  ZeroMem (&OpenArg, sizeof (OpenArg));
+  CopyGuid (&OpenArg.Uuid, &mPtaBmcSensorGuid);
+  Status = OpteeOpenSession (&OpenArg);
+  if (EFI_ERROR (Status) || (OpenArg.Return != OPTEE_SUCCESS)) {
+    DEBUG ((DEBUG_ERROR, "RpiOpteeSensor: handoff session failed - %r\n", Status));
+    return;
+  }
+
+  ZeroMem (&InvokeArg, sizeof (InvokeArg));
+  InvokeArg.Function = PTA_BMC_SENSOR_CMD_MBOX_HANDOFF;
+  InvokeArg.Session  = OpenArg.Session;
+
+  Status = OpteeInvokeFunction (&InvokeArg);
+  DEBUG ((
+    DEBUG_INFO,
+    "RpiOpteeSensor: VPU mailbox handed to OP-TEE - %r (TEE ret %x)\n",
+    Status,
+    InvokeArg.Return
+    ));
+
+  OpteeCloseSession (OpenArg.Session);
+}
+
 EFI_STATUS
 EFIAPI
 RpiOpteeSensorInitialize (
@@ -241,6 +287,23 @@ RpiOpteeSensorInitialize (
   // Cover the case where Rp1BusDxe already started before us.
   //
   gBS->SignalEvent (mRp1BusEvent);
+
+  Status = gBS->CreateEventEx (
+                  EVT_NOTIFY_SIGNAL,
+                  TPL_NOTIFY,
+                  OnExitBootServices,
+                  NULL,
+                  &gEfiEventExitBootServicesGuid,
+                  &mExitBootServicesEvent
+                  );
+  if (EFI_ERROR (Status)) {
+    DEBUG ((
+      DEBUG_ERROR,
+      "RpiOpteeSensor: no EBS event - %r; "
+      "VPU mailbox will not be handed to OP-TEE\n",
+      Status
+      ));
+  }
 
   return EFI_SUCCESS;
 }

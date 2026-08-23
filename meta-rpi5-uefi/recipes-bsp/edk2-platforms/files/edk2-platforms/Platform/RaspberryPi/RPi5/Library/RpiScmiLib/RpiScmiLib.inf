@@ -1,0 +1,36 @@
+## @file
+#
+#  SCMI agent client for the OP-TEE SCMI server (SMT slot in the reserved
+#  SHM window + SiP doorbell SMC). See RpiScmiLib.h.
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+#
+##
+
+[Defines]
+  INF_VERSION                    = 0x0001001A
+  BASE_NAME                      = RpiScmiLib
+  FILE_GUID                      = e1b40c58-9f26-4d73-a0b9-52c8e7d13f46
+  MODULE_TYPE                    = DXE_DRIVER
+  VERSION_STRING                 = 1.0
+  LIBRARY_CLASS                  = RpiScmiLib|DXE_DRIVER DXE_RUNTIME_DRIVER
+
+[Sources]
+  RpiScmiLib.c
+
+[Packages]
+  ArmPkg/ArmPkg.dec
+  MdePkg/MdePkg.dec
+  Platform/RaspberryPi/RPi5/RPi5.dec
+
+[LibraryClasses]
+  ArmSmcLib
+  BaseMemoryLib
+  DebugLib
+  DxeServicesTableLib
+  PcdLib
+
+[FixedPcd]
+  gRpiOpteeTokenSpaceGuid.PcdOpteeShmSize
+  gRpiOpteeTokenSpaceGuid.PcdOpteeTzdramBase
+  gRpiOpteeTokenSpaceGuid.PcdOpteeTzdramSize

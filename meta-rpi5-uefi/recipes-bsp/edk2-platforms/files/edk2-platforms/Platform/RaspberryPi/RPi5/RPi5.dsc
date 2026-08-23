@@ -440,6 +440,12 @@
   Rp1GpioLib|Silicon/RaspberryPi/RpiSiliconPkg/Library/Rp1GpioLib/Rp1GpioLib.inf
 
   #
+  # SCMI agent wire to OP-TEE's server, shared by ActiveCoolerScmiDxe and
+  # PowerButtonScmiDxe. See RpiScmiLib.h for the cross-component contract.
+  #
+  RpiScmiLib|Platform/RaspberryPi/RPi5/Library/RpiScmiLib/RpiScmiLib.inf
+
+  #
   # Setup theme for the HII browser -- colours and layout for this board
   # family's pages. Overrides MdeModulePkg's stock CustomizedDisplayLib.
   #
@@ -1007,7 +1013,7 @@
   # variables published for the BMC.
   #
   Platform/RaspberryPi/RPi5/Drivers/BootloaderConfigDxe/BootloaderConfigDxe.inf
-  Platform/RaspberryPi/RPi5/Drivers/PowerButtonDxe/PowerButtonDxe.inf
+  Platform/RaspberryPi/RPi5/Drivers/PowerButtonScmiDxe/PowerButtonScmiDxe.inf
   Platform/RaspberryPi/RPi5/Drivers/ActiveCoolerScmiDxe/ActiveCoolerScmiDxe.inf
   Platform/RaspberryPi/RPi5/Drivers/FanConfigDxe/FanConfigDxe.inf
 !if $(RPI5_OPTEE) == TRUE

@@ -30,6 +30,8 @@ SRC_URI = "git://github.com/OP-TEE/optee_os.git;protocol=https;nobranch=1 \
            file://0001-plat-rpi5-wire-up-GIC-secure-timer-callouts-and-the-.patch \
            file://0002-scmi-msg-add-Sensor-Management-protocol-0x15.patch \
            file://0003-plat-rpi5-map-the-UEFI-varstore-FD-window-into-the-S.patch \
+           file://0004-scmi-msg-add-System-Power-protocol-0x12.patch \
+           file://0005-plat-rpi5-enable-System-Power-and-Clock-SCMI-protoco.patch \
            "
 # Tag 4.10.0. The files/plat-rpi5/ overlay directory merges into the
 # checkout's core/arch/arm/plat-rpi5/ during do_unpack (new files only;

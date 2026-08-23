@@ -1,27 +1,25 @@
-From: pi-bmc <nbatkins@gmail.com>
+From: pi-bmc contributors <nbatkins@gmail.com>
 Subject: [PATCH] rpi5: forward the SCMI doorbell SiP SMC into OP-TEE
 
 Linux's arm,scmi-smc transport rings a fast SiP SMC after writing the
-message into the static SMT page; the SCMI server lives in OP-TEE. Add a
-SiP runtime service (the OEN is otherwise unused here -- the PCI config
-SMCs are Standard Service calls dispatched by std_svc_setup.c) that
+SCMI message into the static SMT page; TF-A's SiP runtime service
 forwards RPI_SIP_SCMI_AGENT0 (0x82000010) into OP-TEE's fast-SMC vector,
-mirroring opteed_smc_handler's fresh-request path via the dispatcher's
-exported per-core contexts. OP-TEE returns through the normal
-TEESMC_OPTEED_RETURN_CALL_DONE leg, which lands the results straight
-back in the non-secure caller. Only fast calls are forwarded, and only
-once OP-TEE is resident on the calling core.
+where OP-TEE's plat-rpi5 tee_entry_fast override runs the SCMI server.
 
-Applies on top of 0001 (SPD=opteed support); compiled out entirely when
-SPD is not opteed.
+The service also exposes two secure-caller-only power FIDs
+(RPI_SIP_SYSTEM_OFF 0x82000011 / RPI_SIP_SYSTEM_RESET 0x82000012):
+OP-TEE's plat-rpi5 power service rings these to power off / reset the
+board from the power-button monitor and SCMI SYSTEM_POWER_STATE_SET,
+since the secure world cannot call PSCI directly. They wrap the
+platform's own psci_plat_pm_ops->system_off/system_reset and are
+rejected from the normal world (which uses PSCI proper).
 
----
 diff --git a/plat/rpi/common/rpi_scmi_svc.c b/plat/rpi/common/rpi_scmi_svc.c
 new file mode 100644
-index 000000000..f0a121f6b
+index 0000000..1111111
 --- /dev/null
 +++ b/plat/rpi/common/rpi_scmi_svc.c
-@@ -0,0 +1,126 @@
+@@ -0,0 +1,166 @@
 +/*
 + * Copyright (c) 2026, pi-bmc contributors
 + *
@@ -54,11 +52,16 @@ index 000000000..f0a121f6b
 +#include <common/debug.h>
 +#include <common/runtime_svc.h>
 +#include <lib/el3_runtime/context_mgmt.h>
++#include <lib/psci/psci.h>
 +#include <lib/smccc.h>
 +#include <plat/common/platform.h>
 +#include <smccc_helpers.h>
 +
 +#include "opteed_private.h"
++
++/* Platform PSCI ops table registered via psci_setup(); carries the
++ * board's system_off/system_reset (rpi3_system_off/reset). */
++extern const plat_psci_ops_t *psci_plat_pm_ops;
 +
 +/* Standard SiP service queries */
 +#define RPI_SIP_SVC_CALL_COUNT	U(0x8200ff00)
@@ -72,7 +75,18 @@ index 000000000..f0a121f6b
 + */
 +#define RPI_SIP_SCMI_AGENT0	U(0x82000010)
 +
-+#define RPI_SIP_NUM_CALLS	U(1)
++/*
++ * Secure-caller-only system power actions. OP-TEE's plat-rpi5 power
++ * service (pwr_button.c) rings these to power off / reset the board: the
++ * secure world cannot call PSCI directly (the PSCI SMC handler rejects
++ * secure callers), so EL3 exposes thin wrappers over the platform's own
++ * psci_plat_pm_ops->system_off/system_reset. Rejected from the normal
++ * world, which has PSCI proper. Keep in step with OP-TEE plat-rpi5.
++ */
++#define RPI_SIP_SYSTEM_OFF	U(0x82000011)
++#define RPI_SIP_SYSTEM_RESET	U(0x82000012)
++
++#define RPI_SIP_NUM_CALLS	U(3)
 +#define RPI_SIP_VERSION_MAJOR	U(1)
 +#define RPI_SIP_VERSION_MINOR	U(0)
 +
@@ -117,8 +131,32 @@ index 000000000..f0a121f6b
 +				     u_register_t x4, void *cookie,
 +				     void *handle, u_register_t flags)
 +{
++	/*
++	 * Secure-caller-only power actions come from OP-TEE and are handled
++	 * before the reject-secure guard below (which gates the NS-facing
++	 * calls). A non-secure caller of these FIDs falls through to that
++	 * guard's rejection.
++	 */
 +	if (is_caller_secure(flags)) {
-+		SMC_RET1(handle, SMC_UNK);
++		switch (smc_fid) {
++		case RPI_SIP_SYSTEM_OFF:
++			if ((psci_plat_pm_ops != NULL) &&
++			    (psci_plat_pm_ops->system_off != NULL)) {
++				psci_plat_pm_ops->system_off();
++			}
++			/* system_off is __dead2; only here if it returned */
++			SMC_RET1(handle, SMC_UNK);
++
++		case RPI_SIP_SYSTEM_RESET:
++			if ((psci_plat_pm_ops != NULL) &&
++			    (psci_plat_pm_ops->system_reset != NULL)) {
++				psci_plat_pm_ops->system_reset();
++			}
++			SMC_RET1(handle, SMC_UNK);
++
++		default:
++			SMC_RET1(handle, SMC_UNK);
++		}
 +	}
 +
 +	switch (smc_fid) {

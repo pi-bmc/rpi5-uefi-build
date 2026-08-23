@@ -1,0 +1,45 @@
+## @file
+#
+#  PowerButtonScmiDxe - act on the Pi 5 power button through OP-TEE's SCMI
+#  System Power protocol (the secure world owns the GIO edge latch),
+#  honoring POWER_OFF_ON_HALT from the bootloader EEPROM config. Successor
+#  to PowerButtonDxe (kept in the tree, unbuilt, as the direct-GIO
+#  reference for OP-TEE-less configurations).
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+#
+##
+
+[Defines]
+  INF_VERSION                    = 0x0001001A
+  BASE_NAME                      = PowerButtonScmiDxe
+  FILE_GUID                      = b57d90e2-3c48-4f1a-8d26-70a19e5c4b83
+  MODULE_TYPE                    = DXE_DRIVER
+  VERSION_STRING                 = 1.0
+  ENTRY_POINT                    = PowerButtonScmiEntryPoint
+
+[Sources]
+  PowerButtonScmiDxe.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  Platform/RaspberryPi/RPi5/RPi5.dec
+  Platform/RaspberryPi/RaspberryPi.dec
+
+[LibraryClasses]
+  BaseLib
+  BaseMemoryLib
+  DebugLib
+  FdtLib
+  MemoryAllocationLib
+  PcdLib
+  RpiScmiLib
+  UefiBootServicesTableLib
+  UefiDriverEntryPoint
+  UefiRuntimeServicesTableLib
+
+[FixedPcd]
+  gRaspberryPiTokenSpaceGuid.PcdFdtBaseAddress  ## CONSUMES
+
+[Depex]
+  gEfiResetArchProtocolGuid
