@@ -202,9 +202,20 @@ READ_LOCK_STATUS   = TRUE
   INF MdeModulePkg/Core/RuntimeDxe/RuntimeDxe.inf
   INF MdeModulePkg/Universal/SecurityStubDxe/SecurityStubDxe.inf
   INF MdeModulePkg/Universal/CapsuleRuntimeDxe/CapsuleRuntimeDxe.inf
+!if $(RPI5_OPTEE_VARS) == TRUE
+  #
+  # UEFI variables live in OP-TEE-mediated RPMB: the DXE side is only the MM
+  # variable proxy over the StMM secure partition (see the matching
+  # [Components] block in RPi5.dsc). Fault-tolerant write and the actual store
+  # run inside StMM (BL32_AP_MM.fd), not here.
+  #
+  INF Platform/RaspberryPi/RPi5/Drivers/MmCommunicationOpteeDxe/MmCommunicationOpteeDxe.inf
+  INF MdeModulePkg/Universal/Variable/RuntimeDxe/VariableSmmRuntimeDxe.inf
+!else
   INF Platform/RaspberryPi/Drivers/VarBlockServiceDxe/VarBlockServiceDxe.inf
   INF MdeModulePkg/Universal/FaultTolerantWriteDxe/FaultTolerantWriteDxe.inf
   INF MdeModulePkg/Universal/Variable/RuntimeDxe/VariableRuntimeDxe.inf
+!endif
 !if $(SECURE_BOOT_ENABLE) == TRUE
 !include ArmPlatformPkg/SecureBootDefaultKeys.fdf.inc
   INF SecurityPkg/VariableAuthenticated/SecureBootConfigDxe/SecureBootConfigDxe.inf

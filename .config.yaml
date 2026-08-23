@@ -1,5 +1,7 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/siemens/kas/refs/heads/master/kas/schema-kas.json
+
 # kas configuration for the standalone Raspberry Pi 5 UEFI firmware build
-# Usage: kas build kas.yml           -> deploys rpi5-uefi-sd.img (flashable SD
+# Usage: kas build                         -> deploys rpi5-uefi-sd.img (flashable SD
 #        image: armstub8-2712.bin + config.txt + DTBs + overlays on one FAT32
 #        boot partition) plus the raw RPI_EFI.fd/armstub8-2712.bin artifacts,
 #        under build/tmp/deploy/images/raspberrypi5-uefi/
@@ -15,7 +17,7 @@ target: rpi5-uefi-sdimg
 build_system: openembedded
 
 # Forwarded to bitbake as BB_ENV_PASSTHROUGH_ADDITIONS, so that
-#   RPI5_FMP=1 kas build kas.yml
+#   RPI5_FMP=1 kas build
 # reaches the rpi5-uefi-firmware recipe. kas builds an otherwise clean
 # environment: without this block those assignments are accepted by the shell,
 # never seen by bitbake, and the build quietly comes out with FMP off. Null
@@ -57,11 +59,27 @@ local_conf_header:
     # RELEASE (default), DEBUG or NOOPT. Bring-up used DEBUG for the serial
     # DEBUG() stream and the 0xAF freed-pool fill; flip back when chasing
     # crashes.
-    RPI5_BUILD_TARGET = "RELEASE"
+    # TEMP debug: DEBUG target so our MmCommunicationOpteeDxe/ReeFs DEBUG()
+    # output is compiled in (RELEASE uses BaseDebugLibNull + -DMDEPKG_NDEBUG and
+    # strips every DEBUG()). Paired with DEBUG_PRINT_ERROR_LEVEL=0x80000002
+    # (RPi5.dsc) so only ERROR/WARN print -> the "REEFS:" trace is legible and
+    # boot isn't drowned in DEBUG_INFO. Revert to RELEASE once the REE-FS store
+    # path is confirmed.
+    RPI5_BUILD_TARGET = "DEBUG"
     # Build ShellPkg's Dp command into the firmware: `dp` at the UEFI shell
     # then prints per-driver init times (the platform already records the
     # measurements). Set to "0" to drop it and reclaim the FV space.
     PROFILING_ENABLED = "0"
+    RPI5_OPTEE_STMM = "1"
+    RPI5_OPTEE_STMM_BACKEND = "reefs"
+    RPI5_OPTEE_VARS = "1"
+    # TEMP debug: LOG_LEVEL=3 + CFG_TEE_CORE_DEBUG so OP-TEE narrates the StMM
+    # SP bring-up (prints "stmm load address 0x...", every FF-A FID the SP
+    # invokes, and a symbolised abort dump). StMM itself is built with
+    # BaseDebugLibNull/BaseSerialPortLibNull and is silent, so this OP-TEE-side
+    # trace is the only window into the S-EL0 NULL-deref. Revert to "0" once the
+    # crash is localised. If tee-raw.bin now trips the 0x80000 size guard, tell me.
+    OPTEE_DEBUG = "1"
     # Shared download and sstate directories (can be overridden per user)
     DL_DIR = "/opt/yocto/downloads"
     SSTATE_DIR = "/opt/yocto/sstate-cache"

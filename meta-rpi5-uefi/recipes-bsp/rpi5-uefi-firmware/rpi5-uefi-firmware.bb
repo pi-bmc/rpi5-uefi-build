@@ -170,6 +170,26 @@ RPI5_SECURE_BOOT_DEFAULT_KEYS ??= "1"
 # SECUREBOOT_KEYS_DIR it installs into.
 SECUREBOOT_KEYS_DIR = "${STAGING_DATADIR}/secureboot-keys"
 
+# Store UEFI variables in OP-TEE-mediated RPMB (StMM secure partition) instead
+# of the FD-backed VarBlockServiceDxe: passes -D RPI5_OPTEE_VARS=TRUE, which in
+# RPi5.dsc/.fdf swaps VarBlockServiceDxe + VariableRuntimeDxe for
+# MmCommunicationOpteeDxe + VariableSmmRuntimeDxe (the store, its auth handling
+# and fault-tolerant write run inside StMM). Requires OP-TEE built with the
+# StMM FV embedded -- set RPI5_OPTEE_STMM=1 in the optee-os recipe too.
+#
+# OFF by default: the normal-world RPMB frame transport
+# (MmCommunicationOpteeDxe/Rpmb.c) is not wired to a block device yet, so
+# turning this on leaves the variable store non-functional. It exists so the
+# transport + variable-stack swap build together; do not ship it on until the
+# RPMB backend lands.
+RPI5_OPTEE_VARS ??= "1"
+
+# Flipping this knob must rebuild the firmware: it changes the -D define that
+# swaps the DXE variable stack in RPi5.dsc/.fdf. Make the build dependency
+# explicit so a change in kas.yml/local.conf always invalidates do_compile
+# rather than risking an sstate hit that ships the old variable stack.
+do_compile[vardeps] += "RPI5_OPTEE_VARS"
+
 # RELEASE, DEBUG or NOOPT, per RPi5.dsc's [Defines] BUILD_TARGETS.
 RPI5_BUILD_TARGET ??= "RELEASE"
 
@@ -621,6 +641,13 @@ do_compile() {
         fi
     fi
 
+    # UEFI variables in OP-TEE-mediated RPMB (StMM). Off by default; requires
+    # the OP-TEE build to embed the StMM FV (RPI5_OPTEE_STMM=1 in optee-os).
+    optee_vars_define=""
+    if [ "${RPI5_OPTEE_VARS}" = "1" ]; then
+        optee_vars_define="-D RPI5_OPTEE_VARS=TRUE"
+    fi
+
     # No -D TFA_BUILD_ARTIFACTS: bl31.bin reaches the FD through edk2-non-osi,
     # at the path RPi5.dsc's !ifndef branch already names. See the
     # PACKAGES_PATH note above.
@@ -631,6 +658,7 @@ do_compile() {
         ${redfish_client_define} \
         ${profiling_define} \
         ${secure_boot_define} \
+        ${optee_vars_define} \
         --pcd gEfiMdeModulePkgTokenSpaceGuid.PcdFirmwareVersionString=L"${RPI5_FW_VERSION}" \
         ${fmp_pcds} \
         ${RPI5_EDK2_EXTRA_FLAGS} \

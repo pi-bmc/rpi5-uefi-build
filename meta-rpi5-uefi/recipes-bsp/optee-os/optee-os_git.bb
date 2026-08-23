@@ -65,9 +65,21 @@ RPI5_OPTEE_STMM ??= "0"
 STMM_FV = "${STAGING_DATADIR}/edk2-standalone-mm/BL32_AP_MM.fd"
 DEPENDS += "${@'edk2-standalone-mm' if d.getVar('RPI5_OPTEE_STMM') == '1' else ''}"
 
-# CFG_RPMB_TESTKEY: use the well-known RPMB test key so a build/boot works
-# before a real HUK is wired to the BCM2712 OTP -- INSECURE, measurement only.
-STMM_MAKE_ARGS = "${@('CFG_RPMB_FS=y CFG_RPMB_TESTKEY=y CFG_STMM_PATH=%s' % d.getVar('STMM_FV')) if d.getVar('RPI5_OPTEE_STMM') == '1' else ''}"
+# Secure-storage backend for the StMM variable object (EFI_VARS):
+#   rpmb  - RPMB filesystem (CFG_RPMB_FS). Real hardware anti-rollback, but
+#           needs an RPMB-capable device (eMMC/CM5). CFG_RPMB_TESTKEY uses the
+#           well-known key until a HUK is wired to BCM2712 OTP -- INSECURE.
+#   reefs - REE filesystem (CFG_REE_FS, OP-TEE default). OP-TEE encrypts +
+#           hash-tree-integrity-protects the blob and stores it in the NORMAL
+#           world via the FS RPC (serviced by MmCommunicationOpteeDxe's ReeFs
+#           backend on the ESP). Works on a plain SD, but gives NO hardware
+#           anti-rollback (the on-disk state can be rolled back) -- see the
+#           note in Rpmb.c/ReeFs.c. This is OP-TEE's own "no RPMB" answer.
+# The two differ only in which storage id stmm_sp.c passes to sec_storage; the
+# reefs redirect is applied in do_compile (idempotent sed), keyed on this knob.
+RPI5_OPTEE_STMM_BACKEND ??= "rpmb"
+STMM_STORAGE_ARGS = "${@'CFG_RPMB_FS=y CFG_RPMB_TESTKEY=y' if d.getVar('RPI5_OPTEE_STMM_BACKEND') == 'rpmb' else 'CFG_REE_FS=y'}"
+STMM_MAKE_ARGS = "${@('%s CFG_STMM_PATH=%s' % (d.getVar('STMM_STORAGE_ARGS'), d.getVar('STMM_FV'))) if d.getVar('RPI5_OPTEE_STMM') == '1' else ''}"
 
 # tee-raw.bin must fit the FD region TF-A copies verbatim (RPi5.fdf tee region
 # is 0x80000). Embedded StMM measured ~290KB, so it fits -- keep the guard at
@@ -75,6 +87,15 @@ STMM_MAKE_ARGS = "${@('CFG_RPMB_FS=y CFG_RPMB_TESTKEY=y CFG_STMM_PATH=%s' % d.ge
 OPTEE_MAX_SIZE ??= "0x80000"
 # Decimal form for the shell size check (bitbake's shell parser rejects $(( ))).
 OPTEE_MAX_BYTES = "${@int(d.getVar('OPTEE_MAX_SIZE'), 0)}"
+
+# Flipping these knobs (in kas.yml/local.conf) must rebuild the core: they
+# decide whether StMM is embedded and which secure-storage backend its
+# stmm_sp.c is patched for. bitbake's automatic signature tracking does pick up
+# the shell ${VAR} refs and literal d.getVar() uses, but the do_compile sed and
+# the inline-python STMM_MAKE_ARGS make that fragile -- so make the dependency
+# explicit and self-documenting. Without this a knob change could be masked by
+# an sstate hit and silently ship the wrong storage backend.
+do_compile[vardeps] += "RPI5_OPTEE_STMM RPI5_OPTEE_STMM_BACKEND"
 
 do_configure[noexec] = "1"
 
@@ -92,6 +113,19 @@ do_compile() {
     # keep bitbake's target sysroot flags out of the freestanding core
     # build, same as the arm-trusted-firmware recipe.
     unset CC CXX CPP AS AR LD RANLIB STRIP OBJCOPY CFLAGS CXXFLAGS CPPFLAGS LDFLAGS
+
+    # REE-FS backend: point the StMM storage service at TEE_STORAGE_PRIVATE_REE
+    # instead of _RPMB. stmm_sp.c hardcodes RPMB at the two sec_storage calls in
+    # stmm_handle_storage_service(); redirect only those (NOT the __FFA_SVC_RPMB
+    # case labels). Idempotent -- a second run finds no RPMB in those lines.
+    if [ "${RPI5_OPTEE_STMM}" = "1" ] && [ "${RPI5_OPTEE_STMM_BACKEND}" = "reefs" ]; then
+        sed -i \
+            -e 's/sec_storage_obj_read(TEE_STORAGE_PRIVATE_RPMB,/sec_storage_obj_read(TEE_STORAGE_PRIVATE_REE,/' \
+            -e 's/sec_storage_obj_write(TEE_STORAGE_PRIVATE_RPMB,/sec_storage_obj_write(TEE_STORAGE_PRIVATE_REE,/' \
+            "${S}/core/arch/arm/kernel/stmm_sp.c"
+        grep -q "sec_storage_obj_read(TEE_STORAGE_PRIVATE_REE," "${S}/core/arch/arm/kernel/stmm_sp.c" || \
+            bbfatal "REE-FS storage redirect sed matched nothing -- stmm_sp.c changed upstream; fix the sed"
+    fi
 
     oe_runmake -C ${S} O=${B}/out \
         PLATFORM=rpi5 \

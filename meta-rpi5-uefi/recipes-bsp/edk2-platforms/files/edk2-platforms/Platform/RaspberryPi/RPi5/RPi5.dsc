@@ -32,7 +32,7 @@
   #
   DEFINE SECURE_BOOT_ENABLE      = FALSE
   DEFINE INCLUDE_TFTP_COMMAND    = FALSE
-  DEFINE DEBUG_PRINT_ERROR_LEVEL = 0x8000004F
+  DEFINE DEBUG_PRINT_ERROR_LEVEL = 0x80000002
 
   #
   # OP-TEE (BL32) integration: embeds tee-raw.bin in the FD (see RPi5.fdf),
@@ -42,6 +42,13 @@
   # firmware recipe keeps the two in step via its RPI5_OPTEE knob.
   #
   DEFINE RPI5_OPTEE              = TRUE
+
+  # Store UEFI variables in OP-TEE-mediated RPMB via the StMM secure partition
+  # instead of the FD-backed VarBlockServiceDxe. Requires RPI5_OPTEE=TRUE and
+  # OP-TEE built with the StMM FV embedded (RPI5_OPTEE_STMM=1 in the optee-os
+  # recipe). Off by default: the RPMB frame backend is not wired yet, so
+  # turning this on without it leaves the variable store non-functional.
+  DEFINE RPI5_OPTEE_VARS         = FALSE
 
 !ifndef TFA_BUILD_ARTIFACTS
   #
@@ -724,6 +731,19 @@
   #
   ArmPkg/Drivers/CpuDxe/CpuDxe.inf
   MdeModulePkg/Core/RuntimeDxe/RuntimeDxe.inf
+!if $(RPI5_OPTEE_VARS) == TRUE
+  #
+  # UEFI variables via OP-TEE + RPMB. The store, its authenticated-variable
+  # handling and fault-tolerant write all run inside the StMM secure partition
+  # (BL32_AP_MM.fd, built by the edk2-standalone-mm recipe and embedded in
+  # OP-TEE); the DXE side is only the MM variable proxy on top of the OP-TEE
+  # StMM MM transport. NOTE: RPMB frame transport to the block device is not
+  # wired yet (see MmCommunicationOpteeDxe/Rpmb.c), so enabling this without
+  # that backend leaves variables non-functional -- hence it is opt-in.
+  #
+  Platform/RaspberryPi/RPi5/Drivers/MmCommunicationOpteeDxe/MmCommunicationOpteeDxe.inf
+  MdeModulePkg/Universal/Variable/RuntimeDxe/VariableSmmRuntimeDxe.inf
+!else
   Platform/RaspberryPi/Drivers/VarBlockServiceDxe/VarBlockServiceDxe.inf
   MdeModulePkg/Universal/FaultTolerantWriteDxe/FaultTolerantWriteDxe.inf {
     <LibraryClasses>
@@ -735,6 +755,7 @@
       NULL|MdeModulePkg/Library/VarCheckUefiLib/VarCheckUefiLib.inf
       DebugLib|MdePkg/Library/BaseDebugLibNull/BaseDebugLibNull.inf
   }
+!endif
 !if $(SECURE_BOOT_ENABLE) == TRUE
   MdeModulePkg/Universal/SecurityStubDxe/SecurityStubDxe.inf {
     <LibraryClasses>

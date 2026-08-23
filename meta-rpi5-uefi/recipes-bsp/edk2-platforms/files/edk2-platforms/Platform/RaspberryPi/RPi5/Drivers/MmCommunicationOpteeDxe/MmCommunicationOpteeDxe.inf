@@ -1,0 +1,55 @@
+#/** @file
+#
+#  EFI_MM_COMMUNICATION2_PROTOCOL over the OP-TEE StandaloneMM (StMM) secure
+#  partition. Opens the PTA_STMM pseudo-TA session and relays MM communication
+#  buffers to StMM, servicing the OP-TEE normal-world RPC loop (shared memory +
+#  the storage backend) so the StMM variable service can reach its store. Both
+#  secure-storage backends are serviced: RPMB frames (Rpmb.c, for eMMC) and the
+#  REE filesystem (ReeFs.c, OP-TEE-encrypted files on the boot FAT volume);
+#  which one OP-TEE uses is a build-time choice in the optee-os recipe.
+#
+#  Copyright (c) 2026, pi-bmc contributors
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+#
+#**/
+
+[Defines]
+  INF_VERSION                    = 0x0001001A
+  BASE_NAME                      = MmCommunicationOpteeDxe
+  FILE_GUID                      = 6b2f1d84-0c3a-4f57-9a2e-7d5c8b1f4e02
+  MODULE_TYPE                    = DXE_DRIVER
+  VERSION_STRING                 = 1.0
+  ENTRY_POINT                    = MmCommunicationOpteeInitialize
+
+[Sources]
+  MmCommunicationOptee.c
+  MmCommunicationOptee.h
+  Rpmb.c
+  ReeFs.c
+
+[Packages]
+  ArmPkg/ArmPkg.dec
+  MdePkg/MdePkg.dec
+
+[LibraryClasses]
+  ArmSmcLib
+  BaseLib
+  BaseMemoryLib
+  DebugLib
+  MemoryAllocationLib
+  OpteeLib
+  UefiBootServicesTableLib
+  UefiDriverEntryPoint
+
+[Guids]
+  gEfiFileInfoGuid                              ## CONSUMES
+
+[Protocols]
+  gEfiMmCommunication2ProtocolGuid              ## PRODUCES
+  gEfiSdMmcPassThruProtocolGuid                 ## CONSUMES
+  gEfiSimpleFileSystemProtocolGuid              ## CONSUMES
+  gEfiBlockIoProtocolGuid                       ## CONSUMES
+
+[Depex]
+  TRUE
