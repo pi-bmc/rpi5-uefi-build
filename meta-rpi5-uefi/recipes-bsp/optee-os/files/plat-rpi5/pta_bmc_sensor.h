@@ -87,6 +87,7 @@
 #define PTA_BMC_SENSOR_STATUS_I2C_READY		BIT(1) /* INIT done */
 #define PTA_BMC_SENSOR_STATUS_LAST_PUSH_OK	BIT(2) /* last I2C write ok */
 #define PTA_BMC_SENSOR_STATUS_POWER_BUTTON	BIT(3) /* press latched (sticky) */
+#define PTA_BMC_SENSOR_STATUS_THROTTLE_VALID	BIT(4) /* throttle word valid */
 
 /*
  * Core-internal (pwr_button.c -> bmc_sensor_pta.c): latch the power-button
@@ -100,18 +101,40 @@ void bmc_sensor_flag_power_button(void);
 #define BMC_SENSOR_FAN_VALID		BIT(0)	/* fan block populated */
 
 /*
+ * throttle word bits (version 3): the firmware GET_THROTTLED response
+ * (RPI_FIRMWARE_GET_THROTTLED, VPU mailbox property tag 0x00030046), valid
+ * only when PTA_BMC_SENSOR_STATUS_THROTTLE_VALID is set. The low bits are the
+ * conditions active right now; the high bits latch that the condition has
+ * happened at least once since boot. Under-voltage and current limiting are
+ * the PMIC's (DA9091) signals as the VPU reads them -- the one PMIC-sourced
+ * health telemetry reachable without a VCHIQ gencmd stack; the soft
+ * temperature limit is the SoC thermal block's.
+ */
+#define BMC_SENSOR_THROTTLE_UNDERVOLT		BIT(0)	/* under-voltage now */
+#define BMC_SENSOR_THROTTLE_FREQ_CAPPED		BIT(1)	/* arm freq capped now */
+#define BMC_SENSOR_THROTTLE_THROTTLED		BIT(2)	/* throttled now */
+#define BMC_SENSOR_THROTTLE_SOFT_TEMP		BIT(3)	/* soft temp limit now */
+#define BMC_SENSOR_THROTTLE_UNDERVOLT_EVER	BIT(16)	/* under-voltage occurred */
+#define BMC_SENSOR_THROTTLE_FREQ_CAPPED_EVER	BIT(17)	/* freq capping occurred */
+#define BMC_SENSOR_THROTTLE_THROTTLED_EVER	BIT(18)	/* throttling occurred */
+#define BMC_SENSOR_THROTTLE_SOFT_TEMP_EVER	BIT(19)	/* soft temp limit occurred */
+
+/*
  * The record written to the BMC EEPROM at the configured offset.
  * Little-endian, 48 bytes, one 64-byte EEPROM page. Every field is
  * naturally aligned, so the struct has no padding and sizeof() == 48.
  *
  * Version 2 appended the fan block (level/duty/rpm) and reserved words so
  * all telemetry the BMC reports rides one I2C write; the version-1 layout
- * ended at the first reserved word (32 bytes). Readers key the trailing
- * CRC off @length, so a v1 writer and a v2 reader interoperate: the reader
- * validates the v1 prefix and leaves the fan fields zero.
+ * ended at the first reserved word (32 bytes). Version 3 claims the first
+ * reserved word for the firmware @throttle word (PMIC/thermal power health)
+ * without changing the 48-byte length. Readers key the trailing CRC off
+ * @length and gate each block on @version, so any older writer and a newer
+ * reader interoperate: the reader validates the prefix and leaves the fields
+ * a writer of its version never set at zero.
  */
 #define BMC_SENSOR_RECORD_MAGIC		0x52534E53	/* "SNSR" */
-#define BMC_SENSOR_RECORD_VERSION	2
+#define BMC_SENSOR_RECORD_VERSION	3
 
 struct bmc_sensor_record {
 	uint32_t magic;		/* BMC_SENSOR_RECORD_MAGIC */
@@ -128,8 +151,10 @@ struct bmc_sensor_record {
 	uint8_t fan_flags;	/* BMC_SENSOR_FAN_* */
 	uint16_t fan_rpm;	/* measured tach RPM, 0 = not measured */
 	uint16_t reserved0;	/* 0 */
-	uint32_t reserved1;	/* 0 (reserved: rail voltage) */
-	uint32_t reserved2;	/* 0 (reserved: rail current) */
+	/* --- version 3: power health --- */
+	uint32_t throttle;	/* GET_THROTTLED bits (BMC_SENSOR_THROTTLE_*), */
+				/* valid iff STATUS_THROTTLE_VALID; else 0 */
+	uint32_t reserved2;	/* 0 */
 	uint32_t reserved3;	/* 0 */
 	uint32_t crc32;		/* IEEE CRC32 of bytes 0..(length-4) */
 };

@@ -53,6 +53,9 @@
 #define TAG_GET_MAX_CLOCK_RATE	0x00030004
 #define TAG_SET_CLOCK_RATE	0x00038002
 
+/* Power-health property tag (RPI_FIRMWARE_GET_THROTTLED) */
+#define TAG_GET_THROTTLED	0x00030046
+
 register_phys_mem_pgdir(MEM_AREA_IO_SEC, MBOX_BASE, MBOX_SIZE);
 
 /*
@@ -218,4 +221,21 @@ TEE_Result vpu_clock_set_rate(uint32_t clock_id, uint32_t hz)
 		return TEE_ERROR_COMMUNICATION;
 
 	return TEE_SUCCESS;
+}
+
+bool vpu_get_throttled(uint32_t *bits)
+{
+	uint32_t resp = 0;
+
+	/*
+	 * GET_THROTTLED takes no request payload and returns one word. Before
+	 * the mailbox handoff vpu_mbox_prop_call() refuses with BAD_STATE, so
+	 * this simply reports "no reading yet" during the firmware phase.
+	 */
+	if (vpu_mbox_prop_call(TAG_GET_THROTTLED, NULL, 0, &resp, sizeof(resp)))
+		return false;
+
+	*bits = resp;
+
+	return true;
 }

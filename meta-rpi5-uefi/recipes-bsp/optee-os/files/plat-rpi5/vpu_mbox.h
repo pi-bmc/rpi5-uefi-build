@@ -58,4 +58,15 @@ uint32_t vpu_clock_get_rate(uint32_t clock_id);
 TEE_Result vpu_clock_set_rate(uint32_t clock_id, uint32_t hz);
 uint32_t vpu_clock_get_max_rate(uint32_t clock_id);
 
+/*
+ * GET_THROTTLED: the firmware's power-health word (under-voltage, ARM
+ * frequency cap, throttling, soft temperature limit -- current and
+ * latched-since-boot). The VPU derives the under-voltage/current bits from
+ * the PMIC, so this is the one PMIC-sourced signal reachable over the
+ * mailbox (there is no property tag for the raw PMIC ADC). Fills *@bits and
+ * returns true on success; returns false before the mailbox handoff or on a
+ * firmware error, leaving *@bits untouched.
+ */
+bool vpu_get_throttled(uint32_t *bits);
+
 #endif /* VPU_MBOX_H */

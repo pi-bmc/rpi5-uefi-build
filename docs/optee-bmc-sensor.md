@@ -131,21 +131,41 @@ board, so left unimplemented):**
 ## Sensor record on the BMC EEPROM
 
 Written to EEPROM offset `0x7800` (spare region of the pi-bmc 24c256 map),
-little-endian, 32 bytes, one 64-byte page:
+little-endian, 48 bytes, one 64-byte page (version 3):
 
 ```c
 struct bmc_sensor_record {
 	uint32_t magic;        // "SNSR" 0x52534E53
-	uint16_t version;      // 1
-	uint16_t length;       // 32
+	uint16_t version;      // 3
+	uint16_t length;       // 48
 	uint32_t seq;          // increments each sample
 	int32_t  soc_temp_mc;  // milli-Celsius
 	uint32_t uptime_s;
 	uint32_t status;       // PTA_BMC_SENSOR_STATUS_*
-	uint32_t reserved;
-	uint32_t crc32;        // IEEE CRC32 of bytes 0..27
+	// --- version 2: fan block ---
+	uint8_t  fan_level;    // commanded level 0..fan_max_level
+	uint8_t  fan_max_level;
+	uint8_t  fan_duty_pct; // PWM duty of the commanded level, 0..100
+	uint8_t  fan_flags;    // BMC_SENSOR_FAN_*
+	uint16_t fan_rpm;      // measured tach RPM, 0 = not measured
+	uint16_t reserved0;
+	// --- version 3: power health ---
+	uint32_t throttle;     // GET_THROTTLED bits, valid iff STATUS_THROTTLE_VALID
+	uint32_t reserved2;
+	uint32_t reserved3;
+	uint32_t crc32;        // IEEE CRC32 of bytes 0..(length-4)
 };
 ```
+
+The layout grows by appending: readers locate the CRC from `length` and gate
+each block on `version`, so any older writer and a newer reader interoperate
+(a v1 32-byte record and a v2 44-byte-of-48 fan record both still validate).
+The `throttle` word is the firmware `GET_THROTTLED` reading (PMIC under-voltage
+/ current limiting and the SoC soft-temperature limit) — the one PMIC-sourced
+signal reachable from OP-TEE, since the Pi 5 PMIC is VPU-firmware-owned and has
+no mailbox property tag for its raw ADC. It is only sampled once the normal
+world has handed OP-TEE the VPU mailbox (ExitBootServices); before that it is
+zero and `STATUS_THROTTLE_VALID` is clear.
 
 The BMC just polls this offset; no I2C-target/slave stack is needed on the
 Pi side. (An SCMI-over-I2C-target design — the Pi as I2C slave answering

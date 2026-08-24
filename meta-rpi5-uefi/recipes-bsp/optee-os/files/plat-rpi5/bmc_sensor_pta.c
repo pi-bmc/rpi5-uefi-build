@@ -121,6 +121,14 @@ static void sample_locked(void)
 	bool valid = soc_temp_read_mc(&mc);
 	unsigned int fan_level = rp1_fan_get_level();
 	unsigned int fan_duty255 = rp1_fan_level_duty255(fan_level);
+	uint32_t throttle = 0;
+	/*
+	 * Power health from the firmware GET_THROTTLED word (PMIC under-voltage
+	 * and current limit, plus the SoC soft temperature limit). Only readable
+	 * once the normal world has handed the mailbox over; before that this is
+	 * a quick "no reading yet" and the field stays zero/!valid.
+	 */
+	bool throttle_valid = vpu_get_throttled(&throttle);
 
 	rec->magic = BMC_SENSOR_RECORD_MAGIC;
 	rec->version = BMC_SENSOR_RECORD_VERSION;
@@ -132,6 +140,7 @@ static void sample_locked(void)
 	rec->status = (valid ? PTA_BMC_SENSOR_STATUS_TEMP_VALID : 0) |
 		      (state.i2c_ready ? PTA_BMC_SENSOR_STATUS_I2C_READY : 0) |
 		      (state.power_button ? PTA_BMC_SENSOR_STATUS_POWER_BUTTON : 0) |
+		      (throttle_valid ? PTA_BMC_SENSOR_STATUS_THROTTLE_VALID : 0) |
 		      (rec->status & PTA_BMC_SENSOR_STATUS_LAST_PUSH_OK);
 
 	/*
@@ -147,7 +156,7 @@ static void sample_locked(void)
 	rec->fan_flags = BMC_SENSOR_FAN_VALID;
 	rec->fan_rpm = 0;
 	rec->reserved0 = 0;
-	rec->reserved1 = 0;
+	rec->throttle = throttle_valid ? throttle : 0;
 	rec->reserved2 = 0;
 	rec->reserved3 = 0;
 
