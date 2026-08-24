@@ -100,6 +100,16 @@ PV = "202608+git${SRCPV}"
 #   until this, the D0 one was sitting there unasked-for while D0 boards
 #   booted the C0 tree. Depends on 0017, which is where the lookup lives.
 #
+#   0038 answers the kernel 0017's exact-uname match has no directory for: it
+#   floor-matches the release's numeric prefix against \dtb\ directories
+#   named by bare dotted versions (6.18.0, 6.18.32, ...) -- newest not newer
+#   than the kernel wins. Those directories are the linux-stable-dtbs
+#   recipe's, one per upstream release that changed the Pi 5's trees, so a
+#   Talos A/B rollback into a tag nobody pinned still boots the tree its
+#   kernel shipped with. Exact match still wins, the unkeyed and VPU trees
+#   stay the fallbacks. Depends on 0017 and 0020 (shares 0020's leaf-name
+#   table through a helper it factors out).
+#
 #   The DWC2 OTG host on the USB-C data port is 0006 (put the driver on the
 #   BCM2712 core: 64-bit base PCD, forced host mode), 0007 (make an absent
 #   core cheap to discover) and 0010 (fix the reset ordering and the
@@ -156,6 +166,7 @@ SRC_URI = "git://github.com/tianocore/edk2-platforms.git;protocol=https;branch=m
            file://0032-DwUsbHostDxe-optimize-the-transfer-hot-path.patch \
            file://0034-PlatformBm-connect-USB-NICs-after-boot-option-enumer.patch \
            file://0035-DwUsbHostDxe-pump-polled-bulk-IN-endpoints-from-the-p.patch \
+           file://0038-FdtDxe-fall-back-to-the-nearest-older-versioned-devi.patch \
            "
 
 # Diagnostics, DEBUG builds only. 0036 (the former 0033, regenerated to apply

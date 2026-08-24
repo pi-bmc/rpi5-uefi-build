@@ -185,6 +185,57 @@ STATIC EFI_EVENT       mExitBootServicesEvent;
 STATIC INTN            mLevel    = -1;         // -1 until the first SCMI set lands
 STATIC INTN            mOverride = -1;         // -1 = no protocol override
 STATIC RPI_FAN_POLICY  mPolicy;                // sanitized, refreshed every tick
+STATIC UINT8           mDeliveredProfile = 0xFF; // last profile sent to OP-TEE
+
+//
+// Vendor tag on a perf level_set that selects OP-TEE's autonomous-loop
+// profile instead of a manual level (must match RPI5_PERF_FAN_PROFILE_TAG in
+// the OP-TEE scmi_server). Valid levels are 0..max, so it never collides.
+//
+#define FAN_PROFILE_SCMI_TAG  0x80
+
+/**
+  Hand the operator's selected fan profile to OP-TEE's autonomous thermal
+  loop over the perf channel. OP-TEE reads the tagged value as a profile and
+  leaves the commanded level untouched; the loop it feeds runs after
+  ExitBootServices, so this is harmless before then. Sent only on change.
+**/
+STATIC
+VOID
+DeliverProfile (
+  IN UINT8  Profile
+  )
+{
+  UINT32  In[2];
+  UINT32  Out[1];
+
+  if (Profile == mDeliveredProfile) {
+    return;
+  }
+
+  In[0] = RPI_SCMI_PERF_DOMAIN_FAN;
+  In[1] = FAN_PROFILE_SCMI_TAG | (UINT32)Profile;
+
+  if (!EFI_ERROR (
+        RpiScmiCall (
+          RPI_SCMI_PROTOCOL_PERF,
+          RPI_SCMI_PERF_LEVEL_SET,
+          In,
+          2,
+          Out,
+          1
+          )
+        ) &&
+      ((INT32)Out[0] == 0))
+  {
+    mDeliveredProfile = Profile;
+    DEBUG ((
+      DEBUG_INFO,
+      "ActiveCoolerScmiDxe: delivered fan profile %d to OP-TEE\n",
+      Profile
+      ));
+  }
+}
 
 /**
   Refresh mPolicy from the FanPolicy variable, sanitized. Anything absent,
@@ -238,6 +289,12 @@ ReadPolicy (
       mPolicy.Trip2C = ProfileTrips[Profile.Profile][1];
       mPolicy.Trip3C = ProfileTrips[Profile.Profile][2];
       mPolicy.Trip4C = ProfileTrips[Profile.Profile][3];
+
+      //
+      // Hand the same profile to OP-TEE's autonomous loop so the fan curve
+      // carries past ExitBootServices into the OS phase.
+      //
+      DeliverProfile ((UINT8)Profile.Profile);
       return;
     }
   }

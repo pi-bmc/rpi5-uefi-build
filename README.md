@@ -12,8 +12,12 @@ Output: `rpi5-uefi-sd.img.xz`, deployed to
 (`do_image_wic`) MBR image with a single bootable FAT32 partition carrying
 `armstub8-2712.bin` (the UEFI firmware under the default BCM2712 armstub
 filename, auto-loaded by the VPU bootloader at address 0x0 with no `armstub=`
-line), `config.txt`, the `bcm2712*.dtb` device trees and `overlays/` (pinned
-raspberrypi/firmware release, see `rpi-boot-dtbs`). Flash it with
+line), `config.txt`, the `bcm2712*.dtb` device trees (flat and under
+`broadcom/` from the Talos kernel image for the VPU bootloader, see
+`talos-boot-dtbs`; keyed under `dtb/<kernel release>/` for FdtDxe's exact
+match and under `dtb/<version>/` from kernel.org stable for its
+nearest-older-version fallback, see `linux-stable-dtbs`) and `overlays/`
+(pinned raspberrypi/firmware release, see `rpi-boot-dtbs`). Flash it with
 `hack/flash-sd.sh` (decompresses on the fly) or
 `xzcat rpi5-uefi-sd.img.xz | sudo dd of=/dev/sdX bs=4M`. The raw
 `RPI_EFI.fd`/`armstub8-2712.bin` + `config.txt` are deployed alongside for
@@ -56,6 +60,9 @@ refused even then).
 | `meta-rpi5-uefi/recipes-bsp/edk2-redfish-client/edk2-redfish-client_git.bb` | `tianocore/edk2-redfish-client` `main`, pinned | source tree, staged into the sysroot |
 | `meta-rpi5-uefi/recipes-bsp/rpi5-secureboot-keys/rpi5-secureboot-keys_1.0.bb` | this layer's PK + Microsoft's six KEK/db CA certificates, fetched and checksum-pinned | DER certificates, staged into the sysroot |
 | `meta-rpi5-uefi/recipes-bsp/rpi5-uefi-firmware/rpi5-uefi-firmware.bb` | none -- builds the trees above | `armstub8-2712.bin` / `RPI_EFI.fd`, `config.txt`, `RPi5Firmware.cap` |
+| `meta-rpi5-uefi/recipes-bsp/talos-dtbs/talos-boot-dtbs.bb` | `ghcr.io/siderolabs/kernel`, pinned tag | `bcm2712*.dtb` with board overlays baked in, flat (for the VPU bootloader) and under `by-uname/<kernel release>/` (for FdtDxe's exact match) |
+| `meta-rpi5-uefi/recipes-bsp/linux-stable-dtbs/linux-stable-dtbs_6.18.bb` | kernel.org `linux-6.18.tar.xz` + cumulative `patch-6.18.N` diffs, checksum-pinned; only the device-tree subset is ever unpacked | same trees, same overlays, built at every 6.18.y release that changed them, under `by-version/<version>/` (for FdtDxe's nearest-older-version fallback, edk2-platforms patch 0038) |
+| `meta-rpi5-uefi/recipes-bsp/rpi-boot-dtbs/rpi-boot-dtbs_1.20260521.bb` | `raspberrypi/firmware`, pinned release | `overlays/` (and the firmware release's `bcm2712*.dtb`, not shipped on the card) |
 
 One recipe per upstream repository, and none of them builds anything: `edk2`,
 `edk2-platforms`, `edk2-non-osi` and `edk2-redfish-client` each fetch and patch

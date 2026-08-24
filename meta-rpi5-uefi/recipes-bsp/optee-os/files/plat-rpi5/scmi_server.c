@@ -260,11 +260,26 @@ int32_t plat_scmi_perf_level_get(unsigned int channel_id __unused,
 	return SCMI_SUCCESS;
 }
 
+/*
+ * Levels 0..max are direct manual commands (the firmware agent's closed loop
+ * or a BMC override). A value with the profile tag set is an out-of-band
+ * vendor command that selects the profile OP-TEE's own autonomous loop
+ * follows (0x80 | RPI_FAN_PROFILE_*) -- it hands the operator's PowerProfile
+ * down over the channel the fan agent already uses, and leaves the commanded
+ * level untouched. Valid levels are 0..4, so the tag can never collide.
+ */
+#define RPI5_PERF_FAN_PROFILE_TAG	0x80U
+
 int32_t plat_scmi_perf_level_set(unsigned int channel_id __unused,
 				 unsigned int domain_id, unsigned int level)
 {
 	if (domain_id != RPI5_PERF_FAN)
 		return SCMI_NOT_FOUND;
+
+	if (level & RPI5_PERF_FAN_PROFILE_TAG) {
+		rp1_fan_set_profile(level & ~RPI5_PERF_FAN_PROFILE_TAG);
+		return SCMI_SUCCESS;
+	}
 
 	if (rp1_fan_set_level(level))
 		return SCMI_INVALID_PARAMETERS;
@@ -347,28 +362,32 @@ int32_t plat_scmi_sys_power_state_get(unsigned int channel_id __unused,
 
 #endif /* CFG_SCMI_MSG_SYSTEM_POWER */
 
-/* --- Clock Management protocol (0x14): read-only RP1 observability --- */
+/* --- Clock Management protocol (0x14): VPU firmware clocks only --- */
 
 #ifdef CFG_SCMI_MSG_CLOCK
 
 /*
- * Two RP1 clocks, observability only -- mutation is denied because both
- * have hard owners (clk_pwm1: the fan controller above; clk_sys: the RP1
- * fabric and the I2C timing constants in rp1_i2c.c). Rates are the fixed
- * values this platform programs: clk_pwm1 runs xosc/1 = 50 MHz when
- * enabled, clk_sys is the RP1's fixed 200 MHz system clock. Both report
- * 0 / disabled until the RP1 BAR handshake maps the window.
+ * Only the BCM2712 VPU firmware clocks are served here. The RP1 clocks
+ * (clk_pwm1, clk_sys) are deliberately NOT exposed, and that omission is
+ * load-bearing: Linux's native rp1-clk driver owns the whole RP1 clock
+ * tree and must, because the RP1 clock block sits behind a PCIe BAR that
+ * only exists once the kernel has enumerated the endpoint (and that the
+ * kernel may reassign), so the secure world cannot bootstrap clk_sys --
+ * the RP1 fabric parent -- in the first place. Advertising those names
+ * over SCMI merely makes the kernel's scmi-clk register them first, so
+ * rp1-clk's own registration fails -EEXIST and the entire RP1 clock tree
+ * is torn down (no RP1 ethernet / USB / I2C / GPIO / PWM). OP-TEE reaches
+ * the RP1 PWM and I2C by direct MMIO (rp1_pwm.c, rp1_i2c.c) and drives the
+ * fan over perf 0x13, so it never needed these as SCMI clock handles.
  */
-#define RPI5_CLK_PWM1		0
-#define RPI5_CLK_SYS		1
-#define RPI5_CLK_FW_ARM		2
-#define RPI5_CLK_FW_CORE	3
-#define RPI5_CLK_FW_V3D		4
-#define RPI5_CLK_FW_EMMC2	5
-#define RPI5_CLK_COUNT		6
+#define RPI5_CLK_FW_ARM		0
+#define RPI5_CLK_FW_CORE	1
+#define RPI5_CLK_FW_V3D		2
+#define RPI5_CLK_FW_EMMC2	3
+#define RPI5_CLK_COUNT		4
 
 /*
- * Ids 2+ are VPU firmware clocks, served over the secure mailbox
+ * All ids are VPU firmware clocks, served over the secure mailbox
  * (vpu_mbox.c). They read 0 / disabled until EDK2 hands the mailbox
  * over at ExitBootServices -- exactly the phase in which the OS, whose
  * device tree has no native firmware-clock driver any more, starts
@@ -381,9 +400,6 @@ static const uint32_t rpi5_fw_clock_id[RPI5_CLK_COUNT] = {
 	[RPI5_CLK_FW_EMMC2] = VPU_CLOCK_EMMC2,
 };
 
-#define RPI5_CLK_PWM1_HZ	50000000UL
-#define RPI5_CLK_SYS_HZ		200000000UL
-
 size_t plat_scmi_clock_count(unsigned int channel_id __unused)
 {
 	return RPI5_CLK_COUNT;
@@ -393,10 +409,6 @@ const char *plat_scmi_clock_get_name(unsigned int channel_id __unused,
 				     unsigned int scmi_id)
 {
 	switch (scmi_id) {
-	case RPI5_CLK_PWM1:
-		return "clk_pwm1";
-	case RPI5_CLK_SYS:
-		return "clk_sys";
 	case RPI5_CLK_FW_ARM:
 		return "fw-clk-arm";
 	case RPI5_CLK_FW_CORE:
@@ -414,10 +426,6 @@ unsigned long plat_scmi_clock_get_rate(unsigned int channel_id __unused,
 				       unsigned int scmi_id)
 {
 	switch (scmi_id) {
-	case RPI5_CLK_PWM1:
-		return rp1_pwm1_clk_enabled() ? RPI5_CLK_PWM1_HZ : 0;
-	case RPI5_CLK_SYS:
-		return rp1_periph_base() ? RPI5_CLK_SYS_HZ : 0;
 	case RPI5_CLK_FW_ARM:
 	case RPI5_CLK_FW_CORE:
 	case RPI5_CLK_FW_V3D:
@@ -453,10 +461,6 @@ int32_t plat_scmi_clock_get_state(unsigned int channel_id __unused,
 				  unsigned int scmi_id)
 {
 	switch (scmi_id) {
-	case RPI5_CLK_PWM1:
-		return rp1_pwm1_clk_enabled() ? 1 : 0;
-	case RPI5_CLK_SYS:
-		return rp1_periph_base() ? 1 : 0;
 	case RPI5_CLK_FW_ARM:
 	case RPI5_CLK_FW_CORE:
 	case RPI5_CLK_FW_V3D:

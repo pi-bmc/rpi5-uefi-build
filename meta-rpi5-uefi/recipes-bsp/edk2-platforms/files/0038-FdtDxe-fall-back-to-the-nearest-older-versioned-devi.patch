@@ -1,0 +1,543 @@
+From: meta-rpi5-uefi <nbatkins@gmail.com>
+Subject: [PATCH] FdtDxe: fall back to the nearest older versioned devicetree
+
+0017 keys OS device trees to a kernel by its exact release string, which asks
+the card to carry a \dtb\<uname> directory for every kernel it may ever
+boot. Nobody restocks that shelf: the talos-boot-dtbs recipe pins the tags by
+hand, and a Talos A/B fallback into any kernel not on the list boots against
+whatever the VPU loaded.
+
+The observation that retires the hand-pinned list is that a stable series
+moves its device trees almost never. Across 6.18's forty-six point releases
+mainline changed the Pi 5's trees three times -- 6.18.32 (the D0 pinctrl
+compatibles and register widths, plus uart10's interrupt), 6.18.34 (the PM
+watchdog node) and 6.18.45 (a phantom hypervisor timer PPI removed) -- so
+four snapshots cover every 6.18.x kernel, provided the firmware can map a
+kernel onto the newest snapshot that is not newer than the kernel.
+
+This teaches FdtDxe exactly that mapping. \dtb now admits a third shape,
+directories named by a bare dotted version (6.18.0, 6.18.32, ...), laid down
+at image-build time by the linux-stable-dtbs recipe from kernel.org sources.
+When no directory matches the booting UKI's release exactly, the release's
+numeric prefix -- 6.18.44 out of "6.18.44-talos", the same split vermagic
+draws -- is floor-matched against those: newest version not newer than the
+kernel wins, and a directory that fails to load yields to the next older one
+rather than ending the search. Exact matches still win outright, and the
+unkeyed \dtb\<tree> and VPU-loaded trees stay the fallbacks, so nothing an
+installer lays down by hand behaves differently than before.
+
+Only names that are nothing but digits and dots participate: a keyed
+directory such as 6.18.44-talos stays exact-match-only, because a suffixed
+release does not promise mainline trees. The board-to-leaf-name mapping is
+0020's, shared through a new GetBoardFdtNames() rather than duplicated.
+
+Signed-off-by: meta-rpi5-uefi <nbatkins@gmail.com>
+---
+diff --git a/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.c b/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.c
+--- a/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.c
++++ b/Platform/RaspberryPi/Drivers/FdtDxe/FdtDxe.c
+@@ -95,9 +95,10 @@ STATIC EFI_GUID mEfiDtFixupProtocolGuid = {
+ // installs the OS drops the tree its kernel was built against here, and the
+ // same firmware image boots it.
+ //
+-// Two shapes are looked for:
++// Three shapes are looked for:
+ //
+ //   \dtb\<kernel release>\<tree>   -- keyed to one kernel
++//   \dtb\<version>\<tree>          -- keyed to a kernel series
+ //   \dtb\<tree>                    -- whatever boots
+ //
+ // The keyed form is there because "the tree that matches the kernel" stops
+@@ -129,10 +130,22 @@ STATIC EFI_GUID mEfiDtFixupProtocolGuid = {
+ // a C0 tree on D0 silicon, so it is a warning rather than a quiet
+ // substitution.
+ //
++// The versioned form sits between the other two: directories whose names are
++// a bare dotted version, one per upstream release that changed this board's
++// trees, laid down by whoever built the card rather than by an OS install. A
++// kernel that nothing is keyed to exactly takes the newest of them not newer
++// than itself -- see LoadFdtNearestVersion().
++//
+ #define FDT_OS_LEAF_FALLBACK   "bcm2712-rpi-5-b.dtb"
+ #define FDT_OS_PATH_FMT        L"\\dtb\\%a"
+ #define FDT_OS_PATH_FMT_UNAME  L"\\dtb\\%a\\%a"
+ 
++//
++// The versioned directory's name comes back from the filesystem as CHAR16,
++// so its format differs from the uname one in nothing but the %s.
++//
++#define FDT_OS_PATH_FMT_VERSION  L"\\dtb\\%s\\%a"
++
+ //
+ // Longest tree name we will build a path out of. The table's longest today is
+ // 26 characters (bcm2712-rpi-cm5l-cm5io.dtb).
+@@ -146,6 +159,13 @@ STATIC EFI_GUID mEfiDtFixupProtocolGuid = {
+ //
+ #define FDT_OS_UNAME_MAX  64
+ 
++//
++// Kernel versions compare on at most this many dotted components. A stable
++// release is major.minor.sublevel; anything past the third component is
++// suffix, not order.
++//
++#define FDT_OS_VERSION_PARTS  3
++
+ //
+ // The two sections of a unified kernel image that concern us. .linux is what
+ // makes an image a UKI rather than some other loader that happens to be
+@@ -899,30 +919,20 @@ SocVariantFromFdt (
+ }
+ 
+ /**
+-  Look for the device trees this board can boot, under one directory, and stop
+-  at the first that loads.
+-
+-  The board's own tree is tried first and the model default second; on a Pi 5
+-  rev 1.0 those are the same name and only one lookup happens.
++  The device tree names this board can boot, best match first.
+ 
+-  @param  Uname[in]  Kernel release to key the directory on, or NULL for the
+-                     unkeyed \dtb\ directory.
++  @param  Names[out]  Room for two entries.
+ 
+-  @retval EFI_SUCCESS  A tree was loaded, fixed up and installed.
+-  @retval other        No volume carries any of the names.
++  @return  How many were filled in; always at least one.
+ 
+ **/
+ STATIC
+-EFI_STATUS
+-LoadFdtForBoard (
+-  IN CONST CHAR8  *Uname   OPTIONAL
++UINTN
++GetBoardFdtNames (
++  OUT CONST CHAR8  **Names
+   )
+ {
+-  CONST CHAR8  *Names[2];
+-  UINTN        Count;
+-  UINTN        Index;
+-  CHAR16       Path[FDT_OS_UNAME_MAX + FDT_OS_LEAF_MAX + 8];
+-  EFI_STATUS   Status;
++  UINTN  Count;
+ 
+   Count = 0;
+ 
+@@ -941,6 +951,36 @@ LoadFdtForBoard (
+     Count++;
+   }
+ 
++  return Count;
++}
++
++/**
++  Look for the device trees this board can boot, under one directory, and stop
++  at the first that loads.
++
++  The board's own tree is tried first and the model default second; on a Pi 5
++  rev 1.0 those are the same name and only one lookup happens.
++
++  @param  Uname[in]  Kernel release to key the directory on, or NULL for the
++                     unkeyed \dtb\ directory.
++
++  @retval EFI_SUCCESS  A tree was loaded, fixed up and installed.
++  @retval other        No volume carries any of the names.
++
++**/
++STATIC
++EFI_STATUS
++LoadFdtForBoard (
++  IN CONST CHAR8  *Uname   OPTIONAL
++  )
++{
++  CONST CHAR8  *Names[2];
++  UINTN        Count;
++  UINTN        Index;
++  CHAR16       Path[FDT_OS_UNAME_MAX + FDT_OS_LEAF_MAX + 8];
++  EFI_STATUS   Status;
++
++  Count  = GetBoardFdtNames (Names);
+   Status = EFI_NOT_FOUND;
+ 
+   for (Index = 0; Index < Count; Index++) {
+@@ -971,6 +1011,359 @@ LoadFdtForBoard (
+   return Status;
+ }
+ 
++/**
++  Parse a dotted version number off the front of a name.
++
++  @param  Name[in]      What to parse: "6.18.34", or a kernel release such
++                        as "6.18.44-talos".
++  @param  Strict[in]    Require the name to be the version and nothing else,
++                        the shape a directory keyed to a kernel series has. A
++                        kernel release is parsed with FALSE: everything from
++                        the first character that is neither digit nor dot is
++                        suffix.
++  @param  Version[out]  FDT_OS_VERSION_PARTS components, missing ones zero:
++                        "6.18" is 6.18.0.
++
++  @return  How many components were parsed; 0 means no version at all.
++
++**/
++STATIC
++UINTN
++FdtVersionParse (
++  IN  CONST CHAR8  *Name,
++  IN  BOOLEAN      Strict,
++  OUT UINT32       *Version
++  )
++{
++  UINTN   Parts;
++  UINTN   Index;
++  UINT64  Value;
++
++  ZeroMem (Version, FDT_OS_VERSION_PARTS * sizeof (*Version));
++
++  Parts = 0;
++  Index = 0;
++
++  while (Parts < FDT_OS_VERSION_PARTS) {
++    if ((Name[Index] < '0') || (Name[Index] > '9')) {
++      break;
++    }
++
++    Value = 0;
++    while ((Name[Index] >= '0') && (Name[Index] <= '9')) {
++      Value = (Value * 10) + (UINT64)(Name[Index] - '0');
++      if (Value > MAX_UINT32) {
++        return 0;
++      }
++
++      Index++;
++    }
++
++    Version[Parts] = (UINT32)Value;
++    Parts++;
++
++    if (Name[Index] != '.') {
++      break;
++    }
++
++    Index++;
++  }
++
++  if (Strict && (Parts != 0) && (Name[Index] != '\0')) {
++    return 0;
++  }
++
++  return Parts;
++}
++
++/**
++  Order two parsed versions.
++
++  @retval <0  A precedes B.
++  @retval 0   Equal.
++  @retval >0  A follows B.
++
++**/
++STATIC
++INTN
++FdtVersionCompare (
++  IN CONST UINT32  *A,
++  IN CONST UINT32  *B
++  )
++{
++  UINTN  Index;
++
++  for (Index = 0; Index < FDT_OS_VERSION_PARTS; Index++) {
++    if (A[Index] != B[Index]) {
++      return (A[Index] < B[Index]) ? -1 : 1;
++    }
++  }
++
++  return 0;
++}
++
++/**
++  On one volume, find the newest versioned \dtb directory not newer than the
++  booting kernel, and load the board's tree out of it.
++
++  The directory is rescanned for each attempt rather than sorted up front:
++  version directories are few, and one that fails to load -- present, but
++  carrying trees for some other board -- has to give way to the next older
++  one, not end the search.
++
++  @param  Handle[in]     A handle carrying EFI_SIMPLE_FILE_SYSTEM_PROTOCOL.
++  @param  Wanted[in]     The booting kernel's version.
++  @param  Names[in]      Tree names to try inside a chosen directory.
++  @param  NameCount[in]  How many.
++
++  @retval EFI_SUCCESS  A tree was loaded, fixed up and installed.
++  @retval other        Nothing at or below Wanted here loads.
++
++**/
++STATIC
++EFI_STATUS
++TryLoadNearestFromVolume (
++  IN EFI_HANDLE           Handle,
++  IN CONST UINT32         *Wanted,
++  IN CONST CHAR8  *CONST  *Names,
++  IN UINTN                NameCount
++  )
++{
++  EFI_SIMPLE_FILE_SYSTEM_PROTOCOL  *Fs;
++  EFI_FILE_PROTOCOL                *Root;
++  EFI_FILE_PROTOCOL                *Dir;
++  EFI_FILE_INFO                    *Info;
++  EFI_STATUS                       Status;
++  UINTN                            InfoSize;
++  UINTN                            Size;
++  UINTN                            Index;
++  CHAR8                            NameA[FDT_OS_UNAME_MAX + 1];
++  CHAR16                           Best[FDT_OS_UNAME_MAX + 1];
++  CHAR16                           Path[FDT_OS_UNAME_MAX + FDT_OS_LEAF_MAX + 8];
++  UINT32                           BestVersion[FDT_OS_VERSION_PARTS];
++  UINT32                           Bound[FDT_OS_VERSION_PARTS];
++  UINT32                           Version[FDT_OS_VERSION_PARTS];
++  BOOLEAN                          HaveBound;
++  BOOLEAN                          HaveBest;
++
++  Root = NULL;
++  Dir  = NULL;
++  Info = NULL;
++
++  Status = gBS->HandleProtocol (Handle, &gEfiSimpleFileSystemProtocolGuid, (VOID **)&Fs);
++  if (EFI_ERROR (Status)) {
++    return Status;
++  }
++
++  Status = Fs->OpenVolume (Fs, &Root);
++  if (EFI_ERROR (Status)) {
++    return Status;
++  }
++
++  Status = Root->Open (Root, &Dir, L"\\dtb", EFI_FILE_MODE_READ, 0);
++  if (EFI_ERROR (Status)) {
++    goto Done;
++  }
++
++  InfoSize = SIZE_1KB;
++  Info     = AllocatePool (InfoSize);
++  if (Info == NULL) {
++    Status = EFI_OUT_OF_RESOURCES;
++    goto Done;
++  }
++
++  //
++  // A file named dtb is not the directory we are after.
++  //
++  Size   = InfoSize;
++  Status = Dir->GetInfo (Dir, &gEfiFileInfoGuid, &Size, Info);
++  if (EFI_ERROR (Status)) {
++    goto Done;
++  }
++
++  if ((Info->Attribute & EFI_FILE_DIRECTORY) == 0) {
++    Status = EFI_NOT_FOUND;
++    goto Done;
++  }
++
++  HaveBound = FALSE;
++
++  while (TRUE) {
++    //
++    // One pass over the directory for the newest version under the bound.
++    //
++    Status = Dir->SetPosition (Dir, 0);
++    if (EFI_ERROR (Status)) {
++      goto Done;
++    }
++
++    HaveBest = FALSE;
++
++    while (TRUE) {
++      Size   = InfoSize;
++      Status = Dir->Read (Dir, &Size, Info);
++      if (Status == EFI_BUFFER_TOO_SMALL) {
++        FreePool (Info);
++        InfoSize = Size;
++        Info     = AllocatePool (InfoSize);
++        if (Info == NULL) {
++          Status = EFI_OUT_OF_RESOURCES;
++          goto Done;
++        }
++
++        continue;
++      }
++
++      if (EFI_ERROR (Status)) {
++        goto Done;
++      }
++
++      if (Size == 0) {
++        break;
++      }
++
++      if ((Info->Attribute & EFI_FILE_DIRECTORY) == 0) {
++        continue;
++      }
++
++      if (StrLen (Info->FileName) > FDT_OS_UNAME_MAX) {
++        continue;
++      }
++
++      if (EFI_ERROR (UnicodeStrToAsciiStrS (Info->FileName, NameA, sizeof (NameA)))) {
++        continue;
++      }
++
++      if (FdtVersionParse (NameA, TRUE, Version) == 0) {
++        continue;
++      }
++
++      if (FdtVersionCompare (Version, Wanted) > 0) {
++        continue;
++      }
++
++      if (HaveBound && (FdtVersionCompare (Version, Bound) >= 0)) {
++        continue;
++      }
++
++      if (HaveBest && (FdtVersionCompare (Version, BestVersion) <= 0)) {
++        continue;
++      }
++
++      CopyMem (BestVersion, Version, sizeof (BestVersion));
++      StrCpyS (Best, ARRAY_SIZE (Best), Info->FileName);
++      HaveBest = TRUE;
++    }
++
++    if (!HaveBest) {
++      Status = EFI_NOT_FOUND;
++      goto Done;
++    }
++
++    for (Index = 0; Index < NameCount; Index++) {
++      UnicodeSPrint (Path, sizeof (Path), FDT_OS_PATH_FMT_VERSION, Best, Names[Index]);
++
++      Status = TryLoadFdtFromVolume (Handle, Path);
++      if (!EFI_ERROR (Status)) {
++        if (Index > 0) {
++          DEBUG ((
++            DEBUG_WARN,
++            "%a: board revision 0x%x wants '%a', which is not installed; "
++            "booting '%s' instead -- expect the wrong pinctrl offsets\n",
++            __func__,
++            mBoardRevision,
++            Names[0],
++            Path
++            ));
++        }
++
++        goto Done;
++      }
++    }
++
++    //
++    // This directory has no tree for us; the next older one might.
++    //
++    CopyMem (Bound, BestVersion, sizeof (Bound));
++    HaveBound = TRUE;
++  }
++
++Done:
++  if (Info != NULL) {
++    FreePool (Info);
++  }
++
++  if (Dir != NULL) {
++    Dir->Close (Dir);
++  }
++
++  if (Root != NULL) {
++    Root->Close (Root);
++  }
++
++  return Status;
++}
++
++/**
++  Fall back to the nearest older versioned device tree for a kernel no tree
++  is keyed to exactly.
++
++  A stable series moves its device trees rarely, so the card carries one
++  \dtb\<version> directory per upstream release that moved this board's,
++  and the tree a kernel wants is the newest directory that is not newer than
++  the kernel itself. The directory's trees were built from the kernel sources
++  at that version, which is exactly what that kernel shipped with.
++
++  @param  Uname[in]  The booting kernel's release string.
++
++  @retval EFI_SUCCESS  A tree was loaded, fixed up and installed.
++  @retval other        No volume carries a usable versioned directory.
++
++**/
++STATIC
++EFI_STATUS
++LoadFdtNearestVersion (
++  IN CONST CHAR8  *Uname
++  )
++{
++  UINT32       Wanted[FDT_OS_VERSION_PARTS];
++  CONST CHAR8  *Names[2];
++  UINTN        Count;
++  EFI_STATUS   Status;
++  EFI_HANDLE   *Handles;
++  UINTN        HandleCount;
++  UINTN        Index;
++
++  if (FdtVersionParse (Uname, FALSE, Wanted) == 0) {
++    return EFI_NOT_FOUND;
++  }
++
++  Count = GetBoardFdtNames (Names);
++
++  Status = gBS->LocateHandleBuffer (
++                  ByProtocol,
++                  &gEfiSimpleFileSystemProtocolGuid,
++                  NULL,
++                  &HandleCount,
++                  &Handles
++                  );
++  if (EFI_ERROR (Status)) {
++    return Status;
++  }
++
++  Status = EFI_NOT_FOUND;
++  for (Index = 0; Index < HandleCount; Index++) {
++    if (!EFI_ERROR (TryLoadNearestFromVolume (Handles[Index], Wanted, Names, Count))) {
++      Status = EFI_SUCCESS;
++      break;
++    }
++  }
++
++  FreePool (Handles);
++
++  return Status;
++}
++
+ /**
+   At ReadyToBoot, prefer a device tree the OS installed over the one the VPU
+   bootloader loaded.
+@@ -1232,13 +1625,17 @@ OnImageLoaded (
+     }
+ 
+     //
+-    // One shot, answered or not: if no tree is keyed to this kernel then the
+-    // unkeyed one ReadyToBoot installed stands, and asking again for every
+-    // image the OS goes on to load would only risk a worse answer.
++    // One shot, answered or not: if no tree is keyed to this kernel, the
++    // nearest older versioned one is tried, and failing that the unkeyed one
++    // ReadyToBoot installed stands. Asking again for every image the OS goes
++    // on to load would only risk a worse answer.
+     //
+     mOsFdtMatched = TRUE;
+ 
+     Status = LoadFdtForBoard (Uname);
++    if (EFI_ERROR (Status)) {
++      Status = LoadFdtNearestVersion (Uname);
++    }
+     DEBUG ((
+       DEBUG_INFO,
+       "%a: booting %a: '\\dtb\\%a\\': %r\n",

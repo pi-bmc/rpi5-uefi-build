@@ -999,91 +999,6 @@ ReportDrives (
 }
 
 /**
-  Publish the SoC temperature and fan state to the BMC's Thermal resource.
-
-  Redfish puts thermal under Chassis, so this PATCHes Chassis/1/Thermal in
-  the Thermal-schema shape (Temperatures + Fans arrays) with the fan's
-  commanded level in an Oem block. The BMC (nanokvm-app) has no Chassis
-  handler yet; until it lands these log an HTTP error and move on,
-  fail-open like the Memory/Drives POSTs.
-
-  @param[in] Service  The Redfish service to report to.
-
-  @retval EFI_SUCCESS    The PATCH was accepted.
-  @retval EFI_NOT_FOUND  No fan protocol (ActiveCoolerDxe absent).
-  @return                Transport or HTTP error from the PATCH.
-**/
-STATIC
-EFI_STATUS
-ReportThermal (
-  IN REDFISH_SERVICE  Service
-  )
-{
-  RPI_FAN_PROTOCOL  *Fan;
-  RPI_FAN_INFO      Info;
-  REDFISH_RESPONSE  Response;
-  EFI_STATUS        Status;
-  CHAR8             Body[RPI_REDFISH_JSON_MAX];
-  CHAR8             TempField[64];
-  UINT32            Percent;
-  INT32             Whole;
-  INT32             Milli;
-
-  Status = gBS->LocateProtocol (&gRpiFanProtocolGuid, NULL, (VOID **)&Fan);
-  if (EFI_ERROR (Status)) {
-    return EFI_NOT_FOUND;
-  }
-
-  Status = Fan->GetInfo (Fan, &Info);
-  if (EFI_ERROR (Status) && (Status != EFI_NOT_READY)) {
-    return Status;
-  }
-
-  //
-  // An invalid sensor omits the Temperatures array rather than reporting a
-  // made-up number the BMC would chart.
-  //
-  TempField[0] = '\0';
-  if (Info.TemperatureValid) {
-    Whole = Info.TemperatureMilliCelsius / 1000;
-    Milli = Info.TemperatureMilliCelsius % 1000;
-    if (Milli < 0) {
-      Milli = -Milli;
-    }
-
-    AsciiSPrint (
-      TempField,
-      sizeof (TempField),
-      "\"Temperatures\":[{\"MemberId\":\"SoC\",\"ReadingCelsius\":%a%d.%03d}],",
-      ((Info.TemperatureMilliCelsius < 0) && (Whole == 0)) ? "-" : "",
-      Whole,
-      Milli
-      );
-  }
-
-  Percent = (Info.Duty255 * 100) / 255;
-  AsciiSPrint (
-    Body,
-    sizeof (Body),
-    "{%a\"Fans\":[{\"MemberId\":\"ActiveCooler\",\"Reading\":%d,"
-    "\"ReadingUnits\":\"Percent\","
-    "\"Oem\":{\"PiBmc\":{\"Level\":%d,\"MaxLevel\":%d,\"OverrideActive\":%a}}}]}",
-    TempField,
-    Percent,
-    Info.Level,
-    Info.MaxLevel,
-    Info.OverrideActive ? "true" : "false"
-    );
-
-  ZeroMem (&Response, sizeof (Response));
-  Status = RedfishHttpPatchResource (Service, RPI_REDFISH_THERMAL_URI, Body, &Response);
-  LogResult ("PATCH", RPI_REDFISH_THERMAL_URI, Status, &Response);
-  RedfishHttpFreeResponse (&Response);
-
-  return Status;
-}
-
-/**
   Read back the BMC's fan steering from the Thermal resource and apply it.
 
   Wire contract: the BMC stages Oem.PiBmc.FanOverrideLevel (integer,
@@ -1262,12 +1177,12 @@ RpiRedfishSync (
   ReportFirmwareInventory (Service);
 
   //
-  // 2f. First thermal sample + any fan steering the BMC already staged.
-  //    Before the boot-override step on purpose: an override reboots the
-  //    host, and the BMC should still get one thermal reading out of this
-  //    boot.
+  // 2f. Apply any fan steering the BMC already staged. The thermal reading
+  //    itself is no longer PATCHed from here: OP-TEE pushes SoC temperature
+  //    and fan state to the BMC over I2C (the bmc_sensor record) and the BMC
+  //    renders Chassis/1/Thermal from that. Before the boot-override step on
+  //    purpose: an override reboots the host.
   //
-  ReportThermal (Service);
   PollFanOverride (Service);
 
   //

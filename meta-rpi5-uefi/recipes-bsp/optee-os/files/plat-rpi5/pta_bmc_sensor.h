@@ -96,12 +96,22 @@
  */
 void bmc_sensor_flag_power_button(void);
 
+/* fan_flags bits */
+#define BMC_SENSOR_FAN_VALID		BIT(0)	/* fan block populated */
+
 /*
  * The record written to the BMC EEPROM at the configured offset.
- * Little-endian, 32 bytes, one 64-byte EEPROM page.
+ * Little-endian, 48 bytes, one 64-byte EEPROM page. Every field is
+ * naturally aligned, so the struct has no padding and sizeof() == 48.
+ *
+ * Version 2 appended the fan block (level/duty/rpm) and reserved words so
+ * all telemetry the BMC reports rides one I2C write; the version-1 layout
+ * ended at the first reserved word (32 bytes). Readers key the trailing
+ * CRC off @length, so a v1 writer and a v2 reader interoperate: the reader
+ * validates the v1 prefix and leaves the fan fields zero.
  */
 #define BMC_SENSOR_RECORD_MAGIC		0x52534E53	/* "SNSR" */
-#define BMC_SENSOR_RECORD_VERSION	1
+#define BMC_SENSOR_RECORD_VERSION	2
 
 struct bmc_sensor_record {
 	uint32_t magic;		/* BMC_SENSOR_RECORD_MAGIC */
@@ -111,8 +121,17 @@ struct bmc_sensor_record {
 	int32_t soc_temp_mc;	/* SoC die temperature, milli-Celsius */
 	uint32_t uptime_s;	/* seconds since OP-TEE boot */
 	uint32_t status;	/* PTA_BMC_SENSOR_STATUS_* */
-	uint32_t reserved;	/* 0 */
-	uint32_t crc32;		/* IEEE CRC32 of bytes 0..27 */
+	/* --- version 2: fan block --- */
+	uint8_t fan_level;	/* commanded cooling level, 0..fan_max_level */
+	uint8_t fan_max_level;	/* highest level (RP1_FAN_LEVEL_COUNT - 1) */
+	uint8_t fan_duty_pct;	/* PWM duty of the commanded level, 0..100 */
+	uint8_t fan_flags;	/* BMC_SENSOR_FAN_* */
+	uint16_t fan_rpm;	/* measured tach RPM, 0 = not measured */
+	uint16_t reserved0;	/* 0 */
+	uint32_t reserved1;	/* 0 (reserved: rail voltage) */
+	uint32_t reserved2;	/* 0 (reserved: rail current) */
+	uint32_t reserved3;	/* 0 */
+	uint32_t crc32;		/* IEEE CRC32 of bytes 0..(length-4) */
 };
 
 #endif /* PTA_BMC_SENSOR_H */

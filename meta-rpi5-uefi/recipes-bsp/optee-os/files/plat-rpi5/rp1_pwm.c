@@ -5,12 +5,14 @@
  */
 
 #include <io.h>
+#include <kernel/callout.h>
 #include <kernel/spinlock.h>
 #include <trace.h>
 #include <util.h>
 
 #include "rp1_periph.h"
 #include "rp1_pwm.h"
+#include "soc_temp.h"
 
 /* PWM block, per-channel stride 16 bytes. */
 #define PWM_GLOBAL_CTRL		0x000
@@ -193,4 +195,151 @@ bool rp1_pwm1_clk_enabled(void)
 		return false;
 
 	return io_read32(clk + CLK_PWM1_CTRL) & CLK_CTRL_ENABLE;
+}
+
+/*
+ * --- Autonomous thermal governor -------------------------------------
+ *
+ * The closed loop that regulates the fan from the SoC temperature. It used
+ * to run only in the firmware phase (ActiveCoolerScmiDxe, over SCMI); this
+ * is the same policy, native to the secure world so the fan is regulated
+ * under the OS too -- where no agent commands it (the SCMI perf "fan"
+ * domain has no Linux consumer). Native throughout: temperature is a direct
+ * AVS read and the fan a direct PWM write, so the loop never round-trips its
+ * own SCMI server. Enabled at ExitBootServices (rp1_fan_enable_auto, from
+ * the mailbox handoff); before that the firmware agent owns the fan and this
+ * stays idle, so exactly one loop ever runs.
+ */
+
+/*
+ * Control cadence: brisk enough for the SoC's thermal mass, light on the
+ * secure timer (a fraction of the firmware agent's 1 s poll), and it bounds
+ * how long a Linux-gated clk_pwm1 can stall the fan before we re-assert it.
+ */
+#define FAN_CTRL_PERIOD_MS	5000
+#define FAN_HYST_MC		5000	/* 5 C, matches the firmware agent */
+#define FAN_LEVEL_SAFE		2	/* commanded when the sensor is invalid */
+
+/*
+ * Trip temperature (milli-C) to ENTER each level, per profile; index 0 is
+ * unused (level 0 is off). Values mirror ActiveCoolerScmiDxe's ProfileTrips
+ * so firmware- and OS-phase behaviour match. Balanced is the default until
+ * the firmware delivers the operator's selected profile over SCMI perf.
+ */
+static const int32_t fan_trip_mc[RP1_FAN_PROFILE_COUNT][RP1_FAN_LEVEL_COUNT] = {
+	[RP1_FAN_PROFILE_BALANCED] = { 0, 50000, 60000, 68000, 75000 },
+	[RP1_FAN_PROFILE_QUIET]    = { 0, 58000, 68000, 76000, 84000 },
+	[RP1_FAN_PROFILE_COOL]     = { 0, 42000, 50000, 58000, 66000 },
+};
+
+static unsigned int fan_profile = RP1_FAN_PROFILE_BALANCED;
+static struct callout fan_auto_callout;
+static bool fan_auto_added;
+
+void rp1_fan_set_profile(unsigned int profile)
+{
+	uint32_t exceptions = 0;
+
+	if (profile >= RP1_FAN_PROFILE_COUNT)
+		return;
+
+	exceptions = cpu_spin_lock_xsave(&fan_lock);
+	fan_profile = profile;
+	cpu_spin_unlock_xrestore(&fan_lock, exceptions);
+
+	DMSG("rp1_fan: profile -> %u", profile);
+}
+
+void rp1_fan_kick_clock(void)
+{
+	uint32_t exceptions = cpu_spin_lock_xsave(&fan_lock);
+	vaddr_t clk = clk_base();
+
+	if (clk && !(io_read32(clk + CLK_PWM1_CTRL) & CLK_CTRL_ENABLE)) {
+		io_write32(clk + CLK_PWM1_DIV_INT, 1);
+		io_write32(clk + CLK_PWM1_DIV_FRAC, 0);
+		io_write32(clk + CLK_PWM1_CTRL,
+			   CLK_CTRL_AUXSRC_XOSC | CLK_CTRL_ENABLE);
+	}
+
+	cpu_spin_unlock_xrestore(&fan_lock, exceptions);
+}
+
+/*
+ * Target level for a temperature under @prof: the highest level whose trip
+ * is at or below the temperature, with the firmware agent's gentle ramp-down
+ * (release one level per tick, but hold inside a 5 C hysteresis band below
+ * the current level's trip so the fan does not hunt).
+ */
+static unsigned int fan_target_level(int32_t mc, unsigned int cur,
+				     unsigned int prof)
+{
+	const int32_t *trip = fan_trip_mc[prof];
+	unsigned int target = 0;
+	unsigned int i = 0;
+
+	for (i = RP1_FAN_LEVEL_COUNT; i-- > 1; ) {
+		if (mc >= trip[i]) {
+			target = i;
+			break;
+		}
+	}
+
+	if (cur && target < cur) {
+		if (mc >= trip[cur] - FAN_HYST_MC)
+			target = cur;		/* inside hysteresis: hold */
+		else
+			target = cur - 1;	/* step down one level */
+	}
+
+	return target;
+}
+
+static bool fan_auto_cb(struct callout *co)
+{
+	unsigned int prof = 0;
+	unsigned int cur = 0;
+	unsigned int target = 0;
+	int32_t mc = 0;
+	uint32_t exceptions = 0;
+
+	/*
+	 * Re-assert clk_pwm1 first: once rp1-clk claims it, Linux's
+	 * clk_disable_unused can gate the fan clock behind our back.
+	 */
+	rp1_fan_kick_clock();
+
+	exceptions = cpu_spin_lock_xsave(&fan_lock);
+	prof = fan_profile;
+	cur = fan_level;
+	cpu_spin_unlock_xrestore(&fan_lock, exceptions);
+
+	if (!soc_temp_read_mc(&mc)) {
+		if (cur < FAN_LEVEL_SAFE)
+			rp1_fan_set_level(FAN_LEVEL_SAFE);
+		goto out;
+	}
+
+	target = fan_target_level(mc, cur, prof);
+	if (target != cur)
+		rp1_fan_set_level(target);
+
+out:
+	callout_set_next_timeout(co, FAN_CTRL_PERIOD_MS);
+	return true;
+}
+
+void rp1_fan_enable_auto(void)
+{
+	uint32_t exceptions = cpu_spin_lock_xsave(&fan_lock);
+	bool add = !fan_auto_added;
+
+	fan_auto_added = true;
+	cpu_spin_unlock_xrestore(&fan_lock, exceptions);
+
+	if (add) {
+		callout_add(&fan_auto_callout, fan_auto_cb, FAN_CTRL_PERIOD_MS);
+		IMSG("rp1_fan: autonomous thermal loop enabled (%u ms)",
+		     FAN_CTRL_PERIOD_MS);
+	}
 }

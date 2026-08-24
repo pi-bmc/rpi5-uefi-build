@@ -36,6 +36,7 @@
 #include "pta_bmc_sensor.h"
 #include "rp1_i2c.h"
 #include "rp1_periph.h"
+#include "rp1_pwm.h"
 #include "soc_temp.h"
 #include "vpu_mbox.h"
 
@@ -117,6 +118,8 @@ static void sample_locked(void)
 	struct bmc_sensor_record *rec = &state.rec;
 	int32_t mc = 0;
 	bool valid = soc_temp_read_mc(&mc);
+	unsigned int fan_level = rp1_fan_get_level();
+	unsigned int fan_duty255 = rp1_fan_level_duty255(fan_level);
 
 	rec->magic = BMC_SENSOR_RECORD_MAGIC;
 	rec->version = BMC_SENSOR_RECORD_VERSION;
@@ -129,7 +132,24 @@ static void sample_locked(void)
 		      (state.i2c_ready ? PTA_BMC_SENSOR_STATUS_I2C_READY : 0) |
 		      (state.power_button ? PTA_BMC_SENSOR_STATUS_POWER_BUTTON : 0) |
 		      (rec->status & PTA_BMC_SENSOR_STATUS_LAST_PUSH_OK);
-	rec->reserved = 0;
+
+	/*
+	 * Fan telemetry (version 2): the commanded level and its PWM duty,
+	 * read straight from the RP1 fan controller this same secure world
+	 * drives over SCMI perf. rp1_fan_get_level() returns the cached
+	 * command (0 until the first set), so it is valid whether or not the
+	 * RP1 window is mapped yet. RPM stays 0 -- there is no tach capture.
+	 */
+	rec->fan_level = (uint8_t)fan_level;
+	rec->fan_max_level = (uint8_t)(RP1_FAN_LEVEL_COUNT - 1);
+	rec->fan_duty_pct = (uint8_t)((fan_duty255 * 100 + 127) / 255);
+	rec->fan_flags = BMC_SENSOR_FAN_VALID;
+	rec->fan_rpm = 0;
+	rec->reserved0 = 0;
+	rec->reserved1 = 0;
+	rec->reserved2 = 0;
+	rec->reserved3 = 0;
+
 	rec->crc32 = crc32_ieee(rec, offsetof(struct bmc_sensor_record, crc32));
 }
 
@@ -411,6 +431,11 @@ static TEE_Result invoke_command(void *sess_ctx __unused, uint32_t cmd,
 					     TEE_PARAM_TYPE_NONE))
 			return TEE_ERROR_BAD_PARAMETERS;
 		vpu_mbox_set_owned();
+		/*
+		 * ExitBootServices: the firmware fan agent has stopped, so the
+		 * secure world takes over thermal regulation for the OS phase.
+		 */
+		rp1_fan_enable_auto();
 		return TEE_SUCCESS;
 	default:
 		return TEE_ERROR_NOT_IMPLEMENTED;

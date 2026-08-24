@@ -47,6 +47,13 @@ TALOS_KERNEL_TAG ?= "v1.13.0-60-gf541ca4"
 # that fallback boots the old kernel against the new kernel's tree -- the
 # mismatch this recipe exists to prevent, arriving by the back door. List the
 # outgoing tag alongside the incoming one for as long as the rollback is real.
+#
+# Since linux-stable-dtbs, that listing is insurance rather than the only
+# net: a kernel with no by-uname/ directory floor-matches onto the mainline
+# tree of the newest dtb/<version>/ not newer than itself (edk2-platforms
+# patch 0038), and today those trees are byte-identical to the ones extracted
+# here -- Talos ships vanilla bcm2712 dts. Extra tags are only worth carrying
+# again if a Talos kernel's trees ever diverge from their kernel.org version.
 TALOS_KERNEL_TAGS ?= "${TALOS_KERNEL_TAG}"
 
 # Nodes the stripped mainline DTB omits. Merged at build time rather than

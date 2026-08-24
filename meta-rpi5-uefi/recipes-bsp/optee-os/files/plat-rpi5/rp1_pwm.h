@@ -42,4 +42,34 @@ unsigned int rp1_fan_level_duty255(unsigned int level);
  */
 bool rp1_pwm1_clk_enabled(void);
 
+/*
+ * Autonomous thermal governor (OP-TEE-owned). The closed loop that drives
+ * the fan from the SoC temperature -- the policy that used to run only in
+ * the firmware phase (ActiveCoolerScmiDxe, over SCMI) -- transcribed to run
+ * natively in the secure world so the fan is regulated under the OS too,
+ * where nothing else commands it (the SCMI perf "fan" domain has no Linux
+ * consumer). Profile indices match RPI_POWER_PROFILE_* on the EDK2 side.
+ */
+#define RP1_FAN_PROFILE_BALANCED  0
+#define RP1_FAN_PROFILE_QUIET     1
+#define RP1_FAN_PROFILE_COOL      2
+#define RP1_FAN_PROFILE_COUNT     3
+
+/*
+ * Start the autonomous thermal loop (idempotent). Called at ExitBootServices
+ * (the mailbox handoff); before that the firmware agent owns the fan over
+ * SCMI perf and this stays idle, so exactly one loop ever runs.
+ */
+void rp1_fan_enable_auto(void);
+
+/* Select the trip-table profile the autonomous loop follows. */
+void rp1_fan_set_profile(unsigned int profile);
+
+/*
+ * Re-assert clk_pwm1 if something (Linux's clk_disable_unused) gated it once
+ * rp1-clk claimed it. The autonomous loop calls this each tick so the fan
+ * the secure world commands cannot be silently switched off from non-secure.
+ */
+void rp1_fan_kick_clock(void);
+
 #endif /* RP1_PWM_H */

@@ -7,7 +7,9 @@ DESCRIPTION = "Assembles rpi5-uefi-sd.img with wic (do_image_wic): an MBR \
                needs no armstub= line), config.txt, the bcm2712 device trees \
                (from the Talos kernel image, both flat for the VPU \
                bootloader and under dtb/<kernel release>/ for FdtDxe to pick \
-               from) and overlays/ (from the Pi firmware release). \
+               from; from kernel.org stable under dtb/<version>/ for its \
+               nearest-older-version fallback) and overlays/ (from the Pi \
+               firmware release). \
 \
                This is an image recipe purely to reuse do_image_wic: running \
                wic by hand inside a normal task deadlocks, because wic \
@@ -63,7 +65,7 @@ inherit image
 BOOT_STAGING = "${WORKDIR}/boot-staging"
 
 # Assemble the FAT32 boot partition tree from other recipes' deploy output.
-do_stage_bootfiles[depends] += "rpi5-uefi-firmware:do_deploy rpi-boot-dtbs:do_deploy talos-boot-dtbs:do_deploy"
+do_stage_bootfiles[depends] += "rpi5-uefi-firmware:do_deploy rpi-boot-dtbs:do_deploy talos-boot-dtbs:do_deploy linux-stable-dtbs:do_deploy"
 do_stage_bootfiles () {
     boot="${BOOT_STAGING}"
     rm -rf "${boot}"
@@ -100,6 +102,17 @@ do_stage_bootfiles () {
         release=$(basename "${dir}")
         install -d "${boot}/dtb/${release}"
         install -m 0644 "${dir}"*.dtb "${boot}/dtb/${release}/"
+    done
+
+    # Mainline stable trees under dtb/<version>/, one directory per 6.18.y
+    # release that changed them (see linux-stable-dtbs). A kernel no
+    # directory above is keyed to exactly floor-matches onto the newest of
+    # these not newer than itself (edk2-platforms patch 0038), so an A/B
+    # rollback into a kernel nobody pinned still boots its own tree.
+    for dir in "${DEPLOY_DIR_IMAGE}/linux-stable-dtbs/by-version/"*/; do
+        version=$(basename "${dir}")
+        install -d "${boot}/dtb/${version}"
+        install -m 0644 "${dir}"*.dtb "${boot}/dtb/${version}/"
     done
 
     # Overlays from the firmware release (resolve against config.txt
