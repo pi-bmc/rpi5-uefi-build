@@ -73,6 +73,7 @@ do_compile() {
         RPI3_PRELOADED_DTB_BASE=0x3E0000 \
         SUPPORT_VFP=1 \
         SMC_PCI_SUPPORT=1 \
+        CRASH_REPORTING=1 \
         ${TFA_SPD_ARG} \
         DEBUG=${TFA_DEBUG} \
         CROSS_COMPILE="${TARGET_PREFIX}" \

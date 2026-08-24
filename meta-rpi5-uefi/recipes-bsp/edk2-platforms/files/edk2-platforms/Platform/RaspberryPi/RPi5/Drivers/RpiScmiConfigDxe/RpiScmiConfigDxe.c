@@ -389,7 +389,7 @@ EnsureProfileVariable (
   RPI_POWER_PROFILE  Profile;
   UINTN              Size;
   EFI_STATUS         Status;
-  EFI_GUID               FormSetGuid = RPI_SCMI_CONFIG_FORMSET_GUID;
+  EFI_GUID           FormSetGuid = RPI_SCMI_CONFIG_FORMSET_GUID;
 
   Size   = sizeof (Profile);
   Status = gRT->GetVariable (
@@ -423,10 +423,10 @@ RpiScmiConfigEntryPoint (
   IN EFI_SYSTEM_TABLE  *SystemTable
   )
 {
-  EFI_STATUS             Status;
-  EFI_HANDLE             DriverHandle;
-  EFI_HII_HANDLE         HiiHandle;
-  EFI_GUID               FormSetGuid = RPI_SCMI_CONFIG_FORMSET_GUID;
+  EFI_STATUS      Status;
+  EFI_HANDLE      DriverHandle;
+  EFI_HII_HANDLE  HiiHandle;
+  EFI_GUID        FormSetGuid = RPI_SCMI_CONFIG_FORMSET_GUID;
 
   EnsureProfileVariable ();
 

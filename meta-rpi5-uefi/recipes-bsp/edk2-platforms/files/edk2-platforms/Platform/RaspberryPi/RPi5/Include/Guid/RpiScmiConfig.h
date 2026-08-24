@@ -35,10 +35,10 @@
 // (fan spins early, lower sustained temperature). Manual hands fan control
 // back to the FanPolicy page.
 //
-#define RPI_POWER_PROFILE_BALANCED     0
-#define RPI_POWER_PROFILE_QUIET        1
-#define RPI_POWER_PROFILE_COOL         2
-#define RPI_POWER_PROFILE_MANUAL       3
+#define RPI_POWER_PROFILE_BALANCED  0
+#define RPI_POWER_PROFILE_QUIET     1
+#define RPI_POWER_PROFILE_COOL      2
+#define RPI_POWER_PROFILE_MANUAL    3
 
 #pragma pack (1)
 typedef struct {

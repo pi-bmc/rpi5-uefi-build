@@ -182,9 +182,9 @@ STATIC CONST FAN_LEVEL  mFanLevels[] = {
 
 STATIC EFI_EVENT       mPollTimer;
 STATIC EFI_EVENT       mExitBootServicesEvent;
-STATIC INTN            mLevel    = -1;         // -1 until the first SCMI set lands
-STATIC INTN            mOverride = -1;         // -1 = no protocol override
-STATIC RPI_FAN_POLICY  mPolicy;                // sanitized, refreshed every tick
+STATIC INTN            mLevel    = -1;           // -1 until the first SCMI set lands
+STATIC INTN            mOverride = -1;           // -1 = no protocol override
+STATIC RPI_FAN_POLICY  mPolicy;                  // sanitized, refreshed every tick
 STATIC UINT8           mDeliveredProfile = 0xFF; // last profile sent to OP-TEE
 
 //
@@ -217,15 +217,15 @@ DeliverProfile (
   In[1] = FAN_PROFILE_SCMI_TAG | (UINT32)Profile;
 
   if (!EFI_ERROR (
-        RpiScmiCall (
-          RPI_SCMI_PROTOCOL_PERF,
-          RPI_SCMI_PERF_LEVEL_SET,
-          In,
-          2,
-          Out,
-          1
-          )
-        ) &&
+         RpiScmiCall (
+           RPI_SCMI_PROTOCOL_PERF,
+           RPI_SCMI_PERF_LEVEL_SET,
+           In,
+           2,
+           Out,
+           1
+           )
+         ) &&
       ((INT32)Out[0] == 0))
   {
     mDeliveredProfile = Profile;
