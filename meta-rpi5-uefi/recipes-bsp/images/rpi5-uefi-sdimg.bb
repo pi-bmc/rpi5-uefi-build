@@ -5,10 +5,9 @@ DESCRIPTION = "Assembles rpi5-uefi-sd.img with wic (do_image_wic): an MBR \
                alternative TF-A+EDK2 bootloader stack -- armstub8-2712.bin \
                (RPI_EFI.fd under the default armstub filename, so config.txt \
                needs no armstub= line), config.txt, the bcm2712 device trees \
-               (from the Talos kernel image, both flat for the VPU \
-               bootloader and under dtb/<kernel release>/ for FdtDxe to pick \
-               from; from kernel.org stable under dtb/<version>/ for its \
-               nearest-older-version fallback) and overlays/ (from the Pi \
+               (built from kernel.org stable by linux-stable-dtbs: flat for \
+               the VPU bootloader, and under dtb/<version>/ for FdtDxe's \
+               nearest-older-version lookup) and overlays/ (from the Pi \
                firmware release). \
 \
                This is an image recipe purely to reuse do_image_wic: running \
@@ -20,9 +19,10 @@ DESCRIPTION = "Assembles rpi5-uefi-sd.img with wic (do_image_wic): an MBR \
                nested bitbake is spawned. The OS rootfs this recipe builds \
                is empty and unused: the boot partition is populated from the \
                'boottree' staging tree (do_stage_bootfiles), passed to wic \
-               as a named --rootfs-dir; the DTB layout (each tree at the \
-               root, under broadcom/ and under dtb/<release>/) does not map \
-               onto IMAGE_BOOT_FILES, so bootimg-partition is not used. \
+               as a named --rootfs-dir; the DTB layout (the base tree at the \
+               root and under broadcom/, both trees under dtb/<version>/) \
+               does not map onto IMAGE_BOOT_FILES, so bootimg-partition is \
+               not used. \
 \
                NOTE ON OP-TEE STORAGE: no RPMB partition is created, because \
                RPMB cannot be. RPMB is a hardware partition inside an eMMC \
@@ -65,7 +65,7 @@ inherit image
 BOOT_STAGING = "${WORKDIR}/boot-staging"
 
 # Assemble the FAT32 boot partition tree from other recipes' deploy output.
-do_stage_bootfiles[depends] += "rpi5-uefi-firmware:do_deploy rpi-boot-dtbs:do_deploy talos-boot-dtbs:do_deploy linux-stable-dtbs:do_deploy"
+do_stage_bootfiles[depends] += "rpi5-uefi-firmware:do_deploy rpi-boot-dtbs:do_deploy linux-stable-dtbs:do_deploy"
 do_stage_bootfiles () {
     boot="${BOOT_STAGING}"
     rm -rf "${boot}"
@@ -82,33 +82,27 @@ do_stage_bootfiles () {
     install -m 0644 "${DEPLOY_DIR_IMAGE}/RPI_EFI.fd" "${boot}/armstub8-2712.bin"
     install -m 0644 "${DEPLOY_DIR_IMAGE}/config.txt" "${boot}/config.txt"
 
-    # Board device trees from the Talos kernel image (see talos-boot-dtbs),
-    # so they match the kernel that consumes them. Twice: at the root and
-    # under broadcom/ (the layout mainline/U-Boot DTB_DIR use on arm64);
-    # config.txt sets upstream_kernel=1 so the VPU asks for mainline names,
-    # and the two locations cover both conventions.
+    # The VPU bootloader's tree (see linux-stable-dtbs for why it is the
+    # base tree only). Twice: at the root and under broadcom/ (the layout
+    # mainline/U-Boot DTB_DIR use on arm64); config.txt sets
+    # upstream_kernel=1 so the VPU asks for mainline names, and the two
+    # locations cover both conventions.
     install -d "${boot}/broadcom"
-    for dtb in "${DEPLOY_DIR_IMAGE}/talos-boot-dtbs/"*.dtb; do
+    for dtb in "${DEPLOY_DIR_IMAGE}/linux-stable-dtbs/"*.dtb; do
         install -m 0644 "${dtb}" "${boot}/"
         install -m 0644 "${dtb}" "${boot}/broadcom/"
     done
 
-    # The same trees keyed by kernel release, where FdtDxe looks:
-    # \dtb\<release>\bcm2712-rpi-5-b.dtb, chosen from the UKI's .uname
-    # section. Deliberately no unkeyed \dtb\ copy: FdtDxe's fallback is
-    # already better served by the VPU-patched tree at the root.
+    # Both trees under dtb/<version>/, one directory per 6.18.y release that
+    # changed them (see linux-stable-dtbs). FdtDxe floor-matches the booting
+    # UKI's kernel version onto the newest directory not newer than it
+    # (edk2-platforms patch 0038), so every stable-series kernel -- either
+    # half of a Talos A/B pair included -- boots the tree its own sources
+    # shipped. Its exact \dtb\<uname>\ lookup still runs first, for a tree
+    # an OS install lays down itself; this image ships none. Deliberately no
+    # unkeyed \dtb\ copy either: that fallback is already better served by
+    # the VPU-patched tree at the root.
     install -d "${boot}/dtb"
-    for dir in "${DEPLOY_DIR_IMAGE}/talos-boot-dtbs/by-uname/"*/; do
-        release=$(basename "${dir}")
-        install -d "${boot}/dtb/${release}"
-        install -m 0644 "${dir}"*.dtb "${boot}/dtb/${release}/"
-    done
-
-    # Mainline stable trees under dtb/<version>/, one directory per 6.18.y
-    # release that changed them (see linux-stable-dtbs). A kernel no
-    # directory above is keyed to exactly floor-matches onto the newest of
-    # these not newer than itself (edk2-platforms patch 0038), so an A/B
-    # rollback into a kernel nobody pinned still boots its own tree.
     for dir in "${DEPLOY_DIR_IMAGE}/linux-stable-dtbs/by-version/"*/; do
         version=$(basename "${dir}")
         install -d "${boot}/dtb/${version}"

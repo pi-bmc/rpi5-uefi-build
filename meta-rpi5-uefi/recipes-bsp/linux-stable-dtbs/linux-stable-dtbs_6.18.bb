@@ -1,25 +1,32 @@
 SUMMARY = "Raspberry Pi 5 device trees from every linux-6.18.y release that changed them"
 DESCRIPTION = "Builds bcm2712-rpi-5-b.dtb and bcm2712-d-rpi-5-b.dtb from \
                kernel.org sources at each 6.18.y release whose Pi 5 trees \
-               differ from the release before it, and deploys them under \
+               differ from the release before it. Deployed twice: under \
                by-version/<version>/ for FdtDxe's nearest-older-version \
-               lookup (edk2-platforms patch 0038). \
+               lookup (edk2-platforms patch 0038), and the newest base tree \
+               once flat, for the VPU bootloader to load and patch. \
 \
-               This is the tier between talos-boot-dtbs' exact by-uname/ \
-               match and the VPU-loaded fallback: a kernel no tree is keyed \
-               to exactly -- a Talos A/B rollback into a tag nobody listed, \
-               or any other stable-series kernel -- floor-matches onto the \
-               newest of these directories not newer than itself, which is \
-               the tree its own sources shipped. Four directories cover all \
-               forty-seven 6.18.y releases because stable moves device trees \
-               almost never; see LINUX_DTB_VERSIONS for the survey. \
+               This is the card's whole device-tree supply. Any stable-series \
+               kernel -- Talos included, either half of an A/B pair -- \
+               floor-matches onto the newest directory not newer than \
+               itself, which is the tree its own sources shipped: stable \
+               moves device trees almost never, so four directories cover \
+               all forty-seven 6.18.y releases (see LINUX_DTB_VERSIONS). \
+               FdtDxe's exact \\dtb\\<uname>\\ tier still exists for a tree \
+               an OS install lays down itself; this image just no longer \
+               needs to ship one. \
 \
-               The same five board overlays talos-boot-dtbs bakes are baked \
-               here (blconfig, SCMI, boot SPI, dwc2 USB, serial0 -- board \
-               facts, not kernel facts), so a floor-matched tree and an \
-               exact-matched one carry identical adaptations: with both \
-               recipes at 6.18, the merged trees here are byte-identical to \
-               the Talos-extracted ones."
+               Replaced talos-boot-dtbs (and the crane-native it pulled \
+               images with): that recipe lifted these same trees out of the \
+               Talos kernel OCI image to keep DTB and kernel in step, and \
+               pinned a tag list by hand to keep A/B rollbacks bootable. \
+               Building from kernel.org at every change point gives the \
+               identical artifact -- Talos ships vanilla bcm2712 dts, and \
+               the overlay-merged 6.18.34 trees here came out byte-identical \
+               to the 6.18.44-talos extraction -- with no tag list to tend. \
+               Five board overlays are baked in (blconfig, SCMI, boot SPI, \
+               dwc2 USB, serial0 -- board facts, not kernel facts; see each \
+               .dts header)."
 HOMEPAGE = "https://www.kernel.org"
 
 LICENSE = "GPL-2.0-only"
@@ -45,6 +52,14 @@ LIC_FILES_CHKSUM = "file://COPYING;md5=6bc538ed5bd9a7fc9398086aedcd7e46"
 # below. Nothing else moves.
 LINUX_DTB_BASE = "6.18.0"
 LINUX_DTB_VERSIONS = "${LINUX_DTB_BASE} 6.18.32 6.18.34 6.18.45"
+
+# The version whose base tree the VPU bootloader itself loads, from the root
+# of the boot partition. Newest by default: FdtDxe swaps in the floor-matched
+# tree for any UKI kernel anyway, so the flat copy only ever serves the VPU's
+# own patching and whatever boots without a versioned lookup, and for those
+# the most-fixed tree is the best guess. Pin it to an older list entry if a
+# fleet's kernels ever need the flat fallback to match them exactly.
+LINUX_DTB_VPU_VERSION ?= "${@d.getVar('LINUX_DTB_VERSIONS').split()[-1]}"
 
 # One base tarball plus kernel.org's cumulative patch-6.18.N (base -> N, a
 # few MB each), rather than a full 140 MB tarball per version -- and nothing
@@ -75,10 +90,6 @@ SRC_URI[patch32.sha256sum] = "983a951b6572cf547c8fd9148c0cbd4f8dc3d773d76afe5df5
 SRC_URI[patch34.sha256sum] = "005cd67ffa6f3ef723097b6f6cbef6760047ba4c08b9357fadac926c4912d3a0"
 SRC_URI[patch45.sha256sum] = "50a768ef5cb3db296d0c981cb3e5f15562e76e4657df11316ad1b5cc9d8b2af4"
 
-# The overlays are talos-boot-dtbs' -- board facts shared verbatim, looked up
-# from its files/ rather than copied, so the two recipes cannot drift.
-FILESEXTRAPATHS:prepend := "${THISDIR}/../talos-dtbs/files:"
-
 DEPENDS = "dtc-native"
 
 COMPATIBLE_MACHINE = "raspberrypi5-uefi"
@@ -97,10 +108,22 @@ inherit deploy nopackages
 do_configure[noexec] = "1"
 do_install[noexec] = "1"
 
-# Same trees and overlay set as talos-boot-dtbs, same reasons (see that
-# recipe: the ovl-rp1 variant is deliberately absent, order between overlays
-# is not load-bearing).
+# The full board trees only; bcm2712-rpi-5-b-ovl-rp1 is deliberately absent.
+# That variant's pcie@1000120000 is bare, with RP1 supplied at runtime by the
+# kernel's own built-in overlay (drivers/misc/rp1/rp1-pci.dtso) -- which
+# sounds like exactly what we want, RP1 travelling with the kernel, but that
+# dtso declares rp1_eth with status "disabled" and no phy-mode, phy-handle or
+# reset-gpios, because those are board facts that live in the board file.
+# Booting it means no NIC at all. The full tree carries them.
 RPI5_DTB_TREES = "bcm2712-rpi-5-b bcm2712-d-rpi-5-b"
+
+# Nodes the stripped mainline trees omit that this platform needs -- put
+# back at build time rather than shipped as runtime .dtbo files (blconfig in
+# particular is unpatchable if it is not already present when the VPU
+# firmware's fixup runs). Order between them is not load-bearing: each
+# targets a different path, and the one cross-reference (spi10 -> dma40)
+# sits inside a single overlay where dtc resolves it through
+# __local_fixups__. See each .dts header for the evidence.
 RPI5_DTB_OVERLAYS = "bcm2712-blconfig-overlay bcm2712-scmi-overlay \
                      bcm2712-boot-spi-overlay bcm2712-dwc2-usb-overlay \
                      bcm2712-serial0-overlay"
@@ -206,6 +229,23 @@ do_compile() {
         fi
         prev="${v}"
     done
+
+    # The one tree the VPU bootloader itself loads, at the deploy root.
+    #
+    # The BASE tree only, deliberately -- not the D0 one beside it. The VPU
+    # bootloader's own flow is base tree plus a stepping overlay: on D0
+    # silicon it loads this tree and then applies bcm2712d0.dtbo from
+    # overlays/, which is Raspberry Pi's description of their own part.
+    # Leaving a prebuilt D0 tree at the root only invites it to be loaded as
+    # the base and then patched a second time. That flow is also why
+    # bcm2712-boot-spi-overlay.dts exists: the stepping overlay resolves
+    # &spi10 and &dma40 through this tree's __symbols__, and one unresolved
+    # symbol makes the bootloader drop the whole overlay ("dterror: can't
+    # find symbol 'spi10'"), leaving D0 silicon running a C0 description.
+    if [ ! -f ${B}/dtbs/by-version/${LINUX_DTB_VPU_VERSION}/bcm2712-rpi-5-b.dtb ]; then
+        bbfatal "LINUX_DTB_VPU_VERSION (${LINUX_DTB_VPU_VERSION}) is not in LINUX_DTB_VERSIONS (${LINUX_DTB_VERSIONS}) -- nothing to give the VPU bootloader"
+    fi
+    cp ${B}/dtbs/by-version/${LINUX_DTB_VPU_VERSION}/bcm2712-rpi-5-b.dtb ${B}/dtbs/
 }
 
 do_deploy() {

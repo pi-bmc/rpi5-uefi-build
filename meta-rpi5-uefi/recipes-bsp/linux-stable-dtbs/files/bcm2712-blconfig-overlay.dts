@@ -1,8 +1,8 @@
 /*
  * Bootloader NVRAM nodes for Raspberry Pi 5 / BCM2712 (blconfig + blpubkey).
  *
- * Baked into the Talos base DTBs at build time (see talos-dtbs.bb, fdtoverlay),
- * NOT shipped as a runtime .dtbo.
+ * Baked into the mainline base DTBs at build time (see linux-stable-dtbs.bb,
+ * fdtoverlay), NOT shipped as a runtime .dtbo.
  *
  * The stock Raspberry Pi DTB carries two labelled reserved-memory nvram nodes:
  *
@@ -14,8 +14,8 @@
  * RAM, writes each node's placement (reg) and enables it, exposing them to
  * Linux as nvmem devices.
  *
- * The base DTB used by this project is the stripped mainline bcm2712-rpi-5-b
- * from the Talos kernel OCI image: it has neither node. Applying this as a
+ * The base DTB used by this project is the stripped mainline bcm2712-rpi-5-b,
+ * built from kernel.org stable sources: it has neither node. Applying this as a
  * runtime overlay does NOT work - the VPU firmware's blconfig fixup only patches
  * a node already present in the DTB it loads, and a runtime .dtbo is applied
  * after that fixup has run (observed: reg stays 0). So we merge these nodes into

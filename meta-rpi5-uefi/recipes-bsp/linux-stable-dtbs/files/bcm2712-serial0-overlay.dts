@@ -1,7 +1,7 @@
 /*
  * serial0 alias for the Raspberry Pi 5 / BCM2712 debug UART (uart10).
  *
- * Baked into the Talos base DTBs at build time (see talos-boot-dtbs.bb,
+ * Baked into the mainline base DTBs at build time (see linux-stable-dtbs.bb,
  * fdtoverlay), NOT shipped as a runtime .dtbo.
  *
  * The mainline bcm2712-rpi-5-b tree aliases the SoC's dedicated debug UART

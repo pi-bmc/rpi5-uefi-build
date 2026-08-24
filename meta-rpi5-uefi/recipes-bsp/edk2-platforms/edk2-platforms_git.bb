@@ -87,8 +87,8 @@ PV = "202608+git${SRCPV}"
 #   on any attached filesystem and hands THAT to the OS. The device tree then
 #   lives with the OS install rather than on the firmware's card, so one
 #   firmware image boots any kernel and changing OS never means reflashing the
-#   board. The SD-card tree (see talos-boot-dtbs) stays as the fallback for an
-#   OS that ships none.
+#   board. The SD-card tree (see linux-stable-dtbs) stays as the fallback for
+#   an OS that ships none.
 #
 #   0020 tells it WHICH tree, off the board revision code rather than one
 #   fixed name: Pi 5 rev 1.1 is BCM2712 D0, whose pinctrl offsets are not
@@ -96,9 +96,10 @@ PV = "202608+git${SRCPV}"
 #   u-boot drives its `fdtfile` from (board/raspberrypi/rpi/rpi.c), carried
 #   as BoardRevisionGetFdtName in the overlay's BoardRevisionHelperLib beside
 #   BoardRevisionGetModelName -- 0020 is the FdtDxe.c half that calls it.
-#   talos-boot-dtbs already deploys both trees under by-uname/<release>/ --
-#   until this, the D0 one was sitting there unasked-for while D0 boards
-#   booted the C0 tree. Depends on 0017, which is where the lookup lives.
+#   The card already carried both trees (then talos-boot-dtbs' by-uname/
+#   directories, today linux-stable-dtbs' by-version/) -- until this, the D0
+#   one was sitting there unasked-for while D0 boards booted the C0 tree.
+#   Depends on 0017, which is where the lookup lives.
 #
 #   0038 answers the kernel 0017's exact-uname match has no directory for: it
 #   floor-matches the release's numeric prefix against \dtb\ directories

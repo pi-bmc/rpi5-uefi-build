@@ -38,7 +38,7 @@
  * which OP-TEE is its ONLY user -- polled, no interrupt to lose (the
  * fw-clk-arm -110 storm this replaces was a lost mailbox response) --
  * and the firmware clocks appear on SCMI clock ids 2+ instead. Costs on
- * a stripped Talos tree: no native cpufreq (CPU stays at the VPU boot
+ * a stripped mainline tree: no native cpufreq (CPU stays at the VPU boot
  * frequency; SCMI perf DVFS is the follow-up), no vcmailbox/hwmon.
  *
  * The zone mirrors the retired thermal overlay: monitoring plus a critical

@@ -34,6 +34,7 @@
 #include <trace.h>
 
 #include "pta_bmc_sensor.h"
+#include "pwr_button.h"
 #include "rp1_i2c.h"
 #include "rp1_periph.h"
 #include "rp1_pwm.h"
@@ -436,6 +437,13 @@ static TEE_Result invoke_command(void *sess_ctx __unused, uint32_t cmd,
 		 * secure world takes over thermal regulation for the OS phase.
 		 */
 		rp1_fan_enable_auto();
+		/*
+		 * ...and hand the power button to the OS: the kernel's gpio-keys
+		 * owns it now and runs the orderly shutdown. A secure-world
+		 * power-off while the OS is live wedges a core (it cannot quiesce
+		 * the others), so OP-TEE must stop touching the button GIO here.
+		 */
+		rpi5_pwr_button_release();
 		return TEE_SUCCESS;
 	default:
 		return TEE_ERROR_NOT_IMPLEMENTED;

@@ -295,21 +295,18 @@ int32_t plat_scmi_perf_level_set(unsigned int channel_id __unused,
 
 /*
  * Vendor system states for SYSTEM_POWER_STATE_GET (0x80000000+ is the
- * spec's vendor range). RUNNING is the quiescent answer;
- * BUTTON_SHUTDOWN reports a latched power-button press, which
- * PowerButtonScmiDxe polls for during the firmware phase and acts on
- * through gRT->ResetSystem (honoring the blconfig POWER_OFF_ON_HALT
- * policy and the reset-notification flush). At OS runtime nothing polls
- * this; the same press reaches the BMC through the sensor record's
- * POWER_BUTTON status bit, and the BMC orchestrates a graceful shutdown.
+ * spec's vendor range). RUNNING is the quiescent answer; BUTTON_SHUTDOWN
+ * reports a latched firmware-phase power-button press. At OS runtime the
+ * button belongs to the kernel's gpio-keys -- OP-TEE releases the GIO at
+ * ExitBootServices -- so this GET is a firmware-phase affordance only.
  */
 #define RPI5_SYS_POWER_STATE_RUNNING		0x80000000
 #define RPI5_SYS_POWER_STATE_BUTTON_SHUTDOWN	0x80000001
 
 /*
- * Vendor SYSTEM_POWER_STATE_SET states carrying the power-button policy
- * (PowerButtonScmiDxe delivers the blconfig POWER_OFF_ON_HALT verdict at
- * boot). Keep in step with EDK2's RpiScmiLib.h.
+ * Vendor SYSTEM_POWER_STATE_SET states carrying the firmware-phase
+ * power-button policy (RpiScmiConfigDxe delivers the blconfig
+ * POWER_OFF_ON_HALT verdict at boot). Keep in step with EDK2's RpiScmiLib.h.
  */
 #define RPI5_SYS_POWER_SET_POLICY_OFF	0x80000002
 #define RPI5_SYS_POWER_SET_POLICY_RESET	0x80000003

@@ -40,14 +40,13 @@
 #define POLL_PERIOD_MS	100
 
 /*
- * Grace window between latching a press and acting on it ourselves: 20
- * polls = ~2 s. During the firmware phase PowerButtonScmiDxe polls SCMI
- * at 100 ms and acts first through gRT->ResetSystem (running the
- * reset-notification flush, variable-store sync included); the window
- * only expires when nothing in the normal world reacted -- i.e. at OS
- * runtime, where this fallback is what makes the button work at all.
- * The BMC record was already flagged at the latch, so a BMC-orchestrated
- * graceful shutdown has the same 2 s head start.
+ * Grace window between latching a firmware-phase press and acting on it:
+ * 20 polls = ~2 s. It runs ONLY during the firmware phase, where OP-TEE is
+ * effectively the sole running core and a raw EL3 power action is safe. At
+ * ExitBootServices the button is released to the OS (rpi5_pwr_button_release),
+ * so this fallback never fires at runtime -- a secure-world power-off cannot
+ * quiesce the kernel's other cores and would wedge one in EL3. The BMC record
+ * was flagged at the latch regardless.
  */
 #define ACT_GRACE_POLLS	20
 
@@ -60,6 +59,7 @@ register_phys_mem_pgdir(MEM_AREA_IO_SEC, GIO_BASE, GIO_SIZE);
 static struct callout pwr_button_callout;
 static bool pwr_button_latched;
 static bool pwr_button_powers_off;
+static bool pwr_button_released;
 static unsigned int pwr_button_grace;
 
 bool rpi5_pwr_button_pending(void)
@@ -71,6 +71,17 @@ void rpi5_pwr_button_set_policy(bool power_off)
 {
 	pwr_button_powers_off = power_off;
 	IMSG("pwr_button: press policy = %s", power_off ? "power off" : "reset");
+}
+
+void rpi5_pwr_button_release(void)
+{
+	/*
+	 * Read by the poll callout, which then clears the latch one last time
+	 * and unregisters itself. A plain store is enough: the callout only
+	 * ever transitions this false->true and reacts on its next tick.
+	 */
+	pwr_button_released = true;
+	IMSG("pwr_button: released to the OS (kernel gpio-keys owns it now)");
 }
 
 void rpi5_power_act(bool power_off)
@@ -99,6 +110,17 @@ static bool pwr_button_callout_cb(struct callout *co __unused)
 
 	if (!base)
 		return true;
+
+	/*
+	 * Released to the OS at ExitBootServices: clear any latched edge so the
+	 * kernel does not see a stale press, then unregister (return false) so
+	 * OP-TEE never touches the button GIO again and cannot race the kernel's
+	 * gpio-keys irqchip.
+	 */
+	if (pwr_button_released) {
+		io_write32(base + GIO_REG_STAT, BUTTON_BIT);
+		return false;
+	}
 
 	/* Latched falling edge, or currently held low (active-low). */
 	pressed = (io_read32(base + GIO_REG_STAT) & BUTTON_BIT) ||

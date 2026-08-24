@@ -1,8 +1,8 @@
 /*
  * Restore the BCM2712 boot SPI controller and the DMA engine it feeds from.
  *
- * Mainline's bcm2712.dtsi -- and so the tree in the Talos kernel image this
- * project uses as its base -- describes neither spi10 (the SPI controller in
+ * Mainline's bcm2712.dtsi -- and so every base tree this project builds from
+ * kernel.org stable -- describes neither spi10 (the SPI controller in
  * front of the 2 MiB boot EEPROM) nor dma40. The downstream Raspberry Pi tree
  * describes both.
  *

@@ -81,8 +81,8 @@
 //
 // This matters because the tree at device_tree_address is whichever
 // bcm2712-rpi-5-b.dtb sits at the root of the boot partition, and this
-// image deliberately ships the one built from the Talos kernel rather than
-// the Raspberry Pi firmware release (see recipes-bsp/images/rpi5-uefi-sdimg.bb).
+// image deliberately ships one built from mainline stable rather than
+// the Raspberry Pi firmware release (see recipes-bsp/linux-stable-dtbs).
 // Mainline's bcm2712.dtsi has no boot-SPI node at all -- the downstream
 // Raspberry Pi DTS is the only one that describes spi10 -- so without this
 // fallback the EEPROM update path fails on a card that is otherwise
