@@ -49,9 +49,22 @@
 #define GEM_MAX_FRAME_SIZE     1536     // matches NET_CFG 1536RXEN limit
 
 //
-// Ring geometry: modest polled-mode rings, 2048-byte buffers.
+// Ring geometry: 2048-byte buffers, so one descriptor per frame.
 //
-#define GEM_RX_DESC_COUNT   16
+// At gigabit a 1536-byte frame lands every ~12 us, and the MAC discards
+// anything arriving with no free descriptor (DMA_CFG DISC_WHEN_NO_AHB), so
+// the RX ring depth is really "how long the poll loop may look away".
+// Sixteen descriptors covered under 200 us -- less than one TCP window's
+// burst -- which cost frames on essentially every window and, worse, ran
+// the receive engine out of descriptors constantly (see
+// GemRecoverRxIfStalled). 128 covers ~1.5 ms and 256 KiB of buffers.
+//
+// Ceiling: the descriptors share a single page, so RX + TX + 2 stubs must
+// stay <= EFI_PAGE_SIZE / sizeof (GEM_DMA_DESC) = 256 (asserted in
+// GemDmaAlloc). TX carries only ACKs for the download case and is left
+// alone.
+//
+#define GEM_RX_DESC_COUNT   128
 #define GEM_TX_DESC_COUNT   8
 #define GEM_RX_BUFFER_SIZE  2048
 #define GEM_TX_BUFFER_SIZE  2048
@@ -110,6 +123,12 @@ typedef struct {
   UINT16                         RxHead;
   UINT16                         TxProd;
   UINT16                         TxCons;
+
+  //
+  // Number of receive-stall recoveries performed; see
+  // GemRecoverRxIfStalled().
+  //
+  UINT32                         RxStallRecoveries;
 
   //
   // Caller buffers pending recycle via GetStatus(), per TX descriptor.
@@ -190,6 +209,11 @@ GemMdioWrite (
 
 BOOLEAN
 GemRxPending (
+  IN RP1_GEM_PRIVATE_DATA  *Gem
+  );
+
+VOID
+GemRecoverRxIfStalled (
   IN RP1_GEM_PRIVATE_DATA  *Gem
   );
 

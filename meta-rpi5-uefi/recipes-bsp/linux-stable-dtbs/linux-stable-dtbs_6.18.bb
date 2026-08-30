@@ -24,9 +24,10 @@ DESCRIPTION = "Builds bcm2712-rpi-5-b.dtb and bcm2712-d-rpi-5-b.dtb from \
                identical artifact -- Talos ships vanilla bcm2712 dts, and \
                the overlay-merged 6.18.34 trees here came out byte-identical \
                to the 6.18.44-talos extraction -- with no tag list to tend. \
-               Five board overlays are baked in (blconfig, SCMI, boot SPI, \
-               dwc2 USB, serial0 -- board facts, not kernel facts; see each \
-               .dts header)."
+               Six overlays are baked in: five board facts (blconfig, SCMI, \
+               boot SPI, dwc2 USB, serial0) and one platform tuning (CMA \
+               size, bumped 64 -> 256 MiB so the NVMe HMB stops starving the \
+               pool); see each .dts header."
 HOMEPAGE = "https://www.kernel.org"
 
 LICENSE = "GPL-2.0-only"
@@ -84,6 +85,7 @@ SRC_URI = "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${PV}.tar.xz;name=
            file://bcm2712-boot-spi-overlay.dts \
            file://bcm2712-dwc2-usb-overlay.dts \
            file://bcm2712-serial0-overlay.dts \
+           file://bcm2712-cma-overlay.dts \
            "
 SRC_URI[base.sha256sum] = "9106a4605da9e31ff17659d958782b815f9591ab308d03b0ee21aad6c7dced4b"
 SRC_URI[patch32.sha256sum] = "983a951b6572cf547c8fd9148c0cbd4f8dc3d773d76afe5df58de519f04e7243"
@@ -126,7 +128,7 @@ RPI5_DTB_TREES = "bcm2712-rpi-5-b bcm2712-d-rpi-5-b"
 # __local_fixups__. See each .dts header for the evidence.
 RPI5_DTB_OVERLAYS = "bcm2712-blconfig-overlay bcm2712-scmi-overlay \
                      bcm2712-boot-spi-overlay bcm2712-dwc2-usb-overlay \
-                     bcm2712-serial0-overlay"
+                     bcm2712-serial0-overlay bcm2712-cma-overlay"
 
 # What a Pi 5 DTB is built from: the board .dts files and everything their
 # include closure can reach. dt-bindings is taken whole (cheap, and the

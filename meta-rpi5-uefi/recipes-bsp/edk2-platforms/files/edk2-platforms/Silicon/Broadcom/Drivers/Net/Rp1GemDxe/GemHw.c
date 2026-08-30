@@ -243,6 +243,46 @@ GemMacReset (
 }
 
 /**
+  Point every RX descriptor at its buffer, hand ownership back to the
+  hardware and reset the software head.
+
+  Also used to recover from a receive stall: re-enabling RX restarts the
+  engine from RX_QBAR, so the ring has to be re-armed from descriptor 0 and
+  RxHead resynchronised to match, or software and hardware immediately
+  disagree about where the head is.
+
+  @param  Gem[in]  Driver private data.
+
+**/
+STATIC
+VOID
+GemArmRxRing (
+  IN RP1_GEM_PRIVATE_DATA  *Gem
+  )
+{
+  UINTN                 Index;
+  EFI_PHYSICAL_ADDRESS  BufAddr;
+
+  for (Index = 0; Index < GEM_RX_DESC_COUNT; Index++) {
+    BufAddr = (EFI_PHYSICAL_ADDRESS)(UINTN)
+              (Gem->RxBuffers + Index * GEM_RX_BUFFER_SIZE);
+    //
+    // Bits [1:0] of the RX address word carry WRAP/OWN, so buffers must be
+    // 4-byte aligned (page-aligned in practice).
+    //
+    ASSERT ((BufAddr & (GEM_RXDESC_ADDR_OWN | GEM_RXDESC_ADDR_WRAP)) == 0);
+
+    Gem->RxRing[Index].Addr = (UINT32)BufAddr |
+                              ((Index == GEM_RX_DESC_COUNT - 1) ? GEM_RXDESC_ADDR_WRAP : 0);
+    Gem->RxRing[Index].Ctrl   = 0;
+    Gem->RxRing[Index].AddrHi = (UINT32)(BufAddr >> 32);
+    Gem->RxRing[Index].Unused = 0;
+  }
+
+  Gem->RxHead = 0;
+}
+
+/**
   Initialize the RX/TX descriptor rings and the null descriptors used to
   park the hardware priority queues that cannot be disabled.
 
@@ -260,21 +300,7 @@ GemInitRings (
   UINT32                QueueMask;
   UINTN                 Queue;
 
-  for (Index = 0; Index < GEM_RX_DESC_COUNT; Index++) {
-    BufAddr = (EFI_PHYSICAL_ADDRESS)(UINTN)
-              (Gem->RxBuffers + Index * GEM_RX_BUFFER_SIZE);
-    //
-    // Bits [1:0] of the RX address word carry WRAP/OWN, so buffers must be
-    // 4-byte aligned (page-aligned in practice).
-    //
-    ASSERT ((BufAddr & (GEM_RXDESC_ADDR_OWN | GEM_RXDESC_ADDR_WRAP)) == 0);
-
-    Gem->RxRing[Index].Addr = (UINT32)BufAddr |
-                              ((Index == GEM_RX_DESC_COUNT - 1) ? GEM_RXDESC_ADDR_WRAP : 0);
-    Gem->RxRing[Index].Ctrl   = 0;
-    Gem->RxRing[Index].AddrHi = (UINT32)(BufAddr >> 32);
-    Gem->RxRing[Index].Unused = 0;
-  }
+  GemArmRxRing (Gem);
 
   for (Index = 0; Index < GEM_TX_DESC_COUNT; Index++) {
     BufAddr = (EFI_PHYSICAL_ADDRESS)(UINTN)
@@ -320,7 +346,6 @@ GemInitRings (
     GemWrite32 (Gem, GEM_TX_QN_BAR (Queue), (UINT32)(UINTN)Gem->NullTxDesc);
   }
 
-  Gem->RxHead = 0;
   Gem->TxProd = 0;
   Gem->TxCons = 0;
 }
@@ -679,6 +704,93 @@ GemRxPending (
   }
 
   return (Gem->RxRing[Gem->RxHead].Addr & GEM_RXDESC_ADDR_OWN) != 0;
+}
+
+/**
+  Detect and recover a stalled receive engine.
+
+  The Cadence GEM stops its receive DMA when it runs out of descriptors
+  under sustained load, latching RX_STAT.BUF_NOT_AVAIL and then delivering
+  nothing further. The documented recovery is to toggle receive enable; see
+  Linux macb_main.c, the at91rm9200 manual section 41.3.1 and the Zynq
+  manual section 16.7.4.
+
+  Nothing else in the driver inspects RX_STAT while no frame is pending --
+  GemReceiveFrame and GemRxPending both test only the descriptor OWN bit --
+  so an unrecovered stall is invisible and survives until the part is
+  reset. Call this from the polling path, where it runs precisely when
+  frames have stopped arriving.
+
+  A momentarily full ring is not a stall: while frames are still queued the
+  engine is alive and draining them clears the condition, so acknowledge it
+  and leave the hardware alone. Toggling receive enable in that case would
+  discard perfectly good queued frames and make burst pressure worse.
+
+  @param  Gem[in]  Driver private data.
+
+**/
+VOID
+GemRecoverRxIfStalled (
+  IN RP1_GEM_PRIVATE_DATA  *Gem
+  )
+{
+  UINT32  RxStat;
+  UINT32  NetCtrl;
+
+  if (Gem->RxRing == NULL) {
+    return;
+  }
+
+  RxStat = GemRead32 (Gem, GEM_RX_STAT);
+  if ((RxStat & (GEM_RX_STAT_BUF_NOT_AVAIL | GEM_RX_STAT_OVERRUN)) == 0) {
+    return;
+  }
+
+  //
+  // Acknowledge (write-1-to-clear) before deciding what to do, so a frame
+  // landing during recovery cannot leave the condition latched unnoticed.
+  //
+  GemWrite32 (
+    Gem,
+    GEM_RX_STAT,
+    GEM_RX_STAT_BUF_NOT_AVAIL | GEM_RX_STAT_OVERRUN
+    );
+
+  if (GemRxPending (Gem)) {
+    return;
+  }
+
+  NetCtrl = GemRead32 (Gem, GEM_NET_CTRL);
+  GemWrite32 (Gem, GEM_NET_CTRL, NetCtrl & ~(UINT32)GEM_NET_CTRL_RX_EN);
+  MemoryFence ();
+
+  //
+  // Re-arm the ring and put the hardware queue pointer back at its base
+  // explicitly, rather than relying on the engine to rewind it on re-enable
+  // -- Linux macb toggles receive enable without touching either, so the
+  // rewind behaviour is not something to bet correctness on. Writing
+  // RX_QBAR while receive is disabled is exactly what bring-up does, and it
+  // leaves hardware and RxHead provably agreed on descriptor 0. Any frame
+  // still sitting in the ring is dropped; the stall has already cost far
+  // more than that.
+  //
+  GemArmRxRing (Gem);
+  MemoryFence ();
+
+  GemWrite32 (Gem, GEM_RX_QBAR, (UINT32)(UINTN)Gem->RxRing);
+  GemWrite32 (Gem, GEM_RX_QBAR_HI, (UINT32)((UINT64)(UINTN)Gem->RxRing >> 32));
+  MemoryFence ();
+
+  GemWrite32 (Gem, GEM_NET_CTRL, NetCtrl | GEM_NET_CTRL_RX_EN);
+
+  Gem->RxStallRecoveries++;
+
+  DEBUG ((
+    DEBUG_ERROR,
+    "Rp1GemDxe: recovered stalled RX (rxstat 0x%x, recoveries %u)\n",
+    RxStat,
+    Gem->RxStallRecoveries
+    ));
 }
 
 /**

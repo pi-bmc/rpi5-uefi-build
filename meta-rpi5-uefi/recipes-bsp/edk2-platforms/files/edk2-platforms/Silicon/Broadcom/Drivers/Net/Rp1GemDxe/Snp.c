@@ -558,6 +558,14 @@ Rp1GemSnpGetStatus (
   Gem->SnpMode.MediaPresent =
     (BOOLEAN) !EFI_ERROR (Rp1GemPhyUpdateConfig (Gem));
 
+  //
+  // The receive engine can stall under sustained load and then deliver
+  // nothing until it is kicked. This is the only path that still runs once
+  // that has happened, so the check belongs here rather than in the receive
+  // path.
+  //
+  GemRecoverRxIfStalled (Gem);
+
   if (TxBuf != NULL) {
     GemGetRecycledTxBuffer (Gem, TxBuf);
   }
@@ -585,7 +593,8 @@ Rp1GemSnpGetStatus (
     if ((++PollCount & 0x3FF) == 0) {
       DEBUG ((
         DEBUG_ERROR,
-        "Rp1GemDxe: stat tx %u rx %u bc %u mc %u fcs %u sym %u aln %u res %u ovr %u\n",
+        "Rp1GemDxe: stat tx %u rx %u bc %u mc %u fcs %u sym %u aln %u res %u ovr %u"
+        " rec %u\n",
         MmioRead32 ((UINTN)Gem->GemBase + GEM_STAT_FRAMES_TX),
         MmioRead32 ((UINTN)Gem->GemBase + GEM_STAT_FRAMES_RX),
         MmioRead32 ((UINTN)Gem->GemBase + GEM_STAT_BCAST_FRAMES_RX),
@@ -594,7 +603,8 @@ Rp1GemSnpGetStatus (
         MmioRead32 ((UINTN)Gem->GemBase + GEM_STAT_RX_SYMBOL_ERRS),
         MmioRead32 ((UINTN)Gem->GemBase + GEM_STAT_ALIGNMENT_ERRS),
         MmioRead32 ((UINTN)Gem->GemBase + GEM_STAT_RX_RESOURCE_ERRS),
-        MmioRead32 ((UINTN)Gem->GemBase + GEM_STAT_RX_OVERRUN_ERRS)
+        MmioRead32 ((UINTN)Gem->GemBase + GEM_STAT_RX_OVERRUN_ERRS),
+        Gem->RxStallRecoveries
         ));
     }
   }

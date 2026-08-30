@@ -1,0 +1,40 @@
+/*
+ * Enlarge the default CMA pool from mainline's 64 MiB to 256 MiB.
+ *
+ * bcm2712.dtsi sizes /reserved-memory/linux,cma at 64 MiB. On this board the
+ * NVMe boot SSD is DRAM-less and claims a ~64 MiB Host Memory Buffer at probe
+ * ("nvme nvme0: allocated 64 MiB host memory buffer (16 segments)"), which the
+ * DMA layer satisfies out of this same default pool -- taking essentially all
+ * of it in one contiguous block and leaving a ~1.6 MiB scrap. Every later
+ * contiguous allocation then fails:
+ *
+ *   cma: __cma_alloc: linux,cma: alloc failed, req-size: 512 pages, ret: -16
+ *   cma: range 0: +1@15955+425@15959
+ *   => 426 free of 16384 total pages   (16384 pages = the 64 MiB pool)
+ *
+ * ret -16 is -EBUSY: not out of memory, but no contiguous run big enough,
+ * because the HMB pinned ~62 MiB at the bottom. 256 MiB leaves ~192 MiB after
+ * the HMB -- ample headroom -- and is negligible against this board's 16 GiB.
+ * The pool is "reusable", so movable allocations use it until a device claims
+ * it back; the extra size is not simply spent.
+ *
+ * Why a DT size override and not the cma= kernel argument: when a linux,cma
+ * reserved-memory node carrying linux,cma-default is present, the
+ * reserved-memory framework builds the default area from THIS node's size and
+ * cma= does not resize it. Only "size" is overridden here; the node's
+ * alloc-ranges (the low 1 GiB) is inherited, and 256 MiB fits it with room to
+ * spare.
+ */
+/dts-v1/;
+/plugin/;
+
+/ {
+	compatible = "brcm,bcm2712";
+
+	fragment@0 {
+		target-path = "/reserved-memory/linux,cma";
+		__overlay__ {
+			size = <0x0 0x10000000>;	/* 256 MiB (was 64 MiB) */
+		};
+	};
+};
