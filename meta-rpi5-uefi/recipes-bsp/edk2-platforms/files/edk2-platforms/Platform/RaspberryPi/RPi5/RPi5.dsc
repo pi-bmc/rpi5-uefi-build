@@ -500,6 +500,8 @@
   MemoryV1_7_1Lib|RedfishClientPkg/ConverterLib/edk2library/Memory/v1_7_1/Lib.inf
   MemoryCollectionLib|RedfishClientPkg/ConverterLib/edk2library/MemoryCollection/Lib.inf
   SecureBootV1_1_0Lib|RedfishClientPkg/ConverterLib/edk2library/SecureBoot/v1_1_0/Lib.inf
+  EthernetInterfaceV1_8_0Lib|RedfishClientPkg/ConverterLib/edk2library/EthernetInterface/v1_8_0/Lib.inf
+  EthernetInterfaceCollectionLib|RedfishClientPkg/ConverterLib/edk2library/EthernetInterfaceCollection/Lib.inf
 !if $(SECURE_BOOT_ENABLE) == FALSE
   #
   # RedfishClientPkg's SecureBootDxe feature driver links these either way; with
@@ -1036,8 +1038,11 @@
 
   #
   # BMC-managed IPv4 policy for the onboard NIC: an efivarstore Setup page
-  # published under Network Device List (EthCfg variable, EthIp4* Redfish
-  # attributes) applied into Ip4Config2 when Ip4Dxe binds the GEM.
+  # published under Network Device List (EthCfg variable), applied into
+  # Ip4Config2 when Ip4Dxe binds the GEM. Its questions carry
+  # x-UEFI-redfish-EthernetInterface configure language and are served as
+  # the standard /Systems/1/EthernetInterfaces resource by
+  # RedfishEthernetInterfaceDxe below - no vendor-specific Bios attributes.
   #
   Platform/RaspberryPi/RPi5/Drivers/EthConfigDxe/EthConfigDxe.inf
 !if $(RPI5_OPTEE) == TRUE
@@ -1134,6 +1139,14 @@
   RedfishClientPkg/Features/SecureBoot/v1_1_0/Dxe/SecureBootDxe.inf
   RedfishClientPkg/Features/Memory/V1_7_1/Dxe/MemoryDxe.inf
   RedfishClientPkg/Features/MemoryCollectionDxe/MemoryCollectionDxe.inf
+  #
+  # EthernetInterface feature + collection drivers are this platform's
+  # own (upstream ships converters for the schema but no feature
+  # driver); they serve /Systems/1/EthernetInterfaces from EthConfigDxe's
+  # x-UEFI-redfish-EthernetInterface questions.
+  #
+  Platform/RaspberryPi/RPi5/Drivers/RedfishEthernetInterfaceDxe/RedfishEthernetInterfaceDxe.inf
+  Platform/RaspberryPi/RPi5/Drivers/RedfishEthernetInterfaceCollectionDxe/RedfishEthernetInterfaceCollectionDxe.inf
   RedfishClientPkg/Converter/ComputerSystem/v1_13_0/RedfishComputerSystem_V1_13_0_Dxe.inf
   RedfishClientPkg/Converter/ComputerSystemCollection/RedfishComputerSystemCollection_Dxe.inf
   RedfishClientPkg/Converter/Bios/v1_1_0/RedfishBios_V1_1_0_Dxe.inf
@@ -1143,6 +1156,8 @@
   RedfishClientPkg/Converter/Memory/v1_7_1/RedfishMemory_V1_7_1_Dxe.inf
   RedfishClientPkg/Converter/MemoryCollection/RedfishMemoryCollection_Dxe.inf
   RedfishClientPkg/Converter/SecureBoot/v1_1_0/RedfishSecureBoot_V1_1_0_Dxe.inf
+  RedfishClientPkg/Converter/EthernetInterface/v1_8_0/RedfishEthernetInterface_V1_8_0_Dxe.inf
+  RedfishClientPkg/Converter/EthernetInterfaceCollection/RedfishEthernetInterfaceCollection_Dxe.inf
 
   #
   # Firmware Management Protocol + ESRT: a signed capsule through

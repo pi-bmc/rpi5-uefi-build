@@ -1,0 +1,63 @@
+## @file
+#  Redfish EthernetInterface feature driver (schema v1_8_0).
+#
+#  Produces EdkIIRedfishResourceConfigProtocol for
+#  Systems/{}/EthernetInterfaces members: provisions the member the HII
+#  database describes (EthConfigDxe's questions), consumes BMC-side
+#  PATCHes back into the EthCfg variable, and reports MACAddress. The
+#  upstream client has converters for this schema but no feature driver;
+#  this one follows the Memory/V1_7_1 model with hand-written commons
+#  (see EthernetInterfaceCommon.c for why).
+#
+#  Copyright (c) 2026, the pi-bmc contributors.
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+
+[Defines]
+  INF_VERSION    = 0x0001001A
+  BASE_NAME      = RedfishEthernetInterfaceDxe
+  FILE_GUID      = 3f61c2b7-90d4-4e08-a1f5-2dc87be40a96
+  MODULE_TYPE    = DXE_DRIVER
+  VERSION_STRING = 1.0
+  ENTRY_POINT    = RedfishResourceEntryPoint
+  UNLOAD_IMAGE   = RedfishResourceUnload
+
+[Packages]
+  MdePkg/MdePkg.dec
+  MdeModulePkg/MdeModulePkg.dec
+  RedfishPkg/RedfishPkg.dec
+  RedfishClientPkg/RedfishClientPkg.dec
+
+[Sources]
+  EthernetInterfaceCommon.c
+  EthernetInterfaceCommon.h
+  EthernetInterfaceDxe.c
+
+[LibraryClasses]
+  BaseLib
+  BaseMemoryLib
+  ConverterCommonLib
+  DebugLib
+  EdkIIRedfishResourceConfigLib
+  JsonLib
+  MemoryAllocationLib
+  PcdLib
+  PrintLib
+  RedfishFeatureUtilityLib
+  RedfishHttpLib
+  RedfishResourceIdentifyLib
+  UefiDriverEntryPoint
+  UefiLib
+
+[Protocols]
+  gEdkIIRedfishConfigHandlerProtocolGuid   ## PRODUCES
+  gEfiRestJsonStructureProtocolGuid        ## CONSUMES
+  gEdkIIRedfishResourceConfigProtocolGuid  ## PRODUCES
+
+[Pcd]
+  gEfiRedfishClientPkgTokenSpaceGuid.PcdMaxRedfishSchemaStringSize
+  gEfiRedfishClientPkgTokenSpaceGuid.PcdMaxRedfishSchemaVersionSize
+
+[Depex]
+  TRUE

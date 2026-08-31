@@ -29,12 +29,14 @@
   Platform/RaspberryPi/RPi5/RPi5.dec
 
 [LibraryClasses]
+  BaseLib
   BaseMemoryLib
   DebugLib
   DevicePathLib
   HiiLib
   MemoryAllocationLib
   NetLib
+  PrintLib
   UefiBootServicesTableLib
   UefiDriverEntryPoint
   UefiRuntimeServicesTableLib

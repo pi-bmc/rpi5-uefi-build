@@ -2,8 +2,9 @@
 
   EthCfg - the persistent BMC-managed IPv4 policy for the onboard NIC,
   shared between EthConfigDxe (efivarstore Setup page + boot-time apply
-  into Ip4Config2) and any BMC-side writer that reaches UEFI variables
-  (the Redfish Bios feature driver PATCHing /Systems/1/Bios attributes).
+  into Ip4Config2) and the Redfish EthernetInterface feature driver
+  (RedfishEthernetInterfaceDxe), which consumes standard
+  /Systems/1/EthernetInterfaces/{id} PATCHes into these questions.
 
   This header is included by VFR as well as C: keep it to #defines and the
   varstore struct only.
@@ -24,29 +25,43 @@
 
 #define RPI_ETH_CONFIG_VARIABLE_NAME  L"EthCfg"
 
-#define RPI_ETH_IP4_MODE_UNMANAGED  0    // leave Ip4Config2 (and its Setup form) alone
-#define RPI_ETH_IP4_MODE_DHCP       1    // force DHCP policy every boot
-#define RPI_ETH_IP4_MODE_STATIC     2    // force the static settings below every boot
-
 //
 // "255.255.255.255" plus the terminating NUL.
 //
 #define RPI_ETH_IP4_STR_SIZE  16
 
+//
+// "AA:BB:CC:DD:EE:FF" plus the terminating NUL.
+//
+#define RPI_ETH_MAC_STR_SIZE  18
+
 #pragma pack (1)
 typedef struct {
-  UINT8     Ip4Mode;                                // RPI_ETH_IP4_MODE_*
+  //
+  // Standard EthernetInterface semantics (DHCPv4/DHCPEnabled): TRUE
+  // applies the DHCP policy every boot (the platform default anyway);
+  // FALSE with a parseable Address+SubnetMask below applies the static
+  // configuration; FALSE with an empty address touches nothing, which
+  // keeps whatever the NIC's native IPv4 form configured.
+  //
+  BOOLEAN    DhcpEnabled;
+  //
+  // The claimed NIC's MAC, seeded from its device path each boot.
+  // Report-only (READ_ONLY question): the value behind the Redfish
+  // MACAddress property.
+  //
+  CHAR16     MacAddress[RPI_ETH_MAC_STR_SIZE];
   //
   // Dotted-quad strings, NUL terminated, empty when unset. Address and
-  // SubnetMask are required in STATIC mode (a parse failure keeps the
-  // boot on the NIC's existing configuration); Gateway and the two DNS
-  // servers are optional.
+  // SubnetMask are required for a static apply (a parse failure keeps
+  // the boot on the NIC's existing configuration); Gateway and the two
+  // DNS servers are optional.
   //
-  CHAR16    Ip4Address[RPI_ETH_IP4_STR_SIZE];
-  CHAR16    Ip4SubnetMask[RPI_ETH_IP4_STR_SIZE];
-  CHAR16    Ip4Gateway[RPI_ETH_IP4_STR_SIZE];
-  CHAR16    Ip4Dns1[RPI_ETH_IP4_STR_SIZE];
-  CHAR16    Ip4Dns2[RPI_ETH_IP4_STR_SIZE];
+  CHAR16     Ip4Address[RPI_ETH_IP4_STR_SIZE];
+  CHAR16     Ip4SubnetMask[RPI_ETH_IP4_STR_SIZE];
+  CHAR16     Ip4Gateway[RPI_ETH_IP4_STR_SIZE];
+  CHAR16     Ip4Dns1[RPI_ETH_IP4_STR_SIZE];
+  CHAR16     Ip4Dns2[RPI_ETH_IP4_STR_SIZE];
 } RPI_ETH_CONFIG;
 #pragma pack ()
 

@@ -1011,149 +1011,6 @@ ReportDrives (
 }
 
 /**
-  Delete stale members from the BMC's EthernetInterfaces collection.
-
-  Member ids are eth0..eth(Count-1); anything else in the collection is a
-  ghost from an earlier boot (index-keyed ids plus per-boot handle-count
-  variance minted eth1/eth2 duplicates before the collector deduped by
-  MAC). The BMC persists host collections, so the host is the only party
-  that can retire them -- same stale-member DELETE contract the BootOption
-  feature driver uses.
-
-  @param[in] Service  The Redfish service.
-  @param[in] Count    Number of NICs about to be reported.
-**/
-STATIC
-VOID
-PruneStaleNics (
-  IN REDFISH_SERVICE  Service,
-  IN UINTN            Count
-  )
-{
-  EFI_STATUS        Status;
-  REDFISH_RESPONSE  Response;
-  REDFISH_RESPONSE  DelResponse;
-  EDKII_JSON_VALUE  Root;
-  EDKII_JSON_VALUE  Members;
-  EDKII_JSON_VALUE  Member;
-  EDKII_JSON_VALUE  OdataId;
-  CONST CHAR8       *IdPath;
-  CONST CHAR8       *Tail;
-  UINTN             Index;
-  UINTN             Nic;
-  BOOLEAN           Keep;
-  CHAR8             Expect[16];
-  CHAR16            MemberUri[128];
-
-  ZeroMem (&Response, sizeof (Response));
-  Status = RedfishHttpGetResource (Service, RPI_REDFISH_ETHERNET_URI, NULL, &Response, FALSE);
-  if (EFI_ERROR (Status) || (Response.Payload == NULL)) {
-    RedfishHttpFreeResponse (&Response);
-    return;
-  }
-
-  Root    = RedfishJsonInPayload (Response.Payload);
-  Members = (Root == NULL) ? NULL :
-            JsonObjectGetValue (JsonValueGetObject (Root), "Members");
-  if ((Members != NULL) && JsonValueIsArray (Members)) {
-    for (Index = 0; Index < JsonArrayCount (JsonValueGetArray (Members)); Index++) {
-      Member  = JsonArrayGetValue (JsonValueGetArray (Members), Index);
-      OdataId = (Member == NULL) ? NULL :
-                JsonObjectGetValue (JsonValueGetObject (Member), "@odata.id");
-      IdPath  = (OdataId == NULL) ? NULL : JsonValueGetAsciiString (OdataId);
-      if (IdPath == NULL) {
-        continue;
-      }
-
-      Tail = IdPath;
-      while (AsciiStrStr (Tail, "/") != NULL) {
-        Tail = AsciiStrStr (Tail, "/") + 1;
-      }
-
-      Keep = FALSE;
-      for (Nic = 0; Nic < Count; Nic++) {
-        AsciiSPrint (Expect, sizeof (Expect), "eth%u", (UINT32)Nic);
-        if (AsciiStrCmp (Tail, Expect) == 0) {
-          Keep = TRUE;
-          break;
-        }
-      }
-
-      if (!Keep) {
-        UnicodeSPrint (
-          MemberUri,
-          sizeof (MemberUri),
-          L"%s/%a",
-          RPI_REDFISH_ETHERNET_URI,
-          Tail
-          );
-        ZeroMem (&DelResponse, sizeof (DelResponse));
-        Status = RedfishHttpDeleteResource (Service, MemberUri, &DelResponse);
-        LogResult ("DELETE(stale-nic)", MemberUri, Status, &DelResponse);
-        RedfishHttpFreeResponse (&DelResponse);
-      }
-    }
-  }
-
-  RedfishHttpFreeResponse (&Response);
-}
-
-/**
-  Report the host's Ethernet interfaces to the BMC's EthernetInterfaces
-  collection.
-
-  Same shape as ReportMemory -- one POST per NIC, keyed on a MAC-derived Id
-  so a later boot's re-report updates the member in place. Sourced from the
-  SNP handles BDS has already connected; the RHI's own USB NIC is excluded
-  at collection time (see RpiRedfishCollectNics). This is the Redfish
-  successor of the "ethaddr" the U-Boot env used to carry for the BMC.
-
-  @param[in] Service  The Redfish service to report to.
-**/
-STATIC
-VOID
-ReportEthernetInterfaces (
-  IN REDFISH_SERVICE  Service
-  )
-{
-  RPI_REDFISH_NIC   Nics[RPI_REDFISH_NIC_MAX];
-  REDFISH_RESPONSE  Response;
-  EFI_STATUS        Status;
-  UINTN             Count;
-  UINTN             Index;
-  CHAR8             *Body;
-
-  Status = RpiRedfishCollectNics (Nics, RPI_REDFISH_NIC_MAX, &Count);
-  if (EFI_ERROR (Status) || (Count == 0)) {
-    DEBUG ((DEBUG_ERROR, "RpiRedfishSync: no NICs to report - %r\n", Status));
-    return;
-  }
-
-  //
-  // Retire ghosts before reporting, so the collection converges on this
-  // boot's truth in one pass.
-  //
-  PruneStaleNics (Service, Count);
-
-  for (Index = 0; Index < Count; Index++) {
-    Body   = NULL;
-    Status = RpiRedfishBuildNicPost (&Nics[Index], Index, &Body);
-    if (EFI_ERROR (Status) || (Body == NULL)) {
-      continue;
-    }
-
-    ZeroMem (&Response, sizeof (Response));
-    Status = RedfishHttpPostResource (Service, RPI_REDFISH_ETHERNET_URI, Body, &Response);
-    LogResult ("POST", RPI_REDFISH_ETHERNET_URI, Status, &Response);
-    RedfishHttpFreeResponse (&Response);
-
-    FreePool (Body);
-  }
-
-  DEBUG ((DEBUG_ERROR, "RpiRedfishSync: reported %d NIC(s)\n", Count));
-}
-
-/**
   Read back the BMC's fan steering from the Thermal resource and apply it.
 
   Wire contract: the BMC stages Oem.PiBmc.FanOverrideLevel (integer,
@@ -1327,17 +1184,12 @@ RpiRedfishSync (
   ReportDrives (Service);
 
   //
-  // 2e. Report the Ethernet interfaces.
-  //
-  ReportEthernetInterfaces (Service);
-
-  //
-  // 2f. Report the firmware inventory.
+  // 2e. Report the firmware inventory.
   //
   ReportFirmwareInventory (Service);
 
   //
-  // 2g. Apply any fan steering the BMC already staged. The thermal reading
+  // 2f. Apply any fan steering the BMC already staged. The thermal reading
   //    itself is no longer PATCHed from here: OP-TEE pushes SoC temperature
   //    and fan state to the BMC over I2C (the bmc_sensor record) and the BMC
   //    renders Chassis/1/Thermal from that. Before the boot-override step on

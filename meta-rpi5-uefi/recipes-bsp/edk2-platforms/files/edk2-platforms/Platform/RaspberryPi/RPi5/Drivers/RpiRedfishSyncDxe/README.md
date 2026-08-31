@@ -88,7 +88,14 @@ fallback to the prompt text or the question ID.
 | BootloaderConfigDxe | `BootloaderConfigDxeMap.uni` | `BlBootOrder`, `BlBootUart`, `BlPowerOffOnHalt`, `BlWakeOnGpio`, `BlPsuMaxCurrent` |
 | MemoryAttributeManagerDxe | `MemoryAttributeManagerDxeHiiMap.uni` | `MemoryAttributeProtocol` |
 | SecureBootToggleDxe | `SecureBootToggleDxeMap.uni` | `SecureBoot` (only with `RPI5_SECURE_BOOT=1`) |
-| EthConfigDxe | `EthConfigDxeMap.uni` | `EthIp4Mode`, `EthIp4Address`, `EthIp4SubnetMask`, `EthIp4Gateway`, `EthIp4Dns1`, `EthIp4Dns2` |
+
+EthConfigDxe's questions are deliberately **not** Bios attributes: they
+carry `x-UEFI-redfish-EthernetInterface.v1_8_0` configure language and are
+served as the standard `/Systems/1/EthernetInterfaces/{id}` resource by
+`RedfishEthernetInterfaceDxe` + `RedfishEthernetInterfaceCollectionDxe`
+(this platform's own feature/collection drivers - upstream ships only the
+schema converters), so the BMC manages NIC IPv4 with plain Redfish and no
+vendor-specific bridge.
 
 Attribute names share one flat namespace across the whole platform, hence
 the per-formset prefixes. Storage is each question's own efivarstore:
@@ -100,19 +107,22 @@ fan policy applies live (ActiveCoolerDxe re-reads it every second).
 
 Three caveats worth knowing:
 
-* `EthIp4*` writes reach the `EthCfg` variable; EthConfigDxe applies it to
-  the onboard NIC's `Ip4Config2` on the **next** boot, when Ip4Dxe binds
-  the GEM (RESET_REQUIRED, like most attributes). `Unmanaged` mode leaves
-  the NIC's own configuration alone, so the native IPv4 Setup page still
-  works until the BMC opts in. The BMC's own USB NCM link is explicitly
-  excluded from the apply - a PATCH here can never cut off the RHI.
+* EthernetInterface writes (DHCPv4/IPv4StaticAddresses/StaticNameServers
+  PATCHed on `/Systems/1/EthernetInterfaces/eth0`) reach the `EthCfg`
+  variable; EthConfigDxe applies it to the onboard NIC's `Ip4Config2` on
+  the **next** boot, when Ip4Dxe binds the GEM (RESET_REQUIRED - the
+  feature core reboots on its own after a consumed change). DHCP off with
+  no static address leaves the NIC's own configuration alone, so the
+  native IPv4 Setup page still works until the BMC opts in. The BMC's own
+  USB NCM link is explicitly excluded from the apply - a PATCH here can
+  never cut off the RHI.
 * `Bl*` writes reach the `BlCfg` variable, **not** the EEPROM.
   BootloaderConfigDxe re-seeds that variable from the live blconfig every
   boot, and only the interactive "stage update" action in Setup writes the
   SPI flash. Treat them as read-mostly.
 * Both platform formsets hide most questions behind `suppressif`, so
   `PcdRedfishPlatformConfigFeatureProperty` is set to `0x03` in
-  `RpiRedfishClient.dsc.inc` (bit 1 harvests suppressed questions, bit 0
+  `RPi5.dsc` (bit 1 harvests suppressed questions, bit 0
   records menu paths). At the default of `0` the BMC would see one
   attribute per formset, appearing and disappearing with unrelated
   settings.

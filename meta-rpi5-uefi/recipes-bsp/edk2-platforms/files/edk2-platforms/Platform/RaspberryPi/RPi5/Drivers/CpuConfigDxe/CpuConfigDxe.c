@@ -300,8 +300,8 @@ BuildManagedBlock (
           Buf,
           BufSize,
           CPU_BLOCK_BEGIN " - managed by Device Manager / CPU Configuration; do not hand-edit\n"
-          "[all]\n"
-          "arm_freq=%u\n",
+                          "[all]\n"
+                          "arm_freq=%u\n",
           Mhz
           );
 

@@ -1,10 +1,14 @@
 /** @file
  *
  *  BMC-managed IPv4 formset for the onboard NIC, bound to the EthCfg
- *  variable (efivarstore - the browser and the Redfish Bios pipeline
- *  read and write the variable directly, no callbacks). EthConfigDxe
- *  applies the variable to Ip4Config2 when the NIC's network stack
- *  comes up, so every question is RESET_REQUIRED.
+ *  variable (efivarstore - the browser and the Redfish EthernetInterface
+ *  pipeline read and write the variable directly, no callbacks).
+ *  EthConfigDxe applies the variable to Ip4Config2 when the NIC's
+ *  network stack comes up, so every writable question is RESET_REQUIRED.
+ *
+ *  The question set mirrors the standard EthernetInterface schema:
+ *  DHCPv4/DHCPEnabled as the policy switch, one IPv4StaticAddresses
+ *  entry, two StaticNameServers, and the report-only MACAddress.
  *
  *  SPDX-License-Identifier: BSD-2-Clause-Patent
  *
@@ -31,16 +35,21 @@ formset
     form formid = 1,
         title = STRING_TOKEN(STR_FORM_TITLE);
 
-        oneof varid = EthCfg.Ip4Mode,
-            prompt      = STRING_TOKEN(STR_ETH_IP4_MODE_PROMPT),
-            help        = STRING_TOKEN(STR_ETH_IP4_MODE_HELP),
-            flags       = NUMERIC_SIZE_1 | RESET_REQUIRED,
-            option text = STRING_TOKEN(STR_ETH_IP4_MODE_UNMANAGED), value = 0, flags = DEFAULT;
-            option text = STRING_TOKEN(STR_ETH_IP4_MODE_DHCP),      value = 1, flags = 0;
-            option text = STRING_TOKEN(STR_ETH_IP4_MODE_STATIC),    value = 2, flags = 0;
-        endoneof;
+        string varid = EthCfg.MacAddress,
+            prompt  = STRING_TOKEN(STR_ETH_MAC_PROMPT),
+            help    = STRING_TOKEN(STR_ETH_MAC_HELP),
+            flags   = READ_ONLY,
+            minsize = 0,
+            maxsize = 17,
+        endstring;
 
-        suppressif ideqval EthCfg.Ip4Mode == 0 OR ideqval EthCfg.Ip4Mode == 1;
+        checkbox varid = EthCfg.DhcpEnabled,
+            prompt = STRING_TOKEN(STR_ETH_DHCP_PROMPT),
+            help   = STRING_TOKEN(STR_ETH_DHCP_HELP),
+            flags  = CHECKBOX_DEFAULT | RESET_REQUIRED,
+        endcheckbox;
+
+        suppressif ideqval EthCfg.DhcpEnabled == 1;
             string varid = EthCfg.Ip4Address,
                 prompt  = STRING_TOKEN(STR_ETH_IP4_ADDRESS_PROMPT),
                 help    = STRING_TOKEN(STR_ETH_IP4_REQUIRED_HELP),
@@ -64,23 +73,23 @@ formset
                 minsize = 0,
                 maxsize = 15,
             endstring;
-
-            string varid = EthCfg.Ip4Dns1,
-                prompt  = STRING_TOKEN(STR_ETH_IP4_DNS1_PROMPT),
-                help    = STRING_TOKEN(STR_ETH_IP4_OPTIONAL_HELP),
-                flags   = RESET_REQUIRED,
-                minsize = 0,
-                maxsize = 15,
-            endstring;
-
-            string varid = EthCfg.Ip4Dns2,
-                prompt  = STRING_TOKEN(STR_ETH_IP4_DNS2_PROMPT),
-                help    = STRING_TOKEN(STR_ETH_IP4_OPTIONAL_HELP),
-                flags   = RESET_REQUIRED,
-                minsize = 0,
-                maxsize = 15,
-            endstring;
         endif;
+
+        string varid = EthCfg.Ip4Dns1,
+            prompt  = STRING_TOKEN(STR_ETH_IP4_DNS1_PROMPT),
+            help    = STRING_TOKEN(STR_ETH_IP4_OPTIONAL_HELP),
+            flags   = RESET_REQUIRED,
+            minsize = 0,
+            maxsize = 15,
+        endstring;
+
+        string varid = EthCfg.Ip4Dns2,
+            prompt  = STRING_TOKEN(STR_ETH_IP4_DNS2_PROMPT),
+            help    = STRING_TOKEN(STR_ETH_IP4_OPTIONAL_HELP),
+            flags   = RESET_REQUIRED,
+            minsize = 0,
+            maxsize = 15,
+        endstring;
 
     endform;
 

@@ -1,0 +1,58 @@
+## @file
+#  Redfish EthernetInterfaceCollection collection driver.
+#
+#  Registers Systems/{}/EthernetInterfaces/{} with the feature core,
+#  walks the BMC-side collection, and drives the EthernetInterface
+#  feature driver per member - creating the member from HII data when
+#  the collection is empty. Direct transform of upstream's
+#  MemoryCollectionDxe (there is no upstream EthernetInterface
+#  collection driver at this client pin).
+#
+#  Copyright (c) 2026, the pi-bmc contributors.
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+
+[Defines]
+  INF_VERSION    = 0x0001001A
+  BASE_NAME      = RedfishEthernetInterfaceCollectionDxe
+  FILE_GUID      = 8a94d1f0-27c6-45e3-b108-79f2e5c0d6b4
+  MODULE_TYPE    = DXE_DRIVER
+  VERSION_STRING = 1.0
+  ENTRY_POINT    = RedfishCollectionEntryPoint
+  UNLOAD_IMAGE   = RedfishCollectionUnload
+
+[Packages]
+  MdePkg/MdePkg.dec
+  MdeModulePkg/MdeModulePkg.dec
+  RedfishPkg/RedfishPkg.dec
+  RedfishClientPkg/RedfishClientPkg.dec
+
+[Sources]
+  EthernetInterfaceCollectionDxe.c
+  EthernetInterfaceCollectionDxe.h
+
+[LibraryClasses]
+  BaseMemoryLib
+  ConverterCommonLib
+  DebugLib
+  EdkIIRedfishResourceConfigLib
+  MemoryAllocationLib
+  RedfishFeatureUtilityLib
+  RedfishHttpLib
+  RedfishVersionLib
+  UefiBootServicesTableLib
+  UefiDriverEntryPoint
+  UefiLib
+
+[Protocols]
+  gEdkIIRedfishConfigHandlerProtocolGuid  ## PRODUCES
+  gEfiRestJsonStructureProtocolGuid       ## CONSUMES
+  gEdkIIRedfishFeatureProtocolGuid        ## CONSUMES
+
+[Pcd]
+  gEfiRedfishClientPkgTokenSpaceGuid.PcdMaxRedfishSchemaStringSize
+  gEfiRedfishClientPkgTokenSpaceGuid.PcdMaxRedfishSchemaVersionSize
+
+[Depex]
+  TRUE

@@ -163,13 +163,13 @@ ParseFmpCapsule (
   OUT UINTN                     *PayloadSize
   )
 {
-  CONST UINT8                                          *Bytes;
-  CONST EFI_FIRMWARE_MANAGEMENT_CAPSULE_HEADER         *FmpHeader;
-  CONST UINT64                                         *ItemOffsets;
-  CONST EFI_FIRMWARE_MANAGEMENT_CAPSULE_IMAGE_HEADER   *ImageHeader;
-  CONST RPI5_FMP_PAYLOAD_HEADER                        *PayloadHeader;
-  UINTN                                                Offset;
-  UINTN                                                Limit;
+  CONST UINT8                                         *Bytes;
+  CONST EFI_FIRMWARE_MANAGEMENT_CAPSULE_HEADER        *FmpHeader;
+  CONST UINT64                                        *ItemOffsets;
+  CONST EFI_FIRMWARE_MANAGEMENT_CAPSULE_IMAGE_HEADER  *ImageHeader;
+  CONST RPI5_FMP_PAYLOAD_HEADER                       *PayloadHeader;
+  UINTN                                               Offset;
+  UINTN                                               Limit;
 
   if (!CompareGuid (&Capsule->CapsuleGuid, &gEfiFmpCapsuleGuid)) {
     return FALSE;
@@ -555,13 +555,15 @@ DirectWriteFirmware (
     }
 
     for (NameIndex = 0; (NameIndex < ARRAY_SIZE (mFirmwareFileNames)) && !Written; NameIndex++) {
-      if (EFI_ERROR (Root->Open (
-                             Root,
-                             &File,
-                             mFirmwareFileNames[NameIndex],
-                             EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE,
-                             0
-                             )))
+      if (EFI_ERROR (
+            Root->Open (
+                    Root,
+                    &File,
+                    mFirmwareFileNames[NameIndex],
+                    EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE,
+                    0
+                    )
+            ))
       {
         continue;
       }

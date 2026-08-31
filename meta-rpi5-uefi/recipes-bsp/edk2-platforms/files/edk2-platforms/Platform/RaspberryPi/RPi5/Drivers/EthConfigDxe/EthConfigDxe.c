@@ -4,9 +4,14 @@
 
   Pure efivarstore HII in the FanConfigDxe idiom: the formset
   (EthConfigHii.vfr) binds its questions straight to the EthCfg variable,
-  so the form browser and the Redfish Bios pipeline read and write the
-  variable itself and this driver needs no ConfigAccess callbacks. What it
-  does add over FanConfigDxe:
+  so the form browser and the Redfish pipeline read and write the
+  variable itself and this driver needs no ConfigAccess callbacks. The
+  questions carry x-UEFI-redfish-EthernetInterface.v1_8_0 configure
+  language (EthConfigDxeMap.uni) and are served over the wire by
+  RedfishEthernetInterfaceDxe as the standard
+  /Systems/1/EthernetInterfaces/{id} resource - no vendor-specific
+  attributes remain in the contract. What this driver adds over
+  FanConfigDxe:
 
   * The HII packages are published on a fresh handle whose device path is
     the NIC's own path plus one vendor node (the Ip4Dxe trick from
@@ -16,12 +21,19 @@
     the Device Manager top level.
 
   * At boot, once Ip4Dxe binds the NIC and installs EFI_IP4_CONFIG2_PROTOCOL
-    on it, the stored policy is applied: Unmanaged touches nothing, DHCP
-    forces the DHCP policy, Static parses the dotted-quad strings and pushes
-    Policy/ManualAddress/Gateway/DnsServer the same way the native form's
-    save path does. A BMC write over Redfish therefore takes effect on the
-    NEXT boot (the Redfish provisioning runs long after this apply), which
-    is why every question is RESET_REQUIRED.
+    on it, the stored policy is applied with the standard schema's
+    semantics: DhcpEnabled forces the DHCP policy; otherwise a parseable
+    static address is pushed through Policy/ManualAddress/Gateway/
+    DnsServer the same way the native form's save path does, and an
+    empty static address touches nothing. A BMC write over Redfish
+    therefore takes effect on the NEXT boot (the feature driver's
+    consume runs long after this apply), which is why every writable
+    question is RESET_REQUIRED - and the consume helpers raise
+    PcdRedfishSystemRebootRequired, so the feature core reboots into
+    the new configuration on its own.
+
+  * The claimed NIC's MAC is written into the variable each boot, backing
+    the read-only MACAddress question the feature driver reports.
 
   The BMC's own USB CDC network gadget - the Redfish host interface - is
   excluded by the same USB-node-plus-MAC-node device path test the 0103 and
@@ -45,6 +57,7 @@
 #include <Library/HiiLib.h>
 #include <Library/MemoryAllocationLib.h>
 #include <Library/NetLib.h>
+#include <Library/PrintLib.h>
 #include <Library/UefiBootServicesTableLib.h>
 #include <Library/UefiRuntimeServicesTableLib.h>
 
@@ -64,11 +77,12 @@ STATIC VOID       *mIp4Config2Registration;
 STATIC BOOLEAN    mNicClaimed;
 
 /**
-  Create EthCfg with Unmanaged defaults when it is absent or has been
-  written with the wrong size (an old layout, a corrupt BMC write): the
-  browser's efivarstore reads and the Redfish attribute reads both need a
-  well-formed variable, and the apply path treats a malformed one as
-  Unmanaged anyway.
+  Create EthCfg with DHCP defaults when it is absent or has been written
+  with the wrong size (an old layout - the pre-EthernetInterface tri-state
+  one included - or a corrupt BMC write): the browser's efivarstore reads
+  and the Redfish question reads both need a well-formed variable.
+  DhcpEnabled is the platform's effective default policy anyway, so the
+  reset is behavior-preserving.
 **/
 STATIC
 VOID
@@ -93,7 +107,7 @@ EnsureConfigVariable (
   }
 
   ZeroMem (&Config, sizeof (Config));
-  Config.Ip4Mode = RPI_ETH_IP4_MODE_UNMANAGED;
+  Config.DhcpEnabled = TRUE;
 
   Status = gRT->SetVariable (
                   RPI_ETH_CONFIG_VARIABLE_NAME,
@@ -138,12 +152,74 @@ ReadConfigVariable (
     return EFI_NOT_FOUND;
   }
 
+  Config->MacAddress[RPI_ETH_MAC_STR_SIZE - 1]    = L'\0';
   Config->Ip4Address[RPI_ETH_IP4_STR_SIZE - 1]    = L'\0';
   Config->Ip4SubnetMask[RPI_ETH_IP4_STR_SIZE - 1] = L'\0';
   Config->Ip4Gateway[RPI_ETH_IP4_STR_SIZE - 1]    = L'\0';
   Config->Ip4Dns1[RPI_ETH_IP4_STR_SIZE - 1]       = L'\0';
   Config->Ip4Dns2[RPI_ETH_IP4_STR_SIZE - 1]       = L'\0';
   return EFI_SUCCESS;
+}
+
+/**
+  Write the claimed NIC's MAC into the variable's read-only MacAddress
+  field, from the MAC node its device path carries. Backing data for the
+  Redfish MACAddress property; skipped (with the stale value left in
+  place) when the variable is unreadable or the path has no MAC node.
+
+  @param[in] DevicePath  The claimed NIC's device path.
+**/
+STATIC
+VOID
+SeedMacAddress (
+  IN EFI_DEVICE_PATH_PROTOCOL  *DevicePath
+  )
+{
+  EFI_DEVICE_PATH_PROTOCOL  *Node;
+  MAC_ADDR_DEVICE_PATH      *MacNode;
+  RPI_ETH_CONFIG            Config;
+  CHAR16                    MacText[RPI_ETH_MAC_STR_SIZE];
+
+  MacNode = NULL;
+  for (Node = DevicePath; !IsDevicePathEnd (Node); Node = NextDevicePathNode (Node)) {
+    if ((DevicePathType (Node) == MESSAGING_DEVICE_PATH) &&
+        (DevicePathSubType (Node) == MSG_MAC_ADDR_DP))
+    {
+      MacNode = (MAC_ADDR_DEVICE_PATH *)Node;
+      break;
+    }
+  }
+
+  if ((MacNode == NULL) || EFI_ERROR (ReadConfigVariable (&Config))) {
+    return;
+  }
+
+  UnicodeSPrint (
+    MacText,
+    sizeof (MacText),
+    L"%02X:%02X:%02X:%02X:%02X:%02X",
+    MacNode->MacAddress.Addr[0],
+    MacNode->MacAddress.Addr[1],
+    MacNode->MacAddress.Addr[2],
+    MacNode->MacAddress.Addr[3],
+    MacNode->MacAddress.Addr[4],
+    MacNode->MacAddress.Addr[5]
+    );
+
+  if (StrCmp (MacText, Config.MacAddress) == 0) {
+    return;
+  }
+
+  CopyMem (Config.MacAddress, MacText, sizeof (MacText));
+  gRT->SetVariable (
+         RPI_ETH_CONFIG_VARIABLE_NAME,
+         &gRpiEthConfigFormSetGuid,
+         EFI_VARIABLE_NON_VOLATILE |
+         EFI_VARIABLE_BOOTSERVICE_ACCESS |
+         EFI_VARIABLE_RUNTIME_ACCESS,
+         sizeof (Config),
+         &Config
+         );
 }
 
 /**
@@ -233,7 +309,8 @@ ManualAddressNotify (
   optional Gateway and DnsServer lists.
 
   @param[in] Ip4Cfg2  The NIC's config protocol.
-  @param[in] Config   The validated EthCfg content (STATIC mode).
+  @param[in] Config   The validated EthCfg content (DhcpEnabled FALSE,
+                      static address present).
 
   @retval EFI_SUCCESS  The address was applied (gateway/DNS best-effort).
   @return  Others      Parse or SetData failure; the NIC keeps whatever
@@ -416,7 +493,11 @@ ApplyConfig (
     return;
   }
 
-  if (Config.Ip4Mode == RPI_ETH_IP4_MODE_UNMANAGED) {
+  if (!Config.DhcpEnabled && (Config.Ip4Address[0] == L'\0')) {
+    //
+    // DHCP off with no static address configured: leave the NIC's own
+    // IPv4 configuration alone (the old "Unmanaged" behavior).
+    //
     return;
   }
 
@@ -429,32 +510,22 @@ ApplyConfig (
     return;
   }
 
-  switch (Config.Ip4Mode) {
-    case RPI_ETH_IP4_MODE_DHCP:
-      Policy = Ip4Config2PolicyDhcp;
-      Status = Ip4Cfg2->SetData (
-                          Ip4Cfg2,
-                          Ip4Config2DataTypePolicy,
-                          sizeof (Policy),
-                          &Policy
-                          );
-      break;
-
-    case RPI_ETH_IP4_MODE_STATIC:
-      Status = ApplyStaticConfig (Ip4Cfg2, &Config);
-      break;
-
-    default:
-      //
-      // An unknown mode (a corrupt or future-layout write) is Unmanaged.
-      //
-      return;
+  if (Config.DhcpEnabled) {
+    Policy = Ip4Config2PolicyDhcp;
+    Status = Ip4Cfg2->SetData (
+                        Ip4Cfg2,
+                        Ip4Config2DataTypePolicy,
+                        sizeof (Policy),
+                        &Policy
+                        );
+  } else {
+    Status = ApplyStaticConfig (Ip4Cfg2, &Config);
   }
 
   DEBUG ((
     DEBUG_INFO,
-    "EthConfigDxe: applied IPv4 mode %u - %r\n",
-    Config.Ip4Mode,
+    "EthConfigDxe: applied IPv4 policy (dhcp=%u) - %r\n",
+    Config.DhcpEnabled,
     Status
     ));
 }
@@ -585,6 +656,7 @@ OnIp4Config2Installed (
     }
 
     mNicClaimed = TRUE;
+    SeedMacAddress (DevicePath);
     PublishFormset (DevicePath);
     ApplyConfig (NicHandle);
   }
