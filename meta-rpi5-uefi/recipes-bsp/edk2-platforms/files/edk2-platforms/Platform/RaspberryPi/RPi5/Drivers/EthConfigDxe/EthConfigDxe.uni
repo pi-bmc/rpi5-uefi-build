@@ -1,0 +1,27 @@
+/** @file
+ *
+ *  Strings for the BMC-managed IPv4 formset.
+ *
+ *  SPDX-License-Identifier: BSD-2-Clause-Patent
+ *
+ **/
+
+#langdef en-US "English"
+
+#string STR_FORM_SET_TITLE              #language en-US "IPv4 (BMC Managed)"
+#string STR_FORM_SET_TITLE_HELP         #language en-US "BMC-managed IPv4 policy for the onboard Ethernet port. When a mode other than Unmanaged is selected, these settings are pushed into the network stack on every boot and override anything configured on the standard IPv4 Network Configuration page. The BMC edits the same settings over Redfish (/Systems/1/Bios, EthIp4* attributes)."
+#string STR_FORM_TITLE                  #language en-US "BMC-Managed IPv4 Configuration"
+
+#string STR_ETH_IP4_MODE_PROMPT         #language en-US "IPv4 Policy"
+#string STR_ETH_IP4_MODE_HELP           #language en-US "Unmanaged leaves the NIC's own IPv4 configuration alone. DHCP forces the DHCP policy on every boot. Static forces the address settings below on every boot. Changes apply on the next boot."
+#string STR_ETH_IP4_MODE_UNMANAGED      #language en-US "Unmanaged"
+#string STR_ETH_IP4_MODE_DHCP           #language en-US "DHCP"
+#string STR_ETH_IP4_MODE_STATIC         #language en-US "Static"
+
+#string STR_ETH_IP4_ADDRESS_PROMPT      #language en-US "Static IP Address"
+#string STR_ETH_IP4_SUBNET_MASK_PROMPT  #language en-US "Subnet Mask"
+#string STR_ETH_IP4_GATEWAY_PROMPT      #language en-US "Default Gateway"
+#string STR_ETH_IP4_DNS1_PROMPT         #language en-US "DNS Server 1"
+#string STR_ETH_IP4_DNS2_PROMPT         #language en-US "DNS Server 2"
+#string STR_ETH_IP4_REQUIRED_HELP       #language en-US "Dotted-quad IPv4 address, e.g. 192.168.1.10. Required in Static mode: if this or the subnet mask does not parse, the boot keeps the NIC's existing configuration."
+#string STR_ETH_IP4_OPTIONAL_HELP       #language en-US "Dotted-quad IPv4 address. Optional: leave empty to omit."

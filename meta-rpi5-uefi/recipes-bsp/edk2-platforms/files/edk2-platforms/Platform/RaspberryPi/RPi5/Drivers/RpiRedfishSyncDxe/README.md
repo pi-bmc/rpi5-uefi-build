@@ -88,6 +88,7 @@ fallback to the prompt text or the question ID.
 | BootloaderConfigDxe | `BootloaderConfigDxeMap.uni` | `BlBootOrder`, `BlBootUart`, `BlPowerOffOnHalt`, `BlWakeOnGpio`, `BlPsuMaxCurrent` |
 | MemoryAttributeManagerDxe | `MemoryAttributeManagerDxeHiiMap.uni` | `MemoryAttributeProtocol` |
 | SecureBootToggleDxe | `SecureBootToggleDxeMap.uni` | `SecureBoot` (only with `RPI5_SECURE_BOOT=1`) |
+| EthConfigDxe | `EthConfigDxeMap.uni` | `EthIp4Mode`, `EthIp4Address`, `EthIp4SubnetMask`, `EthIp4Gateway`, `EthIp4Dns1`, `EthIp4Dns2` |
 
 Attribute names share one flat namespace across the whole platform, hence
 the per-formset prefixes. Storage is each question's own efivarstore:
@@ -97,8 +98,14 @@ lands in exactly the variable the Setup page edits — no ConfigAccess
 needed. Most carry `RESET_REQUIRED` and take effect on the next boot; the
 fan policy applies live (ActiveCoolerDxe re-reads it every second).
 
-Two caveats worth knowing:
+Three caveats worth knowing:
 
+* `EthIp4*` writes reach the `EthCfg` variable; EthConfigDxe applies it to
+  the onboard NIC's `Ip4Config2` on the **next** boot, when Ip4Dxe binds
+  the GEM (RESET_REQUIRED, like most attributes). `Unmanaged` mode leaves
+  the NIC's own configuration alone, so the native IPv4 Setup page still
+  works until the BMC opts in. The BMC's own USB NCM link is explicitly
+  excluded from the apply - a PATCH here can never cut off the RHI.
 * `Bl*` writes reach the `BlCfg` variable, **not** the EEPROM.
   BootloaderConfigDxe re-seeds that variable from the live blconfig every
   boot, and only the interactive "stage update" action in Setup writes the

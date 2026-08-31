@@ -1,0 +1,37 @@
+/** @file
+ *
+ *  x-UEFI-redfish configure-language map for the BMC-managed IPv4 formset.
+ *
+ *  RedfishPlatformConfigDxe harvests these strings from the HII database:
+ *  each question prompt labeled in the x-UEFI-redfish-Bios.v1_1_0 language
+ *  becomes a BIOS attribute at /redfish/v1/Systems/1/Bios (published by
+ *  the edk2-redfish-client Bios v1_1_0 feature driver, with allowable
+ *  values in the BiosAttributeRegistry), named by the last segment of the
+ *  configure-language path. Option strings in the same language are the
+ *  enum value names the BMC reads and writes for oneof questions - kept
+ *  as clean identifiers rather than display text (en-US remains the
+ *  display name).
+ *
+ *  Storage stays the EthCfg efivarstore: the client's HiiUtilityLib
+ *  reads and writes EFI_HII_VARSTORE_EFI_VARIABLE questions with
+ *  gRT->GetVariable/SetVariable directly, so no ConfigAccess is needed
+ *  and a BMC write lands in the same variable EthConfigDxe applies to
+ *  Ip4Config2 on the next boot (all questions are RESET_REQUIRED).
+ *
+ *  SPDX-License-Identifier: BSD-2-Clause-Patent
+ *
+ **/
+
+/=#
+#langdef   x-UEFI-redfish-Bios.v1_1_0 "Bios.v1_1_0"
+
+#string STR_ETH_IP4_MODE_PROMPT         #language x-UEFI-redfish-Bios.v1_1_0   "/Bios/Attributes/EthIp4Mode"
+#string STR_ETH_IP4_ADDRESS_PROMPT      #language x-UEFI-redfish-Bios.v1_1_0   "/Bios/Attributes/EthIp4Address"
+#string STR_ETH_IP4_SUBNET_MASK_PROMPT  #language x-UEFI-redfish-Bios.v1_1_0   "/Bios/Attributes/EthIp4SubnetMask"
+#string STR_ETH_IP4_GATEWAY_PROMPT      #language x-UEFI-redfish-Bios.v1_1_0   "/Bios/Attributes/EthIp4Gateway"
+#string STR_ETH_IP4_DNS1_PROMPT         #language x-UEFI-redfish-Bios.v1_1_0   "/Bios/Attributes/EthIp4Dns1"
+#string STR_ETH_IP4_DNS2_PROMPT         #language x-UEFI-redfish-Bios.v1_1_0   "/Bios/Attributes/EthIp4Dns2"
+
+#string STR_ETH_IP4_MODE_UNMANAGED      #language x-UEFI-redfish-Bios.v1_1_0   "Unmanaged"
+#string STR_ETH_IP4_MODE_DHCP           #language x-UEFI-redfish-Bios.v1_1_0   "Dhcp"
+#string STR_ETH_IP4_MODE_STATIC         #language x-UEFI-redfish-Bios.v1_1_0   "Static"

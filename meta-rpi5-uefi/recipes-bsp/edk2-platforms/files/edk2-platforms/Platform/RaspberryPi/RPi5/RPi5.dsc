@@ -1016,6 +1016,13 @@
   Platform/RaspberryPi/RPi5/Drivers/RpiScmiConfigDxe/RpiScmiConfigDxe.inf
   Platform/RaspberryPi/RPi5/Drivers/ActiveCoolerScmiDxe/ActiveCoolerScmiDxe.inf
   Platform/RaspberryPi/RPi5/Drivers/FanConfigDxe/FanConfigDxe.inf
+
+  #
+  # BMC-managed IPv4 policy for the onboard NIC: an efivarstore Setup page
+  # published under Network Device List (EthCfg variable, EthIp4* Redfish
+  # attributes) applied into Ip4Config2 when Ip4Dxe binds the GEM.
+  #
+  Platform/RaspberryPi/RPi5/Drivers/EthConfigDxe/EthConfigDxe.inf
 !if $(RPI5_OPTEE) == TRUE
   #
   # The EDK2->OP-TEE late initialization handshake: once Rp1BusDxe is up

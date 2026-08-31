@@ -1,0 +1,51 @@
+## @file
+#
+#  EthConfigDxe - BMC-managed IPv4 Setup page for the onboard NIC
+#  (published under Network Device List) editing the EthCfg variable,
+#  applied into Ip4Config2 when the NIC's network stack binds.
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+#
+##
+
+[Defines]
+  INF_VERSION                    = 0x0001001A
+  BASE_NAME                      = EthConfigDxe
+  FILE_GUID                      = 74b699ef-ab43-494e-a04c-7ade9b3a521f
+  MODULE_TYPE                    = DXE_DRIVER
+  VERSION_STRING                 = 1.0
+  ENTRY_POINT                    = EthConfigEntryPoint
+
+[Sources]
+  EthConfigDxe.c
+  EthConfigHii.vfr
+  EthConfigDxe.uni
+  EthConfigDxeMap.uni
+
+[Packages]
+  MdeModulePkg/MdeModulePkg.dec
+  MdePkg/MdePkg.dec
+  NetworkPkg/NetworkPkg.dec
+  Platform/RaspberryPi/RPi5/RPi5.dec
+
+[LibraryClasses]
+  BaseMemoryLib
+  DebugLib
+  DevicePathLib
+  HiiLib
+  MemoryAllocationLib
+  NetLib
+  UefiBootServicesTableLib
+  UefiDriverEntryPoint
+  UefiRuntimeServicesTableLib
+
+[Protocols]
+  gEfiDevicePathProtocolGuid                    ## PRODUCES
+  gEfiIp4Config2ProtocolGuid                    ## CONSUMES
+
+[Guids]
+  gRpiEthConfigFormSetGuid                      ## PRODUCES ## Variable:L"EthCfg"
+  gEfiHiiPlatformSetupFormsetGuid               ## CONSUMES ## GUID
+
+[Depex]
+  gEfiVariableArchProtocolGuid AND gEfiVariableWriteArchProtocolGuid
