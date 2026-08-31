@@ -24,9 +24,15 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
 # detected" skip silently discards the operator's staged Bios attributes on
 # any boot without one, and this board has no reset-to-defaults path that
 # would make the staged set stale.
+# 0003 fixes the published BiosAttributeRegistry: enumeration values go out
+# as the schema's "Value" AttributeValue array (the off-schema "Values"
+# string array upstream emits is eaten by the converter round-trip before
+# the PUT, verified on hardware), and AttributeName is the bare attribute
+# key rather than the full configure-language path.
 SRC_URI = "git://github.com/tianocore/edk2-redfish-client.git;protocol=https;branch=main;destsuffix=edk2-redfish-client \
            file://0001-HiiToRedfishBootDxe-track-the-ComputerSystem-version-.patch \
            file://0002-BiosDxe-consume-pending-settings-without-a-history-r.patch \
+           file://0003-BiosAttributeRegistry-emit-schema-shaped-Value-and-b.patch \
            "
 
 # edk2-redfish-client tracks edk2 MASTER. The window below was measured

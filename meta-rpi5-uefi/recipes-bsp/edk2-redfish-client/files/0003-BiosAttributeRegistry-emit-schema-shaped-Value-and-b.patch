@@ -1,0 +1,100 @@
+From: appkins <nbatkins@gmail.com>
+Date: Mon, 31 Aug 2026 14:00:00 -0500
+Subject: [PATCH] BiosAttributeRegistry: emit schema-shaped Value and bare
+ AttributeName
+
+GenerateAttributeDetails() builds each registry entry's allowable values
+as "Values": ["A", "B"] - a flat string array under a key that does not
+exist in the AttributeRegistry schema. ProvisionAttributeRegistry() then
+round-trips the whole document through the v1_3_6 schema converter
+(ToStructure -> ToJson) before the PUT, and the converter keeps only what
+its generated CS structure models: every scalar survives, the one
+off-schema array vanishes. Observed on hardware: all 13 enumeration
+attributes reached the BMC with Type "Enumeration" but no value list at
+all, so no client could learn what a setting accepts.
+
+Emit what DSP2046 actually defines - "Value", an array of AttributeValue
+objects ({"ValueName", "ValueDisplayName"}), which the converter CS does
+model (RedfishAttributeRegistry_V1_3_6_AttributeValue_Array_CS) and
+therefore preserves.
+
+While in the same function: AttributeName was the raw configure language
+("/Bios/Attributes/FanMode"), not the key the Bios resource serves under
+Attributes ("FanMode"). RedfishPlatformConfigGetAttribute already derives
+the bare name from the x-UEFI string; use it, falling back to the raw key
+only when it is absent, so registry entries correlate with attributes the
+way the schema intends.
+
+Upstream-Status: Submittable [matches DSP2046; converter already models it]
+Signed-off-by: appkins <nbatkins@gmail.com>
+---
+--- a/RedfishClientPkg/Features/BiosAttributeRegistry/Common/BiosAttributeRegistryCommon.c
++++ b/RedfishClientPkg/Features/BiosAttributeRegistry/Common/BiosAttributeRegistryCommon.c
+@@ -198,6 +198,7 @@
+ {
+   EDKII_JSON_VALUE         AttributeValue;
+   EDKII_JSON_VALUE         AttributeArray;
++  EDKII_JSON_VALUE         ValueObj;
+   EFI_STATUS               Status;
+   EDKII_REDFISH_ATTRIBUTE  Attribute;
+   EDKII_REDFISH_VALUE      DefaultValue;
+@@ -251,9 +252,18 @@
+ 
+   //
+   // Create required attributes for BMC
+-  // AttributeName
++  // AttributeName. Use the terminal segment of the configure language
++  // (already derived by RedfishPlatformConfigGetAttribute) so the entry
++  // carries the same key the Bios resource serves under Attributes, per
++  // DSP2046 -- the full configure-language path is not a valid
++  // AttributeName and clients cannot correlate it.
+   //
+-  AttributeValue = JsonValueInitAsciiString (Key);
++  if (Attribute.AttributeName != NULL) {
++    AttributeValue = JsonValueInitAsciiString (Attribute.AttributeName);
++  } else {
++    AttributeValue = JsonValueInitAsciiString (Key);
++  }
++
+   if (AttributeValue == NULL) {
+     Status = EFI_OUT_OF_RESOURCES;
+     goto RELEASE;
+@@ -424,17 +434,34 @@
+   }
+ 
+   //
+-  // Values
++  // Value. DSP2046 models the possible values as an array of
++  // AttributeValue objects under "Value"; the flat "Values" string array
++  // this used to emit is not in the AttributeRegistry schema, so the
++  // ToStructure/ToJson round-trip in ProvisionAttributeRegistry silently
++  // dropped it and no enumeration ever reached the BMC.
+   //
+   if ((Attribute.Type == RedfishAttributeTypeEnumeration) && (Attribute.Values.ValueCount > 0)) {
+     AttributeArray = JsonValueInitArray ();
+ 
+     for (Index = 0; Index < Attribute.Values.ValueCount; Index++) {
+-      AttributeValue = JsonValueInitAsciiString (Attribute.Values.ValueArray[Index].ValueName);
+-      JsonArrayAppendValue (AttributeArray, AttributeValue);
++      if (Attribute.Values.ValueArray[Index].ValueName == NULL) {
++        continue;
++      }
++
++      ValueObj = JsonValueInitObject ();
++      if (ValueObj == NULL) {
++        continue;
++      }
++
++      JsonObjectSetValue (ValueObj, "ValueName", JsonValueInitAsciiString (Attribute.Values.ValueArray[Index].ValueName));
++      if (Attribute.Values.ValueArray[Index].ValueDisplayName != NULL) {
++        JsonObjectSetValue (ValueObj, "ValueDisplayName", JsonValueInitAsciiString (Attribute.Values.ValueArray[Index].ValueDisplayName));
++      }
++
++      JsonArrayAppendValue (AttributeArray, ValueObj);
+     }
+ 
+-    JsonObjectSetValue (*AttributeObj, "Values", AttributeArray);
++    JsonObjectSetValue (*AttributeObj, "Value", AttributeArray);
+   }
+ 
+   Status = EFI_SUCCESS;
