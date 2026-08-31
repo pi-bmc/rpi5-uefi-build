@@ -203,7 +203,9 @@ RpiRedfishBuildMemoryPost (
 
 //
 // One populated processor socket, as SMBIOS type 4 describes it, reduced to
-// the Redfish Processor v1_16_0 properties the BMC stores.
+// the Redfish Processor v1_14_0 properties the BMC stores (pinned to the
+// newest schema version the edk2-redfish-client converters model, so the
+// RedfishProcessorDxe feature driver can parse the member it shares).
 //
 typedef struct {
   CHAR8          Socket[RPI_REDFISH_STR_MAX];

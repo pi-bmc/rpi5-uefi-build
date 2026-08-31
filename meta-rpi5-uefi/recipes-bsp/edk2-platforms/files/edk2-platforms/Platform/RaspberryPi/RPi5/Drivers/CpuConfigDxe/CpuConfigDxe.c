@@ -1,24 +1,28 @@
 /** @file
 
   CpuConfigDxe - the "CPU Configuration" page in Setup's Device Manager:
-  the ARM clock profile, up to the customary 3.0 GHz Pi 5 overclock.
+  an explicit ARM frequency cap, up to the customary 3.0 GHz Pi 5
+  overclock, in Processor-schema terms (SpeedLimitMHz / SpeedLocked).
 
   Why this is a config.txt editor and not a clock driver: the BCM2712's
   ARM ceiling is fixed at power-on by the VPU bootloader from config.txt
   (arm_freq, with over_voltage_delta for headroom above stock), and our
   shipped config.txt pins the cores there with force_turbo=1. Neither is
-  changeable at runtime, so the profile IS the config.txt content and a
+  changeable at runtime, so the policy IS the config.txt content and a
   change takes effect at the next reset.
 
   Split of responsibilities:
 
   1. The questions bind to the CpuClockPolicy efivarstore - the variable
-     is the source of truth (a BMC write through the x-UEFI-redfish map
-     lands in the same place).
+     is the source of truth. The speed questions carry the standard
+     Processor.v1_14_0 configure language, so a BMC PATCH of
+     /Systems/1/Processors/{id} lands here through RedfishProcessorDxe;
+     the over-voltage delta remains the CpuOverVoltageDeltaUv BIOS
+     attribute.
 
   2. The managed block in config.txt is derived state: a ReadyToBoot
      sync reconverges it to the variable every boot (quiet, write only
-     on drift - this also restores the profile after an sdimg reflash
+     on drift - this also restores the policy after an sdimg reflash
      resets config.txt), and the page's interactive "apply" action runs
      the same sync immediately, then offers the reset.
 
@@ -105,15 +109,17 @@ DefaultPolicy (
   OUT RPI_CPU_CLOCK_POLICY  *Policy
   )
 {
-  Policy->Profile            = RPI_CPU_CLOCK_PROFILE_DEFAULT;
-  Policy->CustomMhz          = RPI_CPU_CLOCK_DEFAULT_MHZ;
+  Policy->SpeedLimitMhz      = 0;
+  Policy->SpeedLocked        = 1;
+  Policy->Reserved           = 0;
   Policy->OverVoltageDeltaUv = RPI_CPU_CLOCK_DELTA_DEFAULT_UV;
 }
 
 /**
-  The frequency a policy asks for, with the Custom value clamped to the
-  supported range (the VFR enforces it too; belt and braces for a
-  BMC-written variable).
+  The frequency cap a policy asks for: 0 for "no override" (stock,
+  managed block removed), otherwise the limit clamped to the supported
+  range (the VFR bounds it too; belt and braces for a BMC-written
+  variable - a limit below the hardware floor is best-effort = floor).
 **/
 STATIC
 UINT32
@@ -123,25 +129,38 @@ EffectiveMhz (
 {
   UINT32  Mhz;
 
-  switch (Policy->Profile) {
-    case RPI_CPU_CLOCK_PROFILE_OC_2800:
-      return 2800;
-    case RPI_CPU_CLOCK_PROFILE_OC_3000:
-      return 3000;
-    case RPI_CPU_CLOCK_PROFILE_CUSTOM:
-      Mhz = Policy->CustomMhz;
-      if (Mhz < RPI_CPU_CLOCK_MIN_MHZ) {
-        Mhz = RPI_CPU_CLOCK_MIN_MHZ;
-      }
-
-      if (Mhz > RPI_CPU_CLOCK_MAX_MHZ) {
-        Mhz = RPI_CPU_CLOCK_MAX_MHZ;
-      }
-
-      return Mhz;
-    default:
-      return RPI_CPU_CLOCK_DEFAULT_MHZ;
+  Mhz = Policy->SpeedLimitMhz;
+  if (Mhz == 0) {
+    return 0;
   }
+
+  if (Mhz < RPI_CPU_CLOCK_MIN_MHZ) {
+    Mhz = RPI_CPU_CLOCK_MIN_MHZ;
+  }
+
+  if (Mhz > RPI_CPU_CLOCK_MAX_MHZ) {
+    Mhz = RPI_CPU_CLOCK_MAX_MHZ;
+  }
+
+  return Mhz;
+}
+
+/**
+  The over-voltage delta with the DELTA_MAX cap enforced in C - the old
+  layout only bounded it in VFR, so a raw BMC write could put an
+  arbitrary voltage request straight into config.txt.
+**/
+STATIC
+UINT32
+EffectiveDeltaUv (
+  IN CONST RPI_CPU_CLOCK_POLICY  *Policy
+  )
+{
+  if (Policy->OverVoltageDeltaUv > RPI_CPU_CLOCK_DELTA_MAX_UV) {
+    return RPI_CPU_CLOCK_DELTA_MAX_UV;
+  }
+
+  return Policy->OverVoltageDeltaUv;
 }
 
 STATIC
@@ -166,10 +185,28 @@ GetPolicyVariable (
   }
 }
 
+//
+// The retired profile-based layout (7 bytes, packed): Profile 0..3
+// selected Default/2800/3000/Custom, CustomMhz fed the Custom profile.
+// Read only to migrate an existing variable in place.
+//
+#pragma pack (1)
+typedef struct {
+  UINT8     Profile;
+  UINT16    CustomMhz;
+  UINT32    OverVoltageDeltaUv;
+} CPU_LEGACY_CLOCK_POLICY;
+#pragma pack ()
+
+#define CPU_LEGACY_PROFILE_OC_2800  1
+#define CPU_LEGACY_PROFILE_OC_3000  2
+#define CPU_LEGACY_PROFILE_CUSTOM   3
+
 /**
-  Create CpuClockPolicy with stock defaults when it is absent or has
-  been written with the wrong size: the browser's efivarstore reads need
-  a well-formed variable to edit (the FanConfigDxe idiom).
+  Create CpuClockPolicy with stock defaults when it is absent or
+  malformed, migrating the retired 7-byte profile layout in place (the
+  layouts are distinguishable by size alone): the profile becomes the
+  equivalent explicit cap, locked, keeping the stored delta.
 **/
 STATIC
 VOID
@@ -177,23 +214,55 @@ EnsurePolicyVariable (
   VOID
   )
 {
-  RPI_CPU_CLOCK_POLICY  Policy;
-  UINTN                 Size;
-  EFI_STATUS            Status;
+  RPI_CPU_CLOCK_POLICY     Policy;
+  CPU_LEGACY_CLOCK_POLICY  Legacy;
+  UINT8                    Raw[16];
+  UINTN                    Size;
+  EFI_STATUS               Status;
 
-  Size   = sizeof (Policy);
+  Size   = sizeof (Raw);
   Status = gRT->GetVariable (
                   RPI_CPU_CLOCK_POLICY_VARIABLE_NAME,
                   &gRpiCpuConfigFormSetGuid,
                   NULL,
                   &Size,
-                  &Policy
+                  Raw
                   );
   if (!EFI_ERROR (Status) && (Size == sizeof (Policy))) {
     return;
   }
 
   DefaultPolicy (&Policy);
+
+  if (!EFI_ERROR (Status) && (Size == sizeof (Legacy))) {
+    CopyMem (&Legacy, Raw, sizeof (Legacy));
+    Policy.OverVoltageDeltaUv = Legacy.OverVoltageDeltaUv;
+    switch (Legacy.Profile) {
+      case CPU_LEGACY_PROFILE_OC_2800:
+        Policy.SpeedLimitMhz = 2800;
+        break;
+      case CPU_LEGACY_PROFILE_OC_3000:
+        Policy.SpeedLimitMhz = 3000;
+        break;
+      case CPU_LEGACY_PROFILE_CUSTOM:
+        Policy.SpeedLimitMhz = Legacy.CustomMhz;
+        break;
+      default:
+        //
+        // Default profile (or garbage): no override, matching the old
+        // "block removed" semantics.
+        //
+        break;
+    }
+
+    DEBUG ((
+      DEBUG_INFO,
+      "CpuConfigDxe: migrated profile %u to SpeedLimitMhz %u\n",
+      Legacy.Profile,
+      Policy.SpeedLimitMhz
+      ));
+  }
+
   Status = gRT->SetVariable (
                   RPI_CPU_CLOCK_POLICY_VARIABLE_NAME,
                   &gRpiCpuConfigFormSetGuid,
@@ -275,10 +344,11 @@ ParseLastValue (
 }
 
 /**
-  Render the managed block for a policy; zero length for the Default
-  profile (stock speed = no block at all, the file returns pristine).
-  The [all] line lives INSIDE the markers so removal cannot strand it,
-  and neutralizes whatever section filter precedes the block.
+  Render the managed block for a policy; zero length when there is
+  nothing to override (no cap and locked = stock, the file returns
+  pristine - the shipped force_turbo=1 keeps ruling). The [all] line
+  lives INSIDE the markers so removal cannot strand it, and neutralizes
+  whatever section filter precedes the block.
 **/
 STATIC
 UINTN
@@ -289,28 +359,40 @@ BuildManagedBlock (
   )
 {
   UINT32  Mhz;
+  UINT32  DeltaUv;
   UINTN   Len;
 
-  if (Policy->Profile == RPI_CPU_CLOCK_PROFILE_DEFAULT) {
+  Mhz = EffectiveMhz (Policy);
+  if ((Mhz == 0) && (Policy->SpeedLocked != 0)) {
     return 0;
   }
 
-  Mhz = EffectiveMhz (Policy);
   Len = AsciiSPrint (
           Buf,
           BufSize,
           CPU_BLOCK_BEGIN " - managed by Device Manager / CPU Configuration; do not hand-edit\n"
                           "[all]\n"
-                          "arm_freq=%u\n",
-          Mhz
           );
 
-  if ((Mhz > RPI_CPU_CLOCK_DEFAULT_MHZ) && (Policy->OverVoltageDeltaUv > 0)) {
+  if (Mhz != 0) {
+    Len += AsciiSPrint (&Buf[Len], BufSize - Len, "arm_freq=%u\n", Mhz);
+  }
+
+  //
+  // SpeedLocked unchecked lifts the shipped force_turbo=1 pin so DVFS
+  // may scale below the cap; the last assignment wins in config.txt.
+  //
+  if (Policy->SpeedLocked == 0) {
+    Len += AsciiSPrint (&Buf[Len], BufSize - Len, "force_turbo=0\n");
+  }
+
+  DeltaUv = EffectiveDeltaUv (Policy);
+  if ((Mhz > RPI_CPU_CLOCK_STOCK_MHZ) && (DeltaUv > 0)) {
     Len += AsciiSPrint (
              &Buf[Len],
              BufSize - Len,
              "over_voltage_delta=%u\n",
-             Policy->OverVoltageDeltaUv
+             DeltaUv
              );
   }
 
@@ -477,6 +559,7 @@ UpdateConfiguredString (
   UINTN              ContentLen;
   UINT32             Mhz;
   UINT32             DeltaUv;
+  UINT32             Locked;
   CHAR16             Line[80];
 
   Status = RpiOpenBootVolume (&Root);
@@ -488,14 +571,28 @@ UpdateConfiguredString (
   if (EFI_ERROR (Status)) {
     UnicodeSPrint (Line, sizeof (Line), L"unknown - boot volume not accessible");
   } else {
-    Mhz     = ParseLastValue (Content, "arm_freq", RPI_CPU_CLOCK_DEFAULT_MHZ);
+    Mhz     = ParseLastValue (Content, "arm_freq", RPI_CPU_CLOCK_STOCK_MHZ);
     DeltaUv = ParseLastValue (Content, "over_voltage_delta", 0);
+    Locked  = ParseLastValue (Content, "force_turbo", 1);
     FreePool (Content);
 
     if (DeltaUv != 0) {
-      UnicodeSPrint (Line, sizeof (Line), L"%u MHz, over_voltage_delta %u uV", Mhz, DeltaUv);
+      UnicodeSPrint (
+        Line,
+        sizeof (Line),
+        L"%u MHz%s, over_voltage_delta %u uV",
+        Mhz,
+        (Locked == 0) ? L" (DVFS enabled)" : L"",
+        DeltaUv
+        );
     } else {
-      UnicodeSPrint (Line, sizeof (Line), L"%u MHz", Mhz);
+      UnicodeSPrint (
+        Line,
+        sizeof (Line),
+        L"%u MHz%s",
+        Mhz,
+        (Locked == 0) ? L" (DVFS enabled)" : L""
+        );
     }
   }
 
@@ -571,12 +668,21 @@ ApplyNow (
     return;
   }
 
-  UnicodeSPrint (
-    Line,
-    sizeof (Line),
-    L"config.txt updated: ARM frequency %u MHz at the next boot.",
-    EffectiveMhz (&Policy)
-    );
+  if (EffectiveMhz (&Policy) == 0) {
+    UnicodeSPrint (
+      Line,
+      sizeof (Line),
+      L"config.txt updated: stock configuration at the next boot."
+      );
+  } else {
+    UnicodeSPrint (
+      Line,
+      sizeof (Line),
+      L"config.txt updated: ARM frequency %u MHz at the next boot.",
+      EffectiveMhz (&Policy)
+      );
+  }
+
   CreatePopUp (
     POPUP_ATTRIBUTES,
     &Key,
@@ -802,8 +908,9 @@ OnReadyToBoot (
   if (Changed) {
     DEBUG ((
       DEBUG_INFO,
-      "CpuConfigDxe: config.txt reconverged to %u MHz (next boot)\n",
-      EffectiveMhz (&Policy)
+      "CpuConfigDxe: config.txt reconverged (limit %u MHz, locked %u; next boot)\n",
+      EffectiveMhz (&Policy),
+      Policy.SpeedLocked
       ));
   } else if (EFI_ERROR (Status) && (Status != EFI_NOT_FOUND)) {
     DEBUG ((DEBUG_WARN, "CpuConfigDxe: config.txt sync failed - %r\n", Status));

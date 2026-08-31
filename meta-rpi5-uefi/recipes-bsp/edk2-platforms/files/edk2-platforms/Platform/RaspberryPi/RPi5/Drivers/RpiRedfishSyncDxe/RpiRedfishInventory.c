@@ -855,7 +855,7 @@ RpiRedfishBuildProcessorPost (
   AsciiSPrint (
     Body,
     RPI_REDFISH_JSON_MAX,
-    "{\"@odata.type\":\"#Processor.v1_16_0.Processor\""
+    "{\"@odata.type\":\"#Processor.v1_14_0.Processor\""
     ",\"Status\":{\"State\":\"%a\",\"Health\":\"OK\"}"
     ",\"ProcessorArchitecture\":\"ARM\""
     ",\"InstructionSet\":\"ARM-A64\"",

@@ -1,32 +1,35 @@
 /** @file
  *
- *  x-UEFI-redfish configure-language map for the CPU clock formset.
+ *  Redfish configure-language map for the CPU clock formset.
  *
- *  Same contract as the Active Cooler map: RedfishPlatformConfigDxe
- *  harvests prompts labeled in the x-UEFI-redfish-Bios.v1_1_0 language
- *  into BIOS attributes at /redfish/v1/Systems/1/Bios, option strings
- *  are the enum value names, and storage stays the CpuClockPolicy
- *  efivarstore that a BMC write reaches directly. A profile staged over
- *  Redfish lands in the variable; CpuConfigDxe's ReadyToBoot sync then
- *  converges config.txt on the next boot, and the VPU applies it the
- *  boot after - staged, applied, effective, the normal BIOS-attribute
- *  cadence.
+ *  Two namespaces, deliberately:
  *
- *  The apply action and the read-only config.txt line are deliberately
- *  unmapped: interactive questions and display text are not attributes.
+ *  The speed questions carry the standard Processor schema language and
+ *  are served as /redfish/v1/Systems/1/Processors/{id} properties by
+ *  RedfishProcessorDxe + RedfishProcessorCollectionDxe - the BMC caps
+ *  the CPU with a plain Redfish PATCH of SpeedLimitMHz/SpeedLocked, no
+ *  vendor attributes involved. Configure language is rooted at the
+ *  schema (/Processors/{1}/...), and the version here must match the
+ *  feature driver's RESOURCE_SCHEMA_FULL byte for byte or every
+ *  property silently fails to resolve.
+ *
+ *  The over-voltage delta has no Processor-schema counterpart and stays
+ *  a BIOS attribute in the Bios.v1_1_0 namespace, published by the Bios
+ *  feature driver with its allowable range in the BiosAttributeRegistry.
+ *
+ *  The apply action and the "Configured in config.txt" text are
+ *  deliberately unmapped.
  *
  *  SPDX-License-Identifier: BSD-2-Clause-Patent
  *
  **/
 
 /=#
+#langdef   x-UEFI-redfish-Processor.v1_14_0 "Processor.v1_14_0"
+
+#string STR_LIMIT_PROMPT   #language x-UEFI-redfish-Processor.v1_14_0   "/Processors/{1}/SpeedLimitMHz"
+#string STR_LOCKED_PROMPT  #language x-UEFI-redfish-Processor.v1_14_0   "/Processors/{1}/SpeedLocked"
+
 #langdef   x-UEFI-redfish-Bios.v1_1_0 "Bios.v1_1_0"
 
-#string STR_PROFILE_PROMPT       #language x-UEFI-redfish-Bios.v1_1_0   "/Bios/Attributes/CpuClockProfile"
-#string STR_CUSTOM_MHZ_PROMPT    #language x-UEFI-redfish-Bios.v1_1_0   "/Bios/Attributes/CpuClockCustomMhz"
-#string STR_DELTA_PROMPT         #language x-UEFI-redfish-Bios.v1_1_0   "/Bios/Attributes/CpuOverVoltageDeltaUv"
-
-#string STR_PROFILE_DEFAULT      #language x-UEFI-redfish-Bios.v1_1_0   "Default"
-#string STR_PROFILE_OC_2800      #language x-UEFI-redfish-Bios.v1_1_0   "Overclock2800"
-#string STR_PROFILE_OC_3000      #language x-UEFI-redfish-Bios.v1_1_0   "Overclock3000"
-#string STR_PROFILE_CUSTOM       #language x-UEFI-redfish-Bios.v1_1_0   "Custom"
+#string STR_DELTA_PROMPT   #language x-UEFI-redfish-Bios.v1_1_0   "/Bios/Attributes/CpuOverVoltageDeltaUv"

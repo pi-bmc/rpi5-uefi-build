@@ -1,6 +1,6 @@
 /** @file
 
-  Redfish feature driver implementation - EthernetInterfaceCollection (RPi5)
+  Redfish feature driver implementation - ProcessorCollection (RPi5)
 
   (C) Copyright 2020-2022 Hewlett Packard Enterprise Development LP<BR>
   Copyright (c) 2023-2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -9,7 +9,7 @@
 
 **/
 
-#include "EthernetInterfaceCollectionDxe.h"
+#include "ProcessorCollectionDxe.h"
 
 REDFISH_COLLECTION_PRIVATE  *mRedfishCollectionPrivate = NULL;
 
@@ -135,13 +135,13 @@ HandleCollectionResource (
   IN  REDFISH_COLLECTION_PRIVATE  *Private
   )
 {
-  EFI_STATUS                                  Status;
-  EFI_REDFISH_ETHERNETINTERFACECOLLECTION     *Collection;
-  EFI_REDFISH_ETHERNETINTERFACECOLLECTION_CS  *CollectionCs;
-  RedfishCS_Link                              *List;
-  RedfishCS_Header                            *Header;
-  RedfishCS_Type_Uri_Data                     *UriData;
-  EFI_STRING                                  MemberUri;
+  EFI_STATUS                          Status;
+  EFI_REDFISH_PROCESSORCOLLECTION     *Collection;
+  EFI_REDFISH_PROCESSORCOLLECTION_CS  *CollectionCs;
+  RedfishCS_Link                      *List;
+  RedfishCS_Header                    *Header;
+  RedfishCS_Type_Uri_Data             *UriData;
+  EFI_STRING                          MemberUri;
 
   if (Private == NULL) {
     return EFI_INVALID_PARAMETER;
@@ -167,7 +167,7 @@ HandleCollectionResource (
     return Status;
   }
 
-  CollectionCs = Collection->EthernetInterfaceCollection;
+  CollectionCs = Collection->ProcessorCollection;
 
   if (*CollectionCs->Membersodata_count == 0) {
     Status = EFI_NOT_FOUND;
@@ -190,7 +190,7 @@ HandleCollectionResource (
       if (MemberUri != NULL) {
         Status = HandleResource (Private, MemberUri);
         if (EFI_ERROR (Status)) {
-          DEBUG ((DEBUG_ERROR, "%a, process EthernetInterfaceCollection resource: %a failed: %r\n", __func__, UriData->Uri, Status));
+          DEBUG ((DEBUG_ERROR, "%a, process ProcessorCollection resource: %a failed: %r\n", __func__, UriData->Uri, Status));
         }
 
         FreePool (MemberUri);

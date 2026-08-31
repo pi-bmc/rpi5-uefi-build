@@ -1,14 +1,22 @@
 /** @file
 
-  CpuClockPolicy - the persistent CPU clock profile, shared between
-  CpuConfigDxe's Setup page (efivarstore producer, and the ReadyToBoot
-  sync that converges config.txt to it) and any BMC-side writer that
-  reaches UEFI variables.
+  CpuClockPolicy - the persistent ARM clock policy, shared between
+  CpuConfigDxe (efivarstore Setup page + config.txt reconvergence) and
+  the Redfish Processor feature driver (RedfishProcessorDxe), which
+  consumes standard /Systems/1/Processors/{id} PATCHes into these
+  questions.
 
-  The variable is the source of truth; the arm_freq/over_voltage_delta
-  managed block in config.txt on the boot volume is derived state,
-  reconverged every boot. The VPU bootloader reads config.txt at
-  power-on, so a profile change takes effect on the next reset.
+  The properties mirror the Processor schema (v1_10_0+):
+
+    SpeedLimitMhz  the explicit frequency cap (arm_freq). 0 means "no
+                   override": the managed config.txt block is removed
+                   and the SoC runs the shipped stock configuration.
+    SpeedLocked    TRUE pins the cores at the cap (the shipped
+                   force_turbo=1 behavior); FALSE emits force_turbo=0
+                   so DVFS may scale below the cap.
+
+  OverVoltageDeltaUv has no Processor-schema counterpart and stays a
+  BIOS attribute (CpuOverVoltageDeltaUv).
 
   This header is included by VFR as well as C: keep it to #defines and
   the varstore struct only.
@@ -29,39 +37,34 @@
 
 #define RPI_CPU_CLOCK_POLICY_VARIABLE_NAME  L"CpuClockPolicy"
 
-#define RPI_CPU_CLOCK_PROFILE_DEFAULT  0    // stock 2400 MHz, no managed block
-#define RPI_CPU_CLOCK_PROFILE_OC_2800  1    // arm_freq=2800
-#define RPI_CPU_CLOCK_PROFILE_OC_3000  2    // arm_freq=3000
-#define RPI_CPU_CLOCK_PROFILE_CUSTOM   3    // arm_freq=CustomMhz
+//
+// The supported cap range. 0 is the "no override" sentinel; a nonzero
+// cap is clamped into [MIN, MAX] by the driver (the VFR bounds it too;
+// belt and braces for a BMC-written variable). Stock is the shipped
+// config.txt ceiling, used for the over-voltage threshold.
+//
+#define RPI_CPU_CLOCK_STOCK_MHZ  2400
+#define RPI_CPU_CLOCK_MIN_MHZ    1500
+#define RPI_CPU_CLOCK_MAX_MHZ    3000
 
 //
-// The BCM2712's stock ceiling and the range the Custom profile accepts.
-// 3000 is the customary Pi 5 overclock target; how far a given board
-// gets is silicon lottery, and the VPU firmware still thermal-throttles
-// regardless of what is configured here.
-//
-#define RPI_CPU_CLOCK_DEFAULT_MHZ  2400
-#define RPI_CPU_CLOCK_MIN_MHZ      1500
-#define RPI_CPU_CLOCK_MAX_MHZ      3000
-
-//
-// over_voltage_delta in microvolts, applied only when the effective
-// frequency exceeds stock. 50000 (50 mV) is the customary companion to
-// a 2.8-3.0 GHz overclock.
+// over_voltage_delta bounds, in microvolts.
 //
 #define RPI_CPU_CLOCK_DELTA_DEFAULT_UV  50000
 #define RPI_CPU_CLOCK_DELTA_MAX_UV      100000
 
 //
-// QuestionId of the interactive "apply" action (BlCfg uses 0x1000).
+// Question id of the page's interactive apply action (BlCfg owns 0x1000).
 //
 #define RPI_CPU_CLOCK_KEY_APPLY  0x1200
 
 #pragma pack (1)
 typedef struct {
-  UINT8     Profile;               // RPI_CPU_CLOCK_PROFILE_*
-  UINT16    CustomMhz;             // used in CUSTOM profile
-  UINT32    OverVoltageDeltaUv;    // written when effective MHz > stock
+  UINT16    SpeedLimitMhz;         // 0 = no override; else clamped to 1500..3000
+  UINT8     SpeedLocked;           // BOOLEAN: pin at the cap (force_turbo)
+  UINT8     Reserved;              // keeps the layout distinguishable from the
+                                   // retired 7-byte profile layout; write 0
+  UINT32    OverVoltageDeltaUv;    // applied only when the cap exceeds stock
 } RPI_CPU_CLOCK_POLICY;
 #pragma pack ()
 

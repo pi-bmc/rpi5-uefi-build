@@ -1,0 +1,58 @@
+## @file
+#  Redfish ProcessorCollection collection driver.
+#
+#  Registers Systems/{}/Processors/{} with the feature core,
+#  walks the BMC-side collection, and drives the Processor
+#  feature driver per member - creating the member from HII data when
+#  the collection is empty. Direct transform of upstream's
+#  MemoryCollectionDxe (there is no upstream Processor
+#  collection driver at this client pin).
+#
+#  Copyright (c) 2026, the pi-bmc contributors.
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+
+[Defines]
+  INF_VERSION    = 0x0001001A
+  BASE_NAME      = RedfishProcessorCollectionDxe
+  FILE_GUID      = a00ee56d-ecb2-4253-998e-d3db774c9a9c
+  MODULE_TYPE    = DXE_DRIVER
+  VERSION_STRING = 1.0
+  ENTRY_POINT    = RedfishCollectionEntryPoint
+  UNLOAD_IMAGE   = RedfishCollectionUnload
+
+[Packages]
+  MdePkg/MdePkg.dec
+  MdeModulePkg/MdeModulePkg.dec
+  RedfishPkg/RedfishPkg.dec
+  RedfishClientPkg/RedfishClientPkg.dec
+
+[Sources]
+  ProcessorCollectionDxe.c
+  ProcessorCollectionDxe.h
+
+[LibraryClasses]
+  BaseMemoryLib
+  ConverterCommonLib
+  DebugLib
+  EdkIIRedfishResourceConfigLib
+  MemoryAllocationLib
+  RedfishFeatureUtilityLib
+  RedfishHttpLib
+  RedfishVersionLib
+  UefiBootServicesTableLib
+  UefiDriverEntryPoint
+  UefiLib
+
+[Protocols]
+  gEdkIIRedfishConfigHandlerProtocolGuid  ## PRODUCES
+  gEfiRestJsonStructureProtocolGuid       ## CONSUMES
+  gEdkIIRedfishFeatureProtocolGuid        ## CONSUMES
+
+[Pcd]
+  gEfiRedfishClientPkgTokenSpaceGuid.PcdMaxRedfishSchemaStringSize
+  gEfiRedfishClientPkgTokenSpaceGuid.PcdMaxRedfishSchemaVersionSize
+
+[Depex]
+  TRUE

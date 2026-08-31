@@ -436,6 +436,8 @@ READ_LOCK_STATUS   = TRUE
   INF RedfishClientPkg/Features/MemoryCollectionDxe/MemoryCollectionDxe.inf
   INF Platform/RaspberryPi/RPi5/Drivers/RedfishEthernetInterfaceDxe/RedfishEthernetInterfaceDxe.inf
   INF Platform/RaspberryPi/RPi5/Drivers/RedfishEthernetInterfaceCollectionDxe/RedfishEthernetInterfaceCollectionDxe.inf
+  INF Platform/RaspberryPi/RPi5/Drivers/RedfishProcessorDxe/RedfishProcessorDxe.inf
+  INF Platform/RaspberryPi/RPi5/Drivers/RedfishProcessorCollectionDxe/RedfishProcessorCollectionDxe.inf
   INF RedfishClientPkg/Converter/ComputerSystem/v1_13_0/RedfishComputerSystem_V1_13_0_Dxe.inf
   INF RedfishClientPkg/Converter/ComputerSystemCollection/RedfishComputerSystemCollection_Dxe.inf
   INF RedfishClientPkg/Converter/Bios/v1_1_0/RedfishBios_V1_1_0_Dxe.inf
@@ -447,6 +449,8 @@ READ_LOCK_STATUS   = TRUE
   INF RedfishClientPkg/Converter/SecureBoot/v1_1_0/RedfishSecureBoot_V1_1_0_Dxe.inf
   INF RedfishClientPkg/Converter/EthernetInterface/v1_8_0/RedfishEthernetInterface_V1_8_0_Dxe.inf
   INF RedfishClientPkg/Converter/EthernetInterfaceCollection/RedfishEthernetInterfaceCollection_Dxe.inf
+  INF RedfishClientPkg/Converter/Processor/v1_14_0/RedfishProcessor_V1_14_0_Dxe.inf
+  INF RedfishClientPkg/Converter/ProcessorCollection/RedfishProcessorCollection_Dxe.inf
 
   #
   # FMP capsule update + ESRT.

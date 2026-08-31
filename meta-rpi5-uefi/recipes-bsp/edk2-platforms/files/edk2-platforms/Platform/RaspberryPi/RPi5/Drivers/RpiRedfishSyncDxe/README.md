@@ -97,6 +97,19 @@ served as the standard `/Systems/1/EthernetInterfaces/{id}` resource by
 schema converters), so the BMC manages NIC IPv4 with plain Redfish and no
 vendor-specific bridge.
 
+CpuConfigDxe's speed questions took the same road: the retired
+`CpuClockProfile`/`CpuClockCustomMhz` Bios attributes became
+`SpeedLimitMHz`/`SpeedLocked` on `/Systems/1/Processors/{id}`
+(`x-UEFI-redfish-Processor.v1_14_0`, served by `RedfishProcessorDxe` +
+`RedfishProcessorCollectionDxe`) - the standard Redfish way to cap a CPU.
+Only `CpuOverVoltageDeltaUv` stays a Bios attribute, having no
+Processor-schema counterpart. Unlike the NIC case, this driver's member
+is shared: step 2b's SMBIOS inventory POST keeps owning the descriptive
+properties (it has no HII substitute), never carries the managed pair,
+and the BMC preserves operator-staged values across the re-POST. An
+existing `CpuClockPolicy` variable is migrated in place (profile -> the
+equivalent explicit cap) on the first boot of this firmware.
+
 Attribute names share one flat namespace across the whole platform, hence
 the per-formset prefixes. Storage is each question's own efivarstore:
 HiiDatabase's ConfigRouting reads and writes `EFI_HII_VARSTORE_EFI_VARIABLE`

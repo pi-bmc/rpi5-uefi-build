@@ -1,11 +1,14 @@
 /** @file
  *
- *  CPU clock profile formset, bound to the CpuClockPolicy variable
- *  (efivarstore). The variable is the source of truth; the interactive
- *  "apply" action below converges the managed arm_freq block in
- *  config.txt immediately and offers the reset (a ReadyToBoot sync
- *  converges it anyway on the next boot). The new frequency is applied
- *  by the VPU bootloader at power-on: it always takes a reset.
+ *  CPU clock formset, bound to the CpuClockPolicy variable (efivarstore -
+ *  the browser and the Redfish Processor pipeline read and write the
+ *  variable directly). The questions mirror the Processor schema:
+ *  SpeedLimitMHz (0 = no override, else the arm_freq cap) and SpeedLocked
+ *  (force_turbo). The over-voltage delta stays a BIOS attribute.
+ *
+ *  The apply action rewrites config.txt immediately and offers a reset;
+ *  without it, the ReadyToBoot reconvergence picks the variable up on the
+ *  next boot.
  *
  *  SPDX-License-Identifier: BSD-2-Clause-Patent
  *
@@ -33,39 +36,31 @@ formset
         title = STRING_TOKEN(STR_FORM_TITLE);
 
         text
-            help  = STRING_TOKEN(STR_CONFIGURED_HELP),
-            text  = STRING_TOKEN(STR_CONFIGURED_PROMPT),
-            text  = STRING_TOKEN(STR_CONFIGURED_VALUE);
+            help   = STRING_TOKEN(STR_CONFIGURED_HELP),
+            text   = STRING_TOKEN(STR_CONFIGURED_PROMPT),
+            text   = STRING_TOKEN(STR_CONFIGURED_VALUE);
 
-        subtitle text = STRING_TOKEN(STR_EMPTY);
+        numeric varid = CpuClockPolicy.SpeedLimitMhz,
+            prompt  = STRING_TOKEN(STR_LIMIT_PROMPT),
+            help    = STRING_TOKEN(STR_LIMIT_HELP),
+            flags   = NUMERIC_SIZE_2 | DISPLAY_UINT_DEC | RESET_REQUIRED,
+            minimum = 0,
+            maximum = 3000,
+            step    = 100,
+            default = 0,
+        endnumeric;
 
-        oneof varid = CpuClockPolicy.Profile,
-            prompt      = STRING_TOKEN(STR_PROFILE_PROMPT),
-            help        = STRING_TOKEN(STR_PROFILE_HELP),
-            flags       = NUMERIC_SIZE_1,
-            option text = STRING_TOKEN(STR_PROFILE_DEFAULT), value = 0, flags = DEFAULT;
-            option text = STRING_TOKEN(STR_PROFILE_OC_2800), value = 1, flags = 0;
-            option text = STRING_TOKEN(STR_PROFILE_OC_3000), value = 2, flags = 0;
-            option text = STRING_TOKEN(STR_PROFILE_CUSTOM),  value = 3, flags = 0;
-        endoneof;
+        suppressif ideqval CpuClockPolicy.SpeedLimitMhz == 0;
+            checkbox varid = CpuClockPolicy.SpeedLocked,
+                prompt = STRING_TOKEN(STR_LOCKED_PROMPT),
+                help   = STRING_TOKEN(STR_LOCKED_HELP),
+                flags  = CHECKBOX_DEFAULT | RESET_REQUIRED,
+            endcheckbox;
 
-        suppressif ideqval CpuClockPolicy.Profile == 0 OR ideqval CpuClockPolicy.Profile == 1 OR ideqval CpuClockPolicy.Profile == 2;
-            numeric varid = CpuClockPolicy.CustomMhz,
-                prompt  = STRING_TOKEN(STR_CUSTOM_MHZ_PROMPT),
-                help    = STRING_TOKEN(STR_CUSTOM_MHZ_HELP),
-                flags   = NUMERIC_SIZE_2 | DISPLAY_UINT_DEC,
-                minimum = 1500,
-                maximum = 3000,
-                step    = 100,
-                default = 2400,
-            endnumeric;
-        endif;
-
-        suppressif ideqval CpuClockPolicy.Profile == 0;
             numeric varid = CpuClockPolicy.OverVoltageDeltaUv,
                 prompt  = STRING_TOKEN(STR_DELTA_PROMPT),
                 help    = STRING_TOKEN(STR_DELTA_HELP),
-                flags   = NUMERIC_SIZE_4 | DISPLAY_UINT_DEC,
+                flags   = NUMERIC_SIZE_4 | DISPLAY_UINT_DEC | RESET_REQUIRED,
                 minimum = 0,
                 maximum = 100000,
                 step    = 5000,
@@ -73,16 +68,14 @@ formset
             endnumeric;
         endif;
 
-        subtitle text = STRING_TOKEN(STR_EMPTY);
         subtitle text = STRING_TOKEN(STR_WARNING_1);
         subtitle text = STRING_TOKEN(STR_WARNING_2);
-        subtitle text = STRING_TOKEN(STR_EMPTY);
 
         text
-            help  = STRING_TOKEN(STR_APPLY_HELP),
-            text  = STRING_TOKEN(STR_APPLY_PROMPT),
-            flags = INTERACTIVE,
-            key   = RPI_CPU_CLOCK_KEY_APPLY;
+            help   = STRING_TOKEN(STR_APPLY_HELP),
+            text   = STRING_TOKEN(STR_APPLY_PROMPT),
+            flags  = INTERACTIVE,
+            key    = RPI_CPU_CLOCK_KEY_APPLY;
 
     endform;
 

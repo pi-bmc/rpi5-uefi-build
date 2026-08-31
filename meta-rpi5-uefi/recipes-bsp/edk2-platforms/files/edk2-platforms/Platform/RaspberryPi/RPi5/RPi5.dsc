@@ -502,6 +502,8 @@
   SecureBootV1_1_0Lib|RedfishClientPkg/ConverterLib/edk2library/SecureBoot/v1_1_0/Lib.inf
   EthernetInterfaceV1_8_0Lib|RedfishClientPkg/ConverterLib/edk2library/EthernetInterface/v1_8_0/Lib.inf
   EthernetInterfaceCollectionLib|RedfishClientPkg/ConverterLib/edk2library/EthernetInterfaceCollection/Lib.inf
+  ProcessorV1_14_0Lib|RedfishClientPkg/ConverterLib/edk2library/Processor/v1_14_0/Lib.inf
+  ProcessorCollectionLib|RedfishClientPkg/ConverterLib/edk2library/ProcessorCollection/Lib.inf
 !if $(SECURE_BOOT_ENABLE) == FALSE
   #
   # RedfishClientPkg's SecureBootDxe feature driver links these either way; with
@@ -1147,6 +1149,16 @@
   #
   Platform/RaspberryPi/RPi5/Drivers/RedfishEthernetInterfaceDxe/RedfishEthernetInterfaceDxe.inf
   Platform/RaspberryPi/RPi5/Drivers/RedfishEthernetInterfaceCollectionDxe/RedfishEthernetInterfaceCollectionDxe.inf
+  #
+  # Processor feature + collection drivers, same platform-owned shape:
+  # they serve SpeedLimitMHz/SpeedLocked on /Systems/1/Processors from
+  # CpuConfigDxe's x-UEFI-redfish-Processor questions. They share the
+  # member with RpiRedfishSyncDxe's SMBIOS inventory POST on purpose -
+  # the inventory has no HII substitute - so the POST never carries the
+  # managed properties and the BMC preserves staged values across it.
+  #
+  Platform/RaspberryPi/RPi5/Drivers/RedfishProcessorDxe/RedfishProcessorDxe.inf
+  Platform/RaspberryPi/RPi5/Drivers/RedfishProcessorCollectionDxe/RedfishProcessorCollectionDxe.inf
   RedfishClientPkg/Converter/ComputerSystem/v1_13_0/RedfishComputerSystem_V1_13_0_Dxe.inf
   RedfishClientPkg/Converter/ComputerSystemCollection/RedfishComputerSystemCollection_Dxe.inf
   RedfishClientPkg/Converter/Bios/v1_1_0/RedfishBios_V1_1_0_Dxe.inf
@@ -1158,6 +1170,8 @@
   RedfishClientPkg/Converter/SecureBoot/v1_1_0/RedfishSecureBoot_V1_1_0_Dxe.inf
   RedfishClientPkg/Converter/EthernetInterface/v1_8_0/RedfishEthernetInterface_V1_8_0_Dxe.inf
   RedfishClientPkg/Converter/EthernetInterfaceCollection/RedfishEthernetInterfaceCollection_Dxe.inf
+  RedfishClientPkg/Converter/Processor/v1_14_0/RedfishProcessor_V1_14_0_Dxe.inf
+  RedfishClientPkg/Converter/ProcessorCollection/RedfishProcessorCollection_Dxe.inf
 
   #
   # Firmware Management Protocol + ESRT: a signed capsule through
