@@ -1,0 +1,57 @@
+## @file
+#
+#  CpuConfigDxe - "CPU Configuration" Setup page (Device Manager)
+#  editing the CpuClockPolicy variable and converging the managed
+#  arm_freq/over_voltage_delta block in config.txt on the boot volume
+#  (applied by the VPU bootloader at the next reset).
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+#
+##
+
+[Defines]
+  INF_VERSION                    = 0x0001001A
+  BASE_NAME                      = CpuConfigDxe
+  FILE_GUID                      = 2bbd58fc-a49d-49ed-b970-04ceae2cfaae
+  MODULE_TYPE                    = DXE_DRIVER
+  VERSION_STRING                 = 1.0
+  ENTRY_POINT                    = CpuConfigEntryPoint
+
+[Sources]
+  CpuConfigDxe.c
+  CpuConfigHii.vfr
+  CpuConfigDxe.uni
+  CpuConfigDxeMap.uni
+
+[Packages]
+  MdePkg/MdePkg.dec
+  MdeModulePkg/MdeModulePkg.dec
+  Platform/RaspberryPi/RPi5/RPi5.dec
+
+[LibraryClasses]
+  BaseLib
+  BaseMemoryLib
+  DebugLib
+  DevicePathLib
+  HiiLib
+  MemoryAllocationLib
+  PrintLib
+  RpiBootVolumeLib
+  UefiBootServicesTableLib
+  UefiDriverEntryPoint
+  UefiHiiServicesLib
+  UefiLib
+  UefiRuntimeServicesTableLib
+
+[Protocols]
+  gEfiDevicePathProtocolGuid                    ## PRODUCES
+  gEfiHiiConfigAccessProtocolGuid               ## PRODUCES
+  gEfiSimpleFileSystemProtocolGuid              ## SOMETIMES_CONSUMES
+
+[Guids]
+  gRpiCpuConfigFormSetGuid                      ## PRODUCES ## Variable:L"CpuClockPolicy"
+  gEfiHiiPlatformSetupFormsetGuid               ## CONSUMES ## GUID
+  gEfiEventReadyToBootGuid                      ## CONSUMES ## Event
+
+[Depex]
+  gEfiVariableArchProtocolGuid AND gEfiVariableWriteArchProtocolGuid

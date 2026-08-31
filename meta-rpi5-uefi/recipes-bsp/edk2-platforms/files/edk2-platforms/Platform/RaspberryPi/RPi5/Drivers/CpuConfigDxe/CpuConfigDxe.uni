@@ -1,0 +1,38 @@
+/** @file
+ *
+ *  Strings for the CPU clock profile formset.
+ *
+ *  SPDX-License-Identifier: BSD-2-Clause-Patent
+ *
+ **/
+
+#langdef en-US "English"
+
+#string STR_EMPTY                #language en-US ""
+
+#string STR_FORM_SET_TITLE       #language en-US "CPU Configuration"
+#string STR_FORM_SET_TITLE_HELP  #language en-US "ARM core clock profile, including the customary 3.0 GHz Raspberry Pi 5 overclock. The profile is written into config.txt on the boot partition and the VPU bootloader applies it at power-on, so changes always take a reset."
+#string STR_FORM_TITLE           #language en-US "CPU Configuration"
+
+#string STR_CONFIGURED_PROMPT    #language en-US "Configured in config.txt"
+#string STR_CONFIGURED_VALUE     #language en-US "(not read)"
+#string STR_CONFIGURED_HELP      #language en-US "What config.txt on the boot volume currently requests (the last arm_freq/over_voltage_delta occurrence). After an apply this is ahead of the running cores until the next reset. With no arm_freq entry the SoC runs stock 2400 MHz."
+
+#string STR_PROFILE_PROMPT       #language en-US "CPU Clock Profile"
+#string STR_PROFILE_HELP         #language en-US "Default removes the managed block from config.txt and runs stock 2400 MHz. The overclock profiles write arm_freq (and Voltage Bump above stock) into a managed config.txt block; force_turbo=1, which this platform ships, pins the cores at that frequency. Whether a given SoC holds 2.8-3.0 GHz is silicon lottery; the VPU firmware still thermal-throttles regardless."
+#string STR_PROFILE_DEFAULT      #language en-US "Default (2.4 GHz)"
+#string STR_PROFILE_OC_2800      #language en-US "Overclock (2.8 GHz)"
+#string STR_PROFILE_OC_3000      #language en-US "Overclock (3.0 GHz)"
+#string STR_PROFILE_CUSTOM       #language en-US "Custom"
+
+#string STR_CUSTOM_MHZ_PROMPT    #language en-US "Custom Frequency (MHz)"
+#string STR_CUSTOM_MHZ_HELP      #language en-US "arm_freq in MHz, 1500 to 3000. Values at or below 2400 underclock (the Voltage Bump is then not written). 3000 is the customary Pi 5 overclock ceiling."
+
+#string STR_DELTA_PROMPT         #language en-US "Voltage Bump (uV)"
+#string STR_DELTA_HELP           #language en-US "over_voltage_delta in microvolts, added to the DVFS operating voltage. Written only when the chosen frequency exceeds stock 2400 MHz. 50000 (50 mV) is the customary companion to a 2.8-3.0 GHz overclock; 0 omits the entry."
+
+#string STR_WARNING_1            #language en-US "An overclock the SoC cannot hold can hang or fail to boot."
+#string STR_WARNING_2            #language en-US "Recovery: edit config.txt on the boot partition from any reader."
+
+#string STR_APPLY_PROMPT         #language en-US "Apply to config.txt"
+#string STR_APPLY_HELP           #language en-US "Saves the profile and rewrites the managed block in config.txt on the boot volume now, then offers a reset. Without this, a saved profile is converged into config.txt automatically at the next boot and takes effect one boot later."

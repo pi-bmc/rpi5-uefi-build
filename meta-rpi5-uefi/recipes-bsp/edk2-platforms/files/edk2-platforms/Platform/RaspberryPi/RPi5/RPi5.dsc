@@ -446,6 +446,13 @@
   RpiScmiLib|Platform/RaspberryPi/RPi5/Library/RpiScmiLib/RpiScmiLib.inf
 
   #
+  # Boot-volume file operations (locate the VPU boot FAT, rewrite files on
+  # it), shared by BootloaderConfigDxe's pieeprom staging and CpuConfigDxe's
+  # config.txt managed block.
+  #
+  RpiBootVolumeLib|Platform/RaspberryPi/RPi5/Library/RpiBootVolumeLib/RpiBootVolumeLib.inf
+
+  #
   # Setup theme for the HII browser -- colours and layout for this board
   # family's pages. Overrides MdeModulePkg's stock CustomizedDisplayLib.
   #
@@ -1025,6 +1032,7 @@
   Platform/RaspberryPi/RPi5/Drivers/RpiScmiConfigDxe/RpiScmiConfigDxe.inf
   Platform/RaspberryPi/RPi5/Drivers/ActiveCoolerScmiDxe/ActiveCoolerScmiDxe.inf
   Platform/RaspberryPi/RPi5/Drivers/FanConfigDxe/FanConfigDxe.inf
+  Platform/RaspberryPi/RPi5/Drivers/CpuConfigDxe/CpuConfigDxe.inf
 
   #
   # BMC-managed IPv4 policy for the onboard NIC: an efivarstore Setup page

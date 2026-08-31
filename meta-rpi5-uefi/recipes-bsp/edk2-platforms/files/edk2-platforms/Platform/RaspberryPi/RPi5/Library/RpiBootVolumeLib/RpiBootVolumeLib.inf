@@ -1,0 +1,36 @@
+## @file
+#
+#  RpiBootVolumeLib - locate the VPU boot volume (the FAT carrying
+#  armstub8-2712.bin / config.txt) and read, replace or rewrite files
+#  on it. Shared by BootloaderConfigDxe (pieeprom.upd staging) and
+#  CpuConfigDxe (config.txt managed block).
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+#
+##
+
+[Defines]
+  INF_VERSION                    = 0x0001001A
+  BASE_NAME                      = RpiBootVolumeLib
+  FILE_GUID                      = b929f207-4c1e-4837-ae3e-27dfcb272b0d
+  MODULE_TYPE                    = BASE
+  VERSION_STRING                 = 1.0
+  LIBRARY_CLASS                  = RpiBootVolumeLib|DXE_DRIVER DXE_RUNTIME_DRIVER UEFI_APPLICATION UEFI_DRIVER
+
+[Sources]
+  RpiBootVolumeLib.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  Platform/RaspberryPi/RPi5/RPi5.dec
+
+[LibraryClasses]
+  DebugLib
+  MemoryAllocationLib
+  UefiBootServicesTableLib
+
+[Protocols]
+  gEfiSimpleFileSystemProtocolGuid              ## SOMETIMES_CONSUMES
+
+[Guids]
+  gEfiFileInfoGuid                              ## SOMETIMES_CONSUMES

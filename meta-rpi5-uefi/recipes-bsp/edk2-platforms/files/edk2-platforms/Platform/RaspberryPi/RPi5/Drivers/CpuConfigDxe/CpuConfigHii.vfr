@@ -1,0 +1,89 @@
+/** @file
+ *
+ *  CPU clock profile formset, bound to the CpuClockPolicy variable
+ *  (efivarstore). The variable is the source of truth; the interactive
+ *  "apply" action below converges the managed arm_freq block in
+ *  config.txt immediately and offers the reset (a ReadyToBoot sync
+ *  converges it anyway on the next boot). The new frequency is applied
+ *  by the VPU bootloader at power-on: it always takes a reset.
+ *
+ *  SPDX-License-Identifier: BSD-2-Clause-Patent
+ *
+ **/
+
+#include <Guid/HiiPlatformSetupFormset.h>
+#include <Guid/RpiCpuClockPolicy.h>
+
+#define EFI_VARIABLE_NON_VOLATILE       0x00000001
+#define EFI_VARIABLE_BOOTSERVICE_ACCESS 0x00000002
+#define EFI_VARIABLE_RUNTIME_ACCESS     0x00000004
+
+formset
+    guid      = RPI_CPU_CONFIG_FORMSET_GUID,
+    title     = STRING_TOKEN(STR_FORM_SET_TITLE),
+    help      = STRING_TOKEN(STR_FORM_SET_TITLE_HELP),
+    classguid = EFI_HII_PLATFORM_SETUP_FORMSET_GUID,
+
+    efivarstore RPI_CPU_CLOCK_POLICY,
+      attribute = EFI_VARIABLE_BOOTSERVICE_ACCESS | EFI_VARIABLE_RUNTIME_ACCESS | EFI_VARIABLE_NON_VOLATILE,
+      name  = CpuClockPolicy,
+      guid  = RPI_CPU_CONFIG_FORMSET_GUID;
+
+    form formid = 1,
+        title = STRING_TOKEN(STR_FORM_TITLE);
+
+        text
+            help  = STRING_TOKEN(STR_CONFIGURED_HELP),
+            text  = STRING_TOKEN(STR_CONFIGURED_PROMPT),
+            text  = STRING_TOKEN(STR_CONFIGURED_VALUE);
+
+        subtitle text = STRING_TOKEN(STR_EMPTY);
+
+        oneof varid = CpuClockPolicy.Profile,
+            prompt      = STRING_TOKEN(STR_PROFILE_PROMPT),
+            help        = STRING_TOKEN(STR_PROFILE_HELP),
+            flags       = NUMERIC_SIZE_1,
+            option text = STRING_TOKEN(STR_PROFILE_DEFAULT), value = 0, flags = DEFAULT;
+            option text = STRING_TOKEN(STR_PROFILE_OC_2800), value = 1, flags = 0;
+            option text = STRING_TOKEN(STR_PROFILE_OC_3000), value = 2, flags = 0;
+            option text = STRING_TOKEN(STR_PROFILE_CUSTOM),  value = 3, flags = 0;
+        endoneof;
+
+        suppressif ideqval CpuClockPolicy.Profile == 0 OR ideqval CpuClockPolicy.Profile == 1 OR ideqval CpuClockPolicy.Profile == 2;
+            numeric varid = CpuClockPolicy.CustomMhz,
+                prompt  = STRING_TOKEN(STR_CUSTOM_MHZ_PROMPT),
+                help    = STRING_TOKEN(STR_CUSTOM_MHZ_HELP),
+                flags   = NUMERIC_SIZE_2 | DISPLAY_UINT_DEC,
+                minimum = 1500,
+                maximum = 3000,
+                step    = 100,
+                default = 2400,
+            endnumeric;
+        endif;
+
+        suppressif ideqval CpuClockPolicy.Profile == 0;
+            numeric varid = CpuClockPolicy.OverVoltageDeltaUv,
+                prompt  = STRING_TOKEN(STR_DELTA_PROMPT),
+                help    = STRING_TOKEN(STR_DELTA_HELP),
+                flags   = NUMERIC_SIZE_4 | DISPLAY_UINT_DEC,
+                minimum = 0,
+                maximum = 100000,
+                step    = 5000,
+                default = 50000,
+            endnumeric;
+        endif;
+
+        subtitle text = STRING_TOKEN(STR_EMPTY);
+        subtitle text = STRING_TOKEN(STR_WARNING_1);
+        subtitle text = STRING_TOKEN(STR_WARNING_2);
+        subtitle text = STRING_TOKEN(STR_EMPTY);
+
+        text
+            help  = STRING_TOKEN(STR_APPLY_HELP),
+            text  = STRING_TOKEN(STR_APPLY_PROMPT),
+            flags = INTERACTIVE,
+            key   = RPI_CPU_CLOCK_KEY_APPLY;
+
+    endform;
+
+endformset;

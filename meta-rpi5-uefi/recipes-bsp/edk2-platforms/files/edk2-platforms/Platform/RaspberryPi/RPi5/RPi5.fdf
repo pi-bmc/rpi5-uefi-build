@@ -391,6 +391,7 @@ READ_LOCK_STATUS   = TRUE
   INF Platform/RaspberryPi/RPi5/Drivers/RpiScmiConfigDxe/RpiScmiConfigDxe.inf
   INF Platform/RaspberryPi/RPi5/Drivers/ActiveCoolerScmiDxe/ActiveCoolerScmiDxe.inf
   INF Platform/RaspberryPi/RPi5/Drivers/FanConfigDxe/FanConfigDxe.inf
+  INF Platform/RaspberryPi/RPi5/Drivers/CpuConfigDxe/CpuConfigDxe.inf
   INF Platform/RaspberryPi/RPi5/Drivers/EthConfigDxe/EthConfigDxe.inf
 !if $(RPI5_OPTEE) == TRUE
   INF Platform/RaspberryPi/RPi5/Drivers/RpiOpteeSensorDxe/RpiOpteeSensorDxe.inf

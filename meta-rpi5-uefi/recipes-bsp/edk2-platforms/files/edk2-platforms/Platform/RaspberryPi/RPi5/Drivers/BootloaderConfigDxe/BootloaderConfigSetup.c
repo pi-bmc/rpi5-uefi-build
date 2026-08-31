@@ -38,6 +38,7 @@
 #include <Library/HiiLib.h>
 #include <Library/MemoryAllocationLib.h>
 #include <Library/PrintLib.h>
+#include <Library/RpiBootVolumeLib.h>
 #include <Library/UefiBootServicesTableLib.h>
 #include <Library/UefiHiiServicesLib.h>
 #include <Library/UefiLib.h>
@@ -131,184 +132,6 @@ PopupInfo (
   )
 {
   CreatePopUp (POPUP_ATTRIBUTES, NULL, Line1, NULL);
-}
-
-/**
-  Open the boot volume's root: the filesystem carrying our firmware
-  (armstub8-2712.bin), falling back to any volume with a config.txt.
-  This is the partition the VPU bootloader booted from, so it is where
-  it will look for pieeprom.upd.
-**/
-STATIC
-EFI_STATUS
-OpenBootVolume (
-  OUT EFI_FILE_PROTOCOL  **Root
-  )
-{
-  EFI_STATUS                       Status;
-  EFI_HANDLE                       *Handles;
-  UINTN                            HandleCount;
-  UINTN                            Index;
-  EFI_SIMPLE_FILE_SYSTEM_PROTOCOL  *Sfs;
-  EFI_FILE_PROTOCOL                *Candidate;
-  EFI_FILE_PROTOCOL                *File;
-  EFI_FILE_PROTOCOL                *Best;
-  UINTN                            BestScore;
-  UINTN                            Score;
-
-  Status = gBS->LocateHandleBuffer (
-                  ByProtocol,
-                  &gEfiSimpleFileSystemProtocolGuid,
-                  NULL,
-                  &HandleCount,
-                  &Handles
-                  );
-  if (EFI_ERROR (Status)) {
-    return Status;
-  }
-
-  Best      = NULL;
-  BestScore = 0;
-
-  for (Index = 0; Index < HandleCount; Index++) {
-    Status = gBS->HandleProtocol (
-                    Handles[Index],
-                    &gEfiSimpleFileSystemProtocolGuid,
-                    (VOID **)&Sfs
-                    );
-    if (EFI_ERROR (Status)) {
-      continue;
-    }
-
-    if (EFI_ERROR (Sfs->OpenVolume (Sfs, &Candidate))) {
-      continue;
-    }
-
-    Score = 0;
-    if (!EFI_ERROR (
-           Candidate->Open (
-                        Candidate,
-                        &File,
-                        L"armstub8-2712.bin",
-                        EFI_FILE_MODE_READ,
-                        0
-                        )
-           ))
-    {
-      File->Close (File);
-      Score = 2;
-    } else if (!EFI_ERROR (
-                  Candidate->Open (
-                               Candidate,
-                               &File,
-                               L"config.txt",
-                               EFI_FILE_MODE_READ,
-                               0
-                               )
-                  ))
-    {
-      File->Close (File);
-      Score = 1;
-    }
-
-    if (Score > BestScore) {
-      if (Best != NULL) {
-        Best->Close (Best);
-      }
-
-      Best      = Candidate;
-      BestScore = Score;
-      if (Score == 2) {
-        break;
-      }
-    } else {
-      Candidate->Close (Candidate);
-    }
-  }
-
-  FreePool (Handles);
-
-  if (Best == NULL) {
-    return EFI_NOT_FOUND;
-  }
-
-  *Root = Best;
-  return EFI_SUCCESS;
-}
-
-STATIC
-VOID
-DeleteFileIfPresent (
-  IN EFI_FILE_PROTOCOL  *Root,
-  IN CHAR16             *Name
-  )
-{
-  EFI_FILE_PROTOCOL  *File;
-
-  if (!EFI_ERROR (
-         Root->Open (
-                 Root,
-                 &File,
-                 Name,
-                 EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE,
-                 0
-                 )
-         ))
-  {
-    //
-    // Delete() closes the handle regardless of the outcome.
-    //
-    File->Delete (File);
-  }
-}
-
-/**
-  Create Name with exactly the given content, replacing any previous
-  file (delete + recreate, so no stale tail can survive).
-**/
-STATIC
-EFI_STATUS
-ReplaceFileContent (
-  IN EFI_FILE_PROTOCOL  *Root,
-  IN CHAR16             *Name,
-  IN CONST VOID         *Data,
-  IN UINTN              Len
-  )
-{
-  EFI_STATUS         Status;
-  EFI_FILE_PROTOCOL  *File;
-  UINTN              WriteLen;
-
-  DeleteFileIfPresent (Root, Name);
-
-  Status = Root->Open (
-                   Root,
-                   &File,
-                   Name,
-                   EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE | EFI_FILE_MODE_CREATE,
-                   0
-                   );
-  if (EFI_ERROR (Status)) {
-    return Status;
-  }
-
-  WriteLen = Len;
-  Status   = File->Write (File, &WriteLen, (VOID *)Data);
-  if (!EFI_ERROR (Status) && (WriteLen != Len)) {
-    Status = EFI_DEVICE_ERROR;
-  }
-
-  if (!EFI_ERROR (Status)) {
-    Status = File->Flush (File);
-  }
-
-  File->Close (File);
-
-  if (EFI_ERROR (Status)) {
-    DeleteFileIfPresent (Root, Name);
-  }
-
-  return Status;
 }
 
 /**
@@ -849,27 +672,27 @@ StageUpdate (
 
   PopupInfo (L"Writing pieeprom.upd to the boot partition...");
 
-  Status = OpenBootVolume (&Root);
+  Status = RpiOpenBootVolume (&Root);
   if (EFI_ERROR (Status)) {
     FreePool (Image);
     PopupWait (L"No boot volume with armstub8-2712.bin or config.txt found.", NULL);
     return;
   }
 
-  Status = ReplaceFileContent (
+  Status = RpiReplaceFileContent (
              Root,
              STAGED_UPDATE_FILE,
              Image,
              EEPROM_IMAGE_SIZE_2712
              );
   if (!EFI_ERROR (Status)) {
-    Status = ReplaceFileContent (Root, STAGED_SIG_FILE, Sig, SigLen);
+    Status = RpiReplaceFileContent (Root, STAGED_SIG_FILE, Sig, SigLen);
     if (EFI_ERROR (Status)) {
       //
       // Never leave an unsigned .upd behind: without its .sig the
       // bootloader ignores it, but a half-staged pair is confusing.
       //
-      DeleteFileIfPresent (Root, STAGED_UPDATE_FILE);
+      RpiDeleteFileIfPresent (Root, STAGED_UPDATE_FILE);
     }
   }
 
@@ -934,9 +757,9 @@ BlStagedMarkerCleanup (
             BlValuesEqual (&Staged, &mCurrentValues);
 
   if (Applied) {
-    if (!EFI_ERROR (OpenBootVolume (&Root))) {
-      DeleteFileIfPresent (Root, STAGED_UPDATE_FILE);
-      DeleteFileIfPresent (Root, STAGED_SIG_FILE);
+    if (!EFI_ERROR (RpiOpenBootVolume (&Root))) {
+      RpiDeleteFileIfPresent (Root, STAGED_UPDATE_FILE);
+      RpiDeleteFileIfPresent (Root, STAGED_SIG_FILE);
       Root->Close (Root);
     }
 

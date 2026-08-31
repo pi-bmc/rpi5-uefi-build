@@ -51,6 +51,7 @@
   MemoryAllocationLib
   PcdLib
   PrintLib
+  RpiBootVolumeLib
   UefiBootServicesTableLib
   UefiDriverEntryPoint
   UefiHiiServicesLib
