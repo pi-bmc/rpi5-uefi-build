@@ -387,9 +387,12 @@ RpiRedfishBuildFirmwareInventoryPatch (
 //
 // One host Ethernet interface, reduced to the EthernetInterface properties
 // the BMC stores. The BMC's ethernet_interfaces.go serves these; the member
-// Id is derived from the MAC so a later boot's re-report updates the same
-// member. The RHI's own USB NIC is excluded at collection time -- it is a
-// DSP0270 management link, not host inventory (same stance as boot options).
+// Id is the Linux-style ordinal "eth<N>" in collection order, so a later
+// boot's re-report updates the same member as long as the NIC population is
+// unchanged (on this board that is the one onboard GEM, so eth0 -- the MAC
+// still travels in the MACAddress property). The RHI's own USB NIC is
+// excluded at collection time -- it is a DSP0270 management link, not host
+// inventory (same stance as boot options).
 //
 typedef struct {
   UINT8      Mac[6];                   // SnpMode CurrentAddress
@@ -426,9 +429,11 @@ RpiRedfishCollectNics (
 /**
   Build the EthernetInterface POST body for one NIC.
 
-  @param[in]  Nic   Interface to describe.
-  @param[out] Json  Receives an allocated ASCII JSON body. Caller frees with
-                    FreePool().
+  @param[in]  Nic    Interface to describe.
+  @param[in]  Index  Position in the collected set; becomes the member's
+                     "eth<Index>" Id.
+  @param[out] Json   Receives an allocated ASCII JSON body. Caller frees with
+                     FreePool().
 
   @retval EFI_SUCCESS           Body was built.
   @retval EFI_OUT_OF_RESOURCES  Allocation failed.
@@ -436,6 +441,7 @@ RpiRedfishCollectNics (
 EFI_STATUS
 RpiRedfishBuildNicPost (
   IN  RPI_REDFISH_NIC  *Nic,
+  IN  UINTN            Index,
   OUT CHAR8            **Json
   );
 

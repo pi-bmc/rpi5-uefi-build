@@ -1357,16 +1357,16 @@ RpiRedfishCollectNics (
 EFI_STATUS
 RpiRedfishBuildNicPost (
   IN  RPI_REDFISH_NIC  *Nic,
+  IN  UINTN            Index,
   OUT CHAR8            **Json
   )
 {
-  CHAR8        *Body;
-  CHAR8        Id[32];
-  CHAR8        Mac[24];
-  CHAR8        PermanentMac[24];
-  CONST UINT8  *KeyMac;
-  BOOLEAN      PermanentKnown;
-  UINTN        Index;
+  CHAR8    *Body;
+  CHAR8    Id[16];
+  CHAR8    Mac[24];
+  CHAR8    PermanentMac[24];
+  BOOLEAN  PermanentKnown;
+  UINTN    Byte;
 
   if ((Nic == NULL) || (Json == NULL)) {
     return EFI_INVALID_PARAMETER;
@@ -1378,32 +1378,32 @@ RpiRedfishBuildNicPost (
   }
 
   //
-  // The Id doubles as the member's identity on the BMC, so it must be stable
-  // across boots regardless of enumeration order: derive it from the
-  // permanent MAC, falling back to the current one when the permanent
-  // address is unpopulated (all zero).
+  // The Id doubles as the member's identity on the BMC. The Linux-style
+  // ordinal reads better than a MAC-derived key everywhere the URI shows
+  // up, and it stays stable across boots as long as the NIC population
+  // does -- on this board that is the one onboard GEM, so always "eth0".
+  // The MAC still travels in the MACAddress property.
   //
+  AsciiSPrint (Id, sizeof (Id), "eth%u", (UINT32)Index);
+
   PermanentKnown = FALSE;
-  for (Index = 0; Index < sizeof (Nic->PermanentMac); Index++) {
-    if (Nic->PermanentMac[Index] != 0) {
+  for (Byte = 0; Byte < sizeof (Nic->PermanentMac); Byte++) {
+    if (Nic->PermanentMac[Byte] != 0) {
       PermanentKnown = TRUE;
       break;
     }
   }
 
-  KeyMac = PermanentKnown ? Nic->PermanentMac : Nic->Mac;
-  AsciiSPrint (
-    Id,
-    sizeof (Id),
-    "NIC-%02X%02X%02X%02X%02X%02X",
-    KeyMac[0], KeyMac[1], KeyMac[2], KeyMac[3], KeyMac[4], KeyMac[5]
-    );
-
   AsciiSPrint (
     Mac,
     sizeof (Mac),
     "%02X:%02X:%02X:%02X:%02X:%02X",
-    Nic->Mac[0], Nic->Mac[1], Nic->Mac[2], Nic->Mac[3], Nic->Mac[4], Nic->Mac[5]
+    Nic->Mac[0],
+    Nic->Mac[1],
+    Nic->Mac[2],
+    Nic->Mac[3],
+    Nic->Mac[4],
+    Nic->Mac[5]
     );
 
   AsciiSPrint (
@@ -1423,8 +1423,12 @@ RpiRedfishBuildNicPost (
       PermanentMac,
       sizeof (PermanentMac),
       "%02X:%02X:%02X:%02X:%02X:%02X",
-      Nic->PermanentMac[0], Nic->PermanentMac[1], Nic->PermanentMac[2],
-      Nic->PermanentMac[3], Nic->PermanentMac[4], Nic->PermanentMac[5]
+      Nic->PermanentMac[0],
+      Nic->PermanentMac[1],
+      Nic->PermanentMac[2],
+      Nic->PermanentMac[3],
+      Nic->PermanentMac[4],
+      Nic->PermanentMac[5]
       );
     AppendJsonString (Body, RPI_REDFISH_JSON_MAX, "PermanentMACAddress", PermanentMac);
   }

@@ -1032,7 +1032,7 @@ ReportEthernetInterfaces (
 
   for (Index = 0; Index < Count; Index++) {
     Body   = NULL;
-    Status = RpiRedfishBuildNicPost (&Nics[Index], &Body);
+    Status = RpiRedfishBuildNicPost (&Nics[Index], Index, &Body);
     if (EFI_ERROR (Status) || (Body == NULL)) {
       continue;
     }
