@@ -1,0 +1,83 @@
+From: appkins <nbatkins@gmail.com>
+Date: Sun, 31 Aug 2026 10:30:00 -0500
+Subject: [PATCH] PlatformBm: connect the onboard NIC before the Redfish sync
+
+RpiRedfishSyncDxe reports the host's Ethernet interfaces from the SNP
+handles that already exist - its exchange runs at TPL_CALLBACK, where
+ConnectController is not permitted, so it cannot connect anything
+itself. On a disk boot nothing else connects the RP1 GEM, and the NIC
+inventory only ever populated on boots that happened to netboot.
+
+Connect the network device class in PlatformBootManagerAfterConsole,
+right before the USB NIC gate opens. BootManagerPolicyDxe connects the
+device paths cached in its non-volatile network list and only falls
+back to a full ConnectAll when that cache is empty, so warm boots pay
+for connecting the GEM alone; the still-closed USB NIC gate keeps the
+RHI out of both the fallback connect and the cached list. This also
+lets a Pxe or Usb boot override match on its first pass instead of its
+connect-and-retry pass.
+---
+
+diff --git a/Platform/RaspberryPi/Library/PlatformBootManagerLib/PlatformBm.c b/Platform/RaspberryPi/Library/PlatformBootManagerLib/PlatformBm.c
+index 3664c09..6ed3a5a 100644
+--- a/Platform/RaspberryPi/Library/PlatformBootManagerLib/PlatformBm.c
++++ b/Platform/RaspberryPi/Library/PlatformBootManagerLib/PlatformBm.c
+@@ -1006,6 +1006,49 @@ WaitForRedfishSyncSettled (
+     __func__, RPI_SYNC_WAIT_POLLS * 100));
+ }
+ 
++/**
++  Connect the onboard NIC so the Redfish sync can inventory it.
++
++  RpiRedfishSyncDxe reports the host's Ethernet interfaces to the BMC from
++  the SNP handles that already exist, and its exchange runs from
++  TPL_CALLBACK, where ConnectController is not permitted - it cannot
++  connect anything itself. On a disk boot nothing else connects the RP1
++  GEM, so without this call the NIC inventory only ever populated on boots
++  that happened to netboot. Connecting here also lets a Pxe or Usb boot
++  override match on its first pass instead of its connect-and-retry pass.
++
++  ConnectDeviceClass(Network) connects the device paths cached in
++  BootManagerPolicyDxe's non-volatile network list; only when that cache
++  is empty (first boot, or hardware changed) does it fall back to a full
++  ConnectAll to rebuild it. The USB NIC gate is still closed at this
++  point, so NetworkCommon never binds the RHI during that fallback and
++  the BMC's gadget NIC stays out of the cached list.
++**/
++STATIC
++VOID
++ConnectOnboardNicForInventory (
++  VOID
++  )
++{
++  EFI_STATUS                        Status;
++  EFI_BOOT_MANAGER_POLICY_PROTOCOL  *Policy;
++
++  Status = gBS->LocateProtocol (
++                  &gEfiBootManagerPolicyProtocolGuid,
++                  NULL,
++                  (VOID **)&Policy
++                  );
++  if (EFI_ERROR (Status)) {
++    return;
++  }
++
++  Status = Policy->ConnectDeviceClass (
++                     Policy,
++                     &gEfiBootManagerPolicyNetworkGuid
++                     );
++  DEBUG ((DEBUG_INFO, "%a: network class connect - %r\n", __func__, Status));
++}
++
+ /**
+   Do the platform specific action after the console is ready
+   Possible things that can be done in PlatformBootManagerAfterConsole:
+@@ -1060,6 +1103,8 @@ PlatformBootManagerAfterConsole (
+ 
+   PlatformRegisterOptionsAndKeys ();
+ 
++  ConnectOnboardNicForInventory ();
++
+   if (ConnectUsbNicDevices ()) {
+     WaitForRedfishSyncSettled ();
+   }

@@ -1057,6 +1057,14 @@
   Platform/RaspberryPi/RPi5/Drivers/RpiRedfishSyncDxe/RpiRedfishSyncDxe.inf
 
   #
+  # Self-applying capsule updater. Built here so it rides the same pins and
+  # toolchain as the firmware, deployed onto the capsule volume as
+  # \EFI\BOOT\BOOTAA64.EFI by rpi5-capsule-image -- deliberately NOT in
+  # the FDF: it lives on the update media, not in the FD.
+  #
+  Platform/RaspberryPi/RPi5/Applications/Rpi5CapsuleApp/Rpi5CapsuleApp.inf
+
+  #
   # edk2-redfish-client feature drivers and schema converters.
   #
   # Two of RedfishClientPkg's three HiiToRedfish* drivers are deliberately NOT

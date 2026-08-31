@@ -1,0 +1,43 @@
+## @file
+#  Self-applying firmware update: apply the FMP capsules staged on the
+#  volume this application booted from. Deployed as \EFI\BOOT\BOOTAA64.EFI
+#  on the capsule volume (see rpi5-capsule-image); deliberately NOT in the
+#  firmware FD.
+#
+#  Copyright (c) 2026, the pi-bmc contributors.
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+
+[Defines]
+  INF_VERSION    = 0x0001001A
+  BASE_NAME      = Rpi5CapsuleApp
+  FILE_GUID      = 8f7d2c41-6b0a-4e83-9d15-3a4c62e0b7f9
+  MODULE_TYPE    = UEFI_APPLICATION
+  VERSION_STRING = 1.0
+  ENTRY_POINT    = UefiMain
+
+[Sources]
+  Rpi5CapsuleApp.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+
+[LibraryClasses]
+  BaseMemoryLib
+  DebugLib
+  FileHandleLib
+  MemoryAllocationLib
+  UefiApplicationEntryPoint
+  UefiBootServicesTableLib
+  UefiLib
+  UefiRuntimeServicesTableLib
+
+[Protocols]
+  gEfiBootManagerPolicyProtocolGuid ## CONSUMES
+  gEfiLoadedImageProtocolGuid       ## CONSUMES
+  gEfiSimpleFileSystemProtocolGuid  ## CONSUMES
+
+[Guids]
+  gEfiBootManagerPolicyConnectAllGuid  ## CONSUMES
+  gEfiFileInfoGuid                     ## CONSUMES

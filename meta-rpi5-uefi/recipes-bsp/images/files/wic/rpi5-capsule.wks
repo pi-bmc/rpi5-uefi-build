@@ -1,0 +1,26 @@
+# Capsule delivery volume (WIC kickstart).
+#
+# GPT with a single 64 MiB FAT32 EFI System Partition carrying
+# \EFI\UpdateCapsule\RPi5Firmware.cap -- deliberately the same shape as the
+# volume nanokvm-app's pkg/firmware builds at runtime with go-diskfs and
+# presents on the mass-storage gadget's lun.0 (GPT + FAT32 ESP + the spec's
+# capsule drop-box directory, UEFI 2.10 8.5.5), so whatever scans one format
+# scans both. FAT32 is forced with --mkfs-extraopts: at 64 MiB mkdosfs would
+# otherwise pick FAT16, and the runtime volume is explicitly FAT32.
+#
+# --fixed-size 64M is load-bearing, not padding: FAT32 needs >= 65525
+# clusters to BE FAT32 -- on a content-sized (~18 MiB) partition a forced
+# "-F 32" produces an out-of-spec volume that FAT drivers, EDK2's included,
+# may classify as FAT16 from the cluster count and then fail to read. The
+# empty space costs nothing after wic.xz compression.
+#
+# Populated from the capsule-staging tree the recipe assembles and passes as
+# the default ROOTFS_DIR (WIC_CREATE_EXTRA_ARGS), same mechanism as
+# rpi5-uefi.wks.
+#
+# Keep the part directive on one line: wic's kickstart parser shlex-splits
+# each line and does not join backslash continuations.
+
+bootloader --ptable gpt
+
+part /boot --source rootfs --rootfs-dir=ROOTFS_DIR --fstype=vfat --label CAPSULE --part-type C12A7328-F81F-11D2-BA4B-00A0C93EC93B --align 1024 --fixed-size 64M --mkfs-extraopts "-F 32"

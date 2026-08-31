@@ -168,6 +168,7 @@ SRC_URI = "git://github.com/tianocore/edk2-platforms.git;protocol=https;branch=m
            file://0034-PlatformBm-connect-USB-NICs-after-boot-option-enumer.patch \
            file://0035-DwUsbHostDxe-pump-polled-bulk-IN-endpoints-from-the-p.patch \
            file://0038-FdtDxe-fall-back-to-the-nearest-older-versioned-devi.patch \
+           file://0039-PlatformBm-connect-the-onboard-NIC-before-the-Redfis.patch \
            "
 
 # Diagnostics, DEBUG builds only. 0036 (the former 0033, regenerated to apply

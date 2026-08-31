@@ -688,6 +688,13 @@ do_deploy() {
     install -m 0644 ${WORKDIR}/config.txt ${DEPLOYDIR}/config.txt
     install -m 0644 ${B}/RPI_EFI.report.txt ${DEPLOYDIR}/RPI_EFI.report.txt
 
+    # The self-applying capsule updater (see Rpi5CapsuleApp in RPi5.dsc):
+    # rpi5-capsule-image stages it as \EFI\BOOT\BOOTAA64.EFI next to the
+    # signed capsule, so booting the capsule volume applies the update.
+    install -m 0644 \
+        ${WORKDIR}/Build/RPi5/${RPI5_BUILD_TARGET}_GCC/AARCH64/Rpi5CapsuleApp.efi \
+        ${DEPLOYDIR}/Rpi5CapsuleApp.efi
+
     # --- signed capsule ---------------------------------------------------
     # The same FD, wrapped in the UEFI capsule headers and PKCS#7-signed with
     # the key whose certificate the firmware above embeds. What it updates is

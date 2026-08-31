@@ -334,6 +334,17 @@ OptionMatchesTarget (
     return OptionIsNetworkBoot (Option);
   }
 
+  if (AsciiStrCmp (Target, "Usb") == 0) {
+    //
+    // USB mass storage -- the capsule volume the BMC presents on its
+    // gadget, or a stick. A USB node without a MAC node: the MAC test
+    // keeps the RHI NIC out (OptionIsNetworkBoot's concern, mirrored),
+    // and Hdd below deliberately does not match bare USB.
+    //
+    return (OptionHasNode (Option, MESSAGING_DEVICE_PATH, MSG_USB_DP) &&
+            !OptionHasNode (Option, MESSAGING_DEVICE_PATH, MSG_MAC_ADDR_DP));
+  }
+
   if (AsciiStrCmp (Target, "Hdd") == 0) {
     //
     // Local block storage, in whichever shape BDS has it at this point.

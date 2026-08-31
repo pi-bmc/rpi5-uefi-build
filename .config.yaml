@@ -12,7 +12,9 @@ header:
 
 machine: raspberrypi5-uefi
 distro: poky
-target: rpi5-uefi-sdimg
+target:
+  - rpi5-uefi-sdimg
+  - rpi5-capsule-image
 
 build_system: openembedded
 
