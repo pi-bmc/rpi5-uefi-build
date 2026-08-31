@@ -1,0 +1,45 @@
+## @file
+#  Boot-time \EFI\UpdateCapsule scanner: applies staged FMP capsules at
+#  ReadyToBoot, synchronously, from any attached volume -- including the
+#  USB mass-storage LUN the BMC's gadget exposes. Linked NULL into
+#  BdsDxe; the platform's substitute for upstream Capsule-on-Disk, which
+#  needs a PEI phase this platform does not have.
+#
+#  Copyright (c) 2026, the pi-bmc contributors.
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+
+[Defines]
+  INF_VERSION    = 0x0001001A
+  BASE_NAME      = RpiCapsuleOnDiskLib
+  FILE_GUID      = 4b7a9c15-e2d8-4f06-8a31-c95d47b0e6f2
+  MODULE_TYPE    = DXE_DRIVER
+  VERSION_STRING = 1.0
+  LIBRARY_CLASS  = NULL|DXE_DRIVER
+  CONSTRUCTOR    = RpiCapsuleOnDiskLibConstructor
+
+[Sources]
+  RpiCapsuleOnDiskLib.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+
+[LibraryClasses]
+  BaseLib
+  DebugLib
+  FileHandleLib
+  MemoryAllocationLib
+  UefiBootServicesTableLib
+  UefiLib
+  UefiRuntimeServicesTableLib
+
+[Protocols]
+  gEfiSimpleFileSystemProtocolGuid  ## CONSUMES
+  gEfiUsb2HcProtocolGuid            ## CONSUMES
+  gEfiUsbIoProtocolGuid             ## CONSUMES
+
+[Guids]
+  gEfiEventReadyToBootGuid  ## CONSUMES ## Event
+  gEfiFileInfoGuid          ## CONSUMES
+  gEfiGlobalVariableGuid    ## SOMETIMES_PRODUCES ## Variable:L"OsIndicationsSupported"

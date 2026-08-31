@@ -214,16 +214,48 @@ RPI5_FW_VERSION ??= "${PV}"
 # candidate keys has no candidates.
 
 # The integer version ESRT publishes and FmpDxe compares for anti-rollback --
-# distinct from RPI5_FW_VERSION, which is the human-readable string. Derived
-# from PV's leading numeric part (202602+git -> 202602). Carried both ways:
-# into the firmware as PcdRpi5FirmwareVersion (what FmpDeviceGetVersion
-# reports) and into the capsule as GenerateCapsule's --fw-version, so the
-# capsule always declares the version of the image inside it.
+# distinct from RPI5_FW_VERSION, which is the human-readable string. Carried
+# both ways: into the firmware as PcdRpi5FirmwareVersion (what
+# FmpDeviceGetVersion reports) and into the capsule as GenerateCapsule's
+# --fw-version, so the capsule always declares the version of the image
+# inside it.
+#
+# Derived from the build's start time as a Unix epoch (decode with
+# `date -d @<n>`), NOT from PV: PV yields the same 202608 for every build of
+# a release month, which twice made it impossible to tell from the BMC
+# whether a capsule update actually changed the running image. An epoch is
+# monotonic across builds, fits ESRT's UINT32 until 2106, and DATETIME --
+# constant for one bitbake invocation -- keeps do_compile's PCD and
+# do_deploy's --fw-version stamped identically. (A bare time.time() here
+# would not: task scripts expand independently, seconds apart.)
+#
+# The vardepsexcludes below are load-bearing: without them the moving clock
+# would invalidate do_compile/do_deploy on every parse and nothing would
+# ever come from sstate. The flip side, documented rather than hidden: the
+# version only refreshes when the task genuinely re-runs, and an explicit
+# RPI5_FMP_VERSION override needs a real source change (or bitbake -C
+# compile) to reach the binaries. A forced `-C deploy` alone re-signs the
+# capsule with a fresher stamp than the FD's PCD -- run a full build after
+# forcing partials.
 #
 # It should only ever increase. What actually enforces that is RPI5_FMP_LSV,
 # not this: FmpDxe rejects an image whose version is below the lowest
 # supported version, and compares nothing against the running one.
-RPI5_FMP_VERSION ??= "${@d.getVar('PV').split('+')[0].replace('.', '') or '1'}"
+def rpi5_fmp_version(d):
+    import calendar, time
+    try:
+        return str(int(calendar.timegm(
+            time.strptime(d.getVar('DATETIME'), '%Y%m%d%H%M%S'))))
+    except (TypeError, ValueError):
+        # Signature computation expands DATETIME to a reproducibility dummy
+        # ("12341234"), which cannot parse as a date. The value returned here
+        # never reaches a binary -- tasks expand the real clock at run time,
+        # and the vardepsexcludes keep this variable out of the hash anyway.
+        return "1"
+
+RPI5_FMP_VERSION ??= "${@rpi5_fmp_version(d)}"
+do_compile[vardepsexclude] += "RPI5_FMP_VERSION"
+do_deploy[vardepsexclude] += "RPI5_FMP_VERSION"
 
 # Anti-rollback floor written into the capsule as GenerateCapsule's --lsv.
 #

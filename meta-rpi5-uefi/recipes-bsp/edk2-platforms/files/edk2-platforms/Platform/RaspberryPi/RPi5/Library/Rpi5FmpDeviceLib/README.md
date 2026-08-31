@@ -51,11 +51,13 @@ cannot be written at an offset that means something else here.
 | `EsrtFmpDxe` | turns FMP instances into the ESRT the OS reads |
 | `CapsuleRuntimeDxe` | `UpdateCapsule()` — already built, stages the capsule |
 | `DxeCapsuleLibFmp` | applies it; `ProcessCapsules()` is already called from `PlatformBm` |
+| `RpiCapsuleOnDiskLib` | NULL-linked into `BdsDxe` — scans every volume's `\EFI\UpdateCapsule` at ReadyToBoot and applies what it finds (see `Silicon/RaspberryPi/Library/RpiCapsuleOnDiskLib`) |
+| `Rpi5CapsuleApp` | `BOOTAA64.EFI` on the capsule volume — the same apply when that volume is booted directly |
 
-Only the first two are new. `CapsuleRuntimeDxe` and both `ProcessCapsules()`
-calls have been in this platform all along — with `CapsuleLib` mapped to the
-Null instance, which is why `UpdateCapsule()` has always returned success and
-then quietly dropped the image. Patch 0018 is what changes that.
+`CapsuleRuntimeDxe` and both `ProcessCapsules()` calls have been in this
+platform all along — with `CapsuleLib` mapped to the Null instance, which is
+why `UpdateCapsule()` used to return success and then quietly drop the image.
+The real `DxeCapsuleLibFmp` mapping in `RPi5.dsc` is what changed that.
 
 ## Capsules must be signed
 
@@ -156,12 +158,23 @@ Four things that are easy to get wrong, all of which the recipe handles:
 > coalesce a staged capsule after the reset.
 
 A capsule with no flags is applied *immediately*, inside the `UpdateCapsule()`
-call itself, by a caller running under boot services. So the paths that work
-here are a UEFI-Shell `CapsuleApp.efi` (not currently built into the FD) or a
-DXE driver calling `UpdateCapsule()` — and the path that does **not** work is
-`fwupd` from a running Linux, which delivers capsules the persist-across-reset
-way. `RpiRedfishSyncDxe` reports the running version to the BMC today; it does
-not yet pull and apply.
+call itself, by a caller running under boot services. Two such callers exist,
+sharing one contract (applied ⇒ deleted, failed ⇒ left with
+`LastAttemptStatus`):
+
+- `RpiCapsuleOnDiskLib`, linked into `BdsDxe`: at ReadyToBoot it scans every
+  attached volume's `\EFI\UpdateCapsule` — connecting USB mass storage first,
+  so the BMC's staged LUN is seen on an ordinary boot — and applies what it
+  finds. This is capsule-on-disk delivery without upstream's PEI machinery.
+- `Rpi5CapsuleApp` as the capsule volume's `BOOTAA64.EFI`, when that volume is
+  booted directly (BMC "Usb" override, boot menu, removable-media fallback).
+
+The path that does **not** work is `fwupd` delivering through the kernel's
+runtime capsule loader, which needs persist-across-reset. `fwupd`'s
+*capsule-on-disk* mode — drop the file in the boot ESP's `\EFI\UpdateCapsule`,
+set `OsIndications` — lands exactly on the scanner above, and the scanner
+advertises the `OsIndicationsSupported` bit for it. `RpiRedfishSyncDxe` reports
+the running version to the BMC today; it does not pull or apply.
 
 ## Versions
 
@@ -173,7 +186,10 @@ Two different things, deliberately kept in step by the recipe:
 - `RPI5_FMP_VERSION` → `PcdRpi5FirmwareVersion` (what `FmpDeviceGetVersion`
   reports, and what ESRT publishes) **and** the capsule's `--fw-version`, so a
   capsule always declares the version of the image inside it. Derived from
-  `PV`'s leading numeric part.
+  the build's start time as a Unix epoch (`date -d @<n>` decodes it) — PV's
+  leading numeric part proved useless for telling builds apart, since every
+  build of a release month shared one number. See the derivation comment in
+  the recipe for the sstate semantics.
 
 The integer should only ever increase, but nothing about the *running* version
 enforces that: `FmpDxe` compares an incoming image against the lowest supported

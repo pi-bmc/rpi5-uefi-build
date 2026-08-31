@@ -7,8 +7,11 @@
   \EFI\UpdateCapsule\ drop box (UEFI 2.10 8.5.5) that nanokvm-app stages
   capsules into. Booting the volume -- through the BMC's boot override,
   the firmware's boot menu, or plain removable-media fallback -- IS the
-  update: no scanner lives in the firmware, no boot that does not choose
-  this volume pays anything for the feature.
+  update. The firmware also carries RpiCapsuleOnDiskLib (linked into
+  BdsDxe), which applies staged capsules at ReadyToBoot on ordinary
+  boots; this application remains the fallback for boots where the
+  scanner cannot reach the firmware volume, and for firmware built
+  before the scanner existed.
 
   The application context is also the safest this platform has for the
   in-place FD rewrite: ReadyToBoot has fired before any boot option

@@ -851,7 +851,16 @@
   MdeModulePkg/Universal/DisplayEngineDxe/DisplayEngineDxe.inf
   MdeModulePkg/Universal/SetupBrowserDxe/SetupBrowserDxe.inf
   MdeModulePkg/Universal/DriverHealthManagerDxe/DriverHealthManagerDxe.inf
-  MdeModulePkg/Universal/BdsDxe/BdsDxe.inf
+  MdeModulePkg/Universal/BdsDxe/BdsDxe.inf {
+    <LibraryClasses>
+      #
+      # Boot-time \EFI\UpdateCapsule scanner (capsule-on-disk without the
+      # PEI machinery this platform lacks): applies capsules the BMC
+      # staged on its mass-storage LUN, or an OS dropped on the boot ESP,
+      # at ReadyToBoot. See the library's README.
+      #
+      NULL|Silicon/RaspberryPi/Library/RpiCapsuleOnDiskLib/RpiCapsuleOnDiskLib.inf
+  }
   Platform/RaspberryPi/Drivers/LogoDxe/LogoDxe.inf
   MdeModulePkg/Application/UiApp/UiApp.inf {
     <LibraryClasses>
