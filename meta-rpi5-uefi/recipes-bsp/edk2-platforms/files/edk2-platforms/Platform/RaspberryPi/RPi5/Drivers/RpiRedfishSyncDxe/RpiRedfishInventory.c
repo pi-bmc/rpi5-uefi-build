@@ -1245,3 +1245,205 @@ RpiRedfishBuildDrivePost (
   *Json = Body;
   return EFI_SUCCESS;
 }
+
+/**
+  Does this device path pass through USB?
+
+  @param[in] DevicePath  Device path to inspect; NULL is treated as "yes" so
+                         an unknown path is excluded rather than mistaken for
+                         the onboard NIC.
+
+  @retval TRUE   A USB node is present (or the path is unknowable).
+  @retval FALSE  No USB node.
+**/
+STATIC
+BOOLEAN
+NicPathHasUsbNode (
+  IN EFI_DEVICE_PATH_PROTOCOL  *DevicePath
+  )
+{
+  EFI_DEVICE_PATH_PROTOCOL  *Node;
+
+  if (DevicePath == NULL) {
+    return TRUE;
+  }
+
+  for (Node = DevicePath; !IsDevicePathEnd (Node); Node = NextDevicePathNode (Node)) {
+    if ((DevicePathType (Node) == MESSAGING_DEVICE_PATH) &&
+        (DevicePathSubType (Node) == MSG_USB_DP))
+    {
+      return TRUE;
+    }
+  }
+
+  return FALSE;
+}
+
+EFI_STATUS
+RpiRedfishCollectNics (
+  OUT RPI_REDFISH_NIC  *Nics,
+  IN  UINTN            Max,
+  OUT UINTN            *Count
+  )
+{
+  EFI_STATUS                   Status;
+  EFI_HANDLE                   *Handles;
+  UINTN                        HandleCount;
+  UINTN                        Index;
+  EFI_SIMPLE_NETWORK_PROTOCOL  *Snp;
+  EFI_DEVICE_PATH_PROTOCOL     *DevicePath;
+  RPI_REDFISH_NIC              *Nic;
+
+  if ((Nics == NULL) || (Count == NULL)) {
+    return EFI_INVALID_PARAMETER;
+  }
+
+  *Count = 0;
+
+  Handles     = NULL;
+  HandleCount = 0;
+  Status      = gBS->LocateHandleBuffer (
+                       ByProtocol,
+                       &gEfiSimpleNetworkProtocolGuid,
+                       NULL,
+                       &HandleCount,
+                       &Handles
+                       );
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+
+  for (Index = 0; (Index < HandleCount) && (*Count < Max); Index++) {
+    Status = gBS->HandleProtocol (
+                    Handles[Index],
+                    &gEfiSimpleNetworkProtocolGuid,
+                    (VOID **)&Snp
+                    );
+    if (EFI_ERROR (Status) || (Snp->Mode == NULL)) {
+      continue;
+    }
+
+    //
+    // Ethernet only (IfType 1, RFC 1700), with the address size that
+    // implies. SNP publishes nothing else on this platform, but say so
+    // rather than assume so.
+    //
+    if ((Snp->Mode->IfType != 1) || (Snp->Mode->HwAddressSize != 6)) {
+      continue;
+    }
+
+    Status = gBS->HandleProtocol (
+                    Handles[Index],
+                    &gEfiDevicePathProtocolGuid,
+                    (VOID **)&DevicePath
+                    );
+    if (EFI_ERROR (Status) || NicPathHasUsbNode (DevicePath)) {
+      continue;
+    }
+
+    Nic = &Nics[*Count];
+    ZeroMem (Nic, sizeof (*Nic));
+    CopyMem (Nic->Mac, Snp->Mode->CurrentAddress.Addr, sizeof (Nic->Mac));
+    CopyMem (Nic->PermanentMac, Snp->Mode->PermanentAddress.Addr, sizeof (Nic->PermanentMac));
+    Nic->MediaPresentSupported = Snp->Mode->MediaPresentSupported;
+    Nic->MediaPresent          = Snp->Mode->MediaPresent;
+    (*Count)++;
+  }
+
+  FreePool (Handles);
+  return EFI_SUCCESS;
+}
+
+EFI_STATUS
+RpiRedfishBuildNicPost (
+  IN  RPI_REDFISH_NIC  *Nic,
+  OUT CHAR8            **Json
+  )
+{
+  CHAR8        *Body;
+  CHAR8        Id[32];
+  CHAR8        Mac[24];
+  CHAR8        PermanentMac[24];
+  CONST UINT8  *KeyMac;
+  BOOLEAN      PermanentKnown;
+  UINTN        Index;
+
+  if ((Nic == NULL) || (Json == NULL)) {
+    return EFI_INVALID_PARAMETER;
+  }
+
+  Body = AllocateZeroPool (RPI_REDFISH_JSON_MAX);
+  if (Body == NULL) {
+    return EFI_OUT_OF_RESOURCES;
+  }
+
+  //
+  // The Id doubles as the member's identity on the BMC, so it must be stable
+  // across boots regardless of enumeration order: derive it from the
+  // permanent MAC, falling back to the current one when the permanent
+  // address is unpopulated (all zero).
+  //
+  PermanentKnown = FALSE;
+  for (Index = 0; Index < sizeof (Nic->PermanentMac); Index++) {
+    if (Nic->PermanentMac[Index] != 0) {
+      PermanentKnown = TRUE;
+      break;
+    }
+  }
+
+  KeyMac = PermanentKnown ? Nic->PermanentMac : Nic->Mac;
+  AsciiSPrint (
+    Id,
+    sizeof (Id),
+    "NIC-%02X%02X%02X%02X%02X%02X",
+    KeyMac[0], KeyMac[1], KeyMac[2], KeyMac[3], KeyMac[4], KeyMac[5]
+    );
+
+  AsciiSPrint (
+    Mac,
+    sizeof (Mac),
+    "%02X:%02X:%02X:%02X:%02X:%02X",
+    Nic->Mac[0], Nic->Mac[1], Nic->Mac[2], Nic->Mac[3], Nic->Mac[4], Nic->Mac[5]
+    );
+
+  AsciiSPrint (
+    Body,
+    RPI_REDFISH_JSON_MAX,
+    "{\"@odata.type\":\"#EthernetInterface.v1_8_0.EthernetInterface\""
+    ",\"Status\":{\"State\":\"Enabled\",\"Health\":\"OK\"}"
+    ",\"InterfaceEnabled\":true"
+    );
+
+  AppendJsonString (Body, RPI_REDFISH_JSON_MAX, "Id", Id);
+  AppendJsonString (Body, RPI_REDFISH_JSON_MAX, "Name", "Ethernet Interface");
+  AppendJsonString (Body, RPI_REDFISH_JSON_MAX, "MACAddress", Mac);
+
+  if (PermanentKnown) {
+    AsciiSPrint (
+      PermanentMac,
+      sizeof (PermanentMac),
+      "%02X:%02X:%02X:%02X:%02X:%02X",
+      Nic->PermanentMac[0], Nic->PermanentMac[1], Nic->PermanentMac[2],
+      Nic->PermanentMac[3], Nic->PermanentMac[4], Nic->PermanentMac[5]
+      );
+    AppendJsonString (Body, RPI_REDFISH_JSON_MAX, "PermanentMACAddress", PermanentMac);
+  }
+
+  //
+  // LinkStatus only when the SNP can actually see media; a NIC that cannot
+  // report it gets no claim rather than an invented one.
+  //
+  if (Nic->MediaPresentSupported) {
+    AppendJsonString (
+      Body,
+      RPI_REDFISH_JSON_MAX,
+      "LinkStatus",
+      Nic->MediaPresent ? "LinkUp" : "LinkDown"
+      );
+  }
+
+  AsciiStrCatS (Body, RPI_REDFISH_JSON_MAX, "}");
+
+  *Json = Body;
+  return EFI_SUCCESS;
+}

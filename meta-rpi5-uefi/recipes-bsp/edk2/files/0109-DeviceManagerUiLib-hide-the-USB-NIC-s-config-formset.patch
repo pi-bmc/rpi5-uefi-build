@@ -1,0 +1,110 @@
+From: appkins <nbatkins@gmail.com>
+Date: Sat, 30 Aug 2026 12:00:00 -0500
+Subject: [PATCH] DeviceManagerUiLib: hide the USB NIC's config formsets
+
+CreateDeviceManagerForm() lists every platform-setup formset: NIC config
+formsets (IP4/IP6/VLAN/HTTP-Boot) group under "Network Device List", keyed
+by a MAC node in the owning handle's device path. The BMC's USB CDC
+network gadget - the Redfish host interface - qualifies like any NIC, so
+Setup offers IP and VLAN configuration for a fixed point-to-point
+management link whose addressing comes from the SMBIOS type 42 record. An
+edit there breaks Redfish discovery, and just browsing the forms pokes
+the gadget's network stack, which patch 0102 exists to keep quiet.
+
+Skip formsets whose owning handle's device path carries both a USB node
+and a MAC node - the same test 0103 uses to keep USB NICs out of
+boot-option enumeration. The skip must be total, not a failed network
+test: a formset that fails IsNeedAddNetworkMenu() falls through to the
+top level of Device Manager, which would surface the gadget's forms in a
+worse place. Platform NICs (RP1 GEM) have no USB node and keep their
+Network Device List entry; USB mass storage has no MAC node and keeps its
+top-level entries.
+
+Upstream-Status: Inappropriate [platform policy]
+Signed-off-by: appkins <nbatkins@gmail.com>
+---
+--- a/MdeModulePkg/Library/DeviceManagerUiLib/DeviceManager.c
++++ b/MdeModulePkg/Library/DeviceManagerUiLib/DeviceManager.c
+@@ -344,6 +344,64 @@
+ }
+ 
+ /**
++  Check whether the formsets on an HII handle belong to a NIC carried over
++  USB.
++
++  A USB NIC's device path contains both a USB node and a MAC node; platform
++  NICs (RP1 GEM) have no USB node and other USB devices publish no MAC node.
++  On this platform the only USB NIC is the BMC's CDC network gadget - the
++  Redfish host interface, a fixed point-to-point management link configured
++  from the SMBIOS type 42 record. Its IPv4/IPv6/VLAN/HTTP-Boot formsets must
++  stay out of Setup: an edit there would break Redfish discovery, and
++  browsing the forms pokes the gadget's network stack (the same policy that
++  keeps USB NICs out of BDS boot-option enumeration).
++
++  @param Handle  The HII handle to check.
++
++  @retval TRUE   The handle's formsets belong to a NIC carried over USB.
++  @retval FALSE  They do not (or the handle has no device path).
++
++**/
++STATIC
++BOOLEAN
++DmIsUsbNicHiiHandle (
++  IN EFI_HII_HANDLE  Handle
++  )
++{
++  EFI_STATUS                Status;
++  EFI_HANDLE                DriverHandle;
++  EFI_DEVICE_PATH_PROTOCOL  *Node;
++  BOOLEAN                   HasMac;
++  BOOLEAN                   OverUsb;
++
++  Status = gHiiDatabase->GetPackageListHandle (gHiiDatabase, Handle, &DriverHandle);
++  if (EFI_ERROR (Status)) {
++    return FALSE;
++  }
++
++  Status = gBS->HandleProtocol (DriverHandle, &gEfiDevicePathProtocolGuid, (VOID **)&Node);
++  if (EFI_ERROR (Status)) {
++    return FALSE;
++  }
++
++  HasMac  = FALSE;
++  OverUsb = FALSE;
++  for ( ; !IsDevicePathEnd (Node); Node = NextDevicePathNode (Node)) {
++    if (DevicePathType (Node) != MESSAGING_DEVICE_PATH) {
++      continue;
++    }
++
++    if (DevicePathSubType (Node) == MSG_USB_DP) {
++      OverUsb = TRUE;
++    } else if (DevicePathSubType (Node) == MSG_MAC_ADDR_DP) {
++      HasMac = TRUE;
++    }
++  }
++
++  return (BOOLEAN)(HasMac && OverUsb);
++}
++
++/**
+   Check to see if the device path is for the network device.
+ 
+   @param Handle          The HII handle which include the mac address device path.
+@@ -623,6 +681,17 @@
+           continue;
+         }
+ 
++        //
++        // A NIC carried over USB is the BMC's CDC network gadget - the
++        // Redfish host interface. Skip its config formsets outright: they
++        // must neither join the Network Device List nor land on the top
++        // level, which is where a formset that merely failed
++        // IsNeedAddNetworkMenu() would fall through to below.
++        //
++        if (DmIsUsbNicHiiHandle (HiiHandles[Index])) {
++          break;
++        }
++
+         String = HiiGetString (HiiHandles[Index], ((EFI_IFR_FORM_SET *)Ptr)->FormSetTitle, NULL);
+         if (String == NULL) {
+           String = HiiGetString (HiiHandle, STRING_TOKEN (STR_MISSING_STRING), NULL);

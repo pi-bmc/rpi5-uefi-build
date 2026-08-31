@@ -18,9 +18,10 @@
     2. PATCH /redfish/v1/Systems/1  -- reports this host's identity (SMBIOS type
                                        0/1) and boot progress to the BMC
                                        (successor of SmbiosEepromMirrorDxe).
-    2b-2d. POST Processors /        -- inventory the BMC cannot see in band
-           Memory / Drives             (successor of BlkInfoMirrorDxe).
-    2e. PATCH+GET Chassis/1/Thermal -- SoC temperature + fan state up, BMC fan
+    2b-2e. POST Processors /        -- inventory the BMC cannot see in band
+           Memory / Drives /           (successor of BlkInfoMirrorDxe; the NICs
+           EthernetInterfaces          succeed the U-Boot env "ethaddr").
+    2g. PATCH+GET Chassis/1/Thermal -- SoC temperature + fan state up, BMC fan
                                        steering down (RPI_FAN_PROTOCOL). Once,
                                        as part of this exchange: see below.
     3. GET  /redfish/v1/Systems/1   -- reads back the BMC's requested one-time
@@ -999,6 +1000,55 @@ ReportDrives (
 }
 
 /**
+  Report the host's Ethernet interfaces to the BMC's EthernetInterfaces
+  collection.
+
+  Same shape as ReportMemory -- one POST per NIC, keyed on a MAC-derived Id
+  so a later boot's re-report updates the member in place. Sourced from the
+  SNP handles BDS has already connected; the RHI's own USB NIC is excluded
+  at collection time (see RpiRedfishCollectNics). This is the Redfish
+  successor of the "ethaddr" the U-Boot env used to carry for the BMC.
+
+  @param[in] Service  The Redfish service to report to.
+**/
+STATIC
+VOID
+ReportEthernetInterfaces (
+  IN REDFISH_SERVICE  Service
+  )
+{
+  RPI_REDFISH_NIC   Nics[RPI_REDFISH_NIC_MAX];
+  REDFISH_RESPONSE  Response;
+  EFI_STATUS        Status;
+  UINTN             Count;
+  UINTN             Index;
+  CHAR8             *Body;
+
+  Status = RpiRedfishCollectNics (Nics, RPI_REDFISH_NIC_MAX, &Count);
+  if (EFI_ERROR (Status) || (Count == 0)) {
+    DEBUG ((DEBUG_ERROR, "RpiRedfishSync: no NICs to report - %r\n", Status));
+    return;
+  }
+
+  for (Index = 0; Index < Count; Index++) {
+    Body   = NULL;
+    Status = RpiRedfishBuildNicPost (&Nics[Index], &Body);
+    if (EFI_ERROR (Status) || (Body == NULL)) {
+      continue;
+    }
+
+    ZeroMem (&Response, sizeof (Response));
+    Status = RedfishHttpPostResource (Service, RPI_REDFISH_ETHERNET_URI, Body, &Response);
+    LogResult ("POST", RPI_REDFISH_ETHERNET_URI, Status, &Response);
+    RedfishHttpFreeResponse (&Response);
+
+    FreePool (Body);
+  }
+
+  DEBUG ((DEBUG_ERROR, "RpiRedfishSync: reported %d NIC(s)\n", Count));
+}
+
+/**
   Read back the BMC's fan steering from the Thermal resource and apply it.
 
   Wire contract: the BMC stages Oem.PiBmc.FanOverrideLevel (integer,
@@ -1172,12 +1222,17 @@ RpiRedfishSync (
   ReportDrives (Service);
 
   //
-  // 2e. Report the firmware inventory.
+  // 2e. Report the Ethernet interfaces.
+  //
+  ReportEthernetInterfaces (Service);
+
+  //
+  // 2f. Report the firmware inventory.
   //
   ReportFirmwareInventory (Service);
 
   //
-  // 2f. Apply any fan steering the BMC already staged. The thermal reading
+  // 2g. Apply any fan steering the BMC already staged. The thermal reading
   //    itself is no longer PATCHed from here: OP-TEE pushes SoC temperature
   //    and fan state to the BMC over I2C (the bmc_sensor record) and the BMC
   //    renders Chassis/1/Thermal from that. Before the boot-override step on

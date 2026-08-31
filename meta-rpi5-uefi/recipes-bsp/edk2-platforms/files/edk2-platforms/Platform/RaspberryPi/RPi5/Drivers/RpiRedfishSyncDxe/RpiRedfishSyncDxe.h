@@ -17,6 +17,7 @@
 #include <Library/BaseLib.h>
 #include <Library/BaseMemoryLib.h>
 #include <Library/DebugLib.h>
+#include <Library/DevicePathLib.h>
 #include <Library/MemoryAllocationLib.h>
 #include <Library/PrintLib.h>
 #include <Library/RedfishHttpLib.h>
@@ -29,6 +30,7 @@
 #include <Protocol/DiskInfo.h>
 #include <Protocol/EdkIIRedfishConfigHandler.h>
 #include <Protocol/NvmExpressPassthru.h>
+#include <Protocol/SimpleNetwork.h>
 #include <Protocol/Smbios.h>
 
 #include <RedfishServiceData.h>
@@ -44,6 +46,7 @@
 #define RPI_REDFISH_MEMORY_URI        L"/redfish/v1/Systems/1/Memory"
 #define RPI_REDFISH_PROCESSORS_URI    L"/redfish/v1/Systems/1/Processors"
 #define RPI_REDFISH_DRIVES_URI        L"/redfish/v1/Systems/1/Storage/1/Drives"
+#define RPI_REDFISH_ETHERNET_URI      L"/redfish/v1/Systems/1/EthernetInterfaces"
 #define RPI_REDFISH_THERMAL_URI       L"/redfish/v1/Chassis/1/Thermal"
 
 //
@@ -373,6 +376,67 @@ EFI_STATUS
 RpiRedfishBuildFirmwareInventoryPatch (
   IN  RPI_REDFISH_FIRMWARE_IMAGE  *Image,
   OUT CHAR8                       **Json
+  );
+
+//
+// Host NICs reported. The onboard RP1 GEM RJ45 is the expected population;
+// the bound leaves headroom for USB dongles a user may have attached.
+//
+#define RPI_REDFISH_NIC_MAX  4
+
+//
+// One host Ethernet interface, reduced to the EthernetInterface properties
+// the BMC stores. The BMC's ethernet_interfaces.go serves these; the member
+// Id is derived from the MAC so a later boot's re-report updates the same
+// member. The RHI's own USB NIC is excluded at collection time -- it is a
+// DSP0270 management link, not host inventory (same stance as boot options).
+//
+typedef struct {
+  UINT8      Mac[6];                   // SnpMode CurrentAddress
+  UINT8      PermanentMac[6];          // SnpMode PermanentAddress; may be zero
+  BOOLEAN    MediaPresentSupported;    // LinkStatus is only honest when TRUE
+  BOOLEAN    MediaPresent;
+} RPI_REDFISH_NIC;
+
+/**
+  Collect the host's Ethernet interfaces from the SNP handles BDS has
+  connected.
+
+  Only reports what is already connected, exactly like drive collection:
+  this runs at TPL_CALLBACK, where ConnectController is not permitted. The
+  exchange runs during BdsWait, after ConnectAll, so the onboard NIC's SNP
+  is published by then. Anything reached through USB is skipped -- on this
+  board the only USB NIC is the BMC's own CDC-NCM host interface, and its
+  gadget MAC must never leak into the host's NIC inventory where MAC-keyed
+  provisioning tooling would trip over it.
+
+  @param[out] Nics   Receives the interfaces.
+  @param[in]  Max    Capacity of Nics.
+  @param[out] Count  Receives the number written.
+
+  @retval EFI_SUCCESS  Collection ran; *Count may still be zero.
+**/
+EFI_STATUS
+RpiRedfishCollectNics (
+  OUT RPI_REDFISH_NIC  *Nics,
+  IN  UINTN            Max,
+  OUT UINTN            *Count
+  );
+
+/**
+  Build the EthernetInterface POST body for one NIC.
+
+  @param[in]  Nic   Interface to describe.
+  @param[out] Json  Receives an allocated ASCII JSON body. Caller frees with
+                    FreePool().
+
+  @retval EFI_SUCCESS           Body was built.
+  @retval EFI_OUT_OF_RESOURCES  Allocation failed.
+**/
+EFI_STATUS
+RpiRedfishBuildNicPost (
+  IN  RPI_REDFISH_NIC  *Nic,
+  OUT CHAR8            **Json
   );
 
 #endif // RPI_REDFISH_SYNC_DXE_H_

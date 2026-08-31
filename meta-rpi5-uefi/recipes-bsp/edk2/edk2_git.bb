@@ -28,10 +28,13 @@ PV = "202608"
 # kills provisioning outright), 0103 (keep USB NICs out of BDS boot-option
 # enumeration), 0104 (RELEASE-build JsonLib fix), 0105 (SnpDxe on a USB
 # ancestor), 0106 (ConnectAll tracing), 0107 (one Ethernet frame per NTB
-# datagram) and 0108 (NetworkCommon refuses to bind until the platform
+# datagram), 0108 (NetworkCommon refuses to bind until the platform
 # installs the USB NIC gate protocol -- the platform half that opens the gate
 # after boot option enumeration is edk2-platforms patch 0034; the GUID
-# literal is duplicated across the two trees).
+# literal is duplicated across the two trees) and 0109 (Device Manager hides
+# the USB NIC's IP4/IP6/VLAN/HTTP-Boot formsets -- 0103's USB+MAC test again;
+# the skip is total because a formset that merely fails the network test
+# falls through to the Device Manager top level).
 #
 # Patches to the OTHER trees live with those trees: the RPi5 port and its
 # series in recipes-bsp/edk2-platforms, the HII-to-Redfish boot fix in
@@ -47,6 +50,7 @@ SRC_URI = "gitsm://github.com/tianocore/edk2.git;protocol=https;branch=master;de
            file://0106-UefiBootManagerLib-trace-each-handle-ConnectAll-visi.patch \
            file://0107-UsbCdcNcm-deliver-one-Ethernet-frame-per-NTB-datagra.patch \
            file://0108-NetworkCommon-hold-off-binding-until-the-platform-op.patch \
+           file://0109-DeviceManagerUiLib-hide-the-USB-NIC-s-config-formset.patch \
            "
 
 # edk2-stable202608, the August 2026 quarterly release tag. A release tag

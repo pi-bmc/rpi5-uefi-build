@@ -53,6 +53,7 @@
   gEfiBlockIoProtocolGuid                   ## CONSUMES
   gEfiDevicePathProtocolGuid                ## CONSUMES
   gEfiNvmExpressPassThruProtocolGuid        ## CONSUMES
+  gEfiSimpleNetworkProtocolGuid             ## CONSUMES
   gEfiBootManagerPolicyProtocolGuid         ## SOMETIMES_CONSUMES
   gRpiFanProtocolGuid                       ## SOMETIMES_CONSUMES
 
