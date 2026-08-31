@@ -1,0 +1,21 @@
+# CI-only kas overlay: kas build .config.yaml:hack/kas-ci.yaml
+#
+# Everything here trades local-developer convenience for hosted-runner
+# constraints (disk above all); nothing changes the built artifacts.
+header:
+  version: 14
+
+local_conf_header:
+  ci: |
+    # Hosted runners have ~60 GB usable; a full tmp/work tree is ~21 GB.
+    # rm_work deletes each recipe's workdir once its tasks (and sstate
+    # packaging) finish -- sstate and deploy output are unaffected.
+    INHERIT += "rm_work"
+    # Shallow git fetches with regenerable shallow tarballs in DL_DIR:
+    # linux-stable alone is a multi-GB clone that the DTB recipe checks
+    # out at pinned tags, where depth-1 history is enough. Fetchers that
+    # cannot shallow (gitsm) silently fall back to full clones. If a
+    # fetch ever fails oddly in CI, flip these off first.
+    BB_GIT_SHALLOW = "1"
+    BB_GENERATE_SHALLOW_TARBALLS = "1"
+    BB_GIT_SHALLOW_DEPTH = "1"

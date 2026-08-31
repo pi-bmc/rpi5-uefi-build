@@ -1,0 +1,63 @@
+From: appkins <nbatkins@gmail.com>
+Date: Mon, 31 Aug 2026 12:00:00 -0500
+Subject: [PATCH] BiosDxe: consume pending settings without a history record
+
+HandleResource() only consumes /Systems/1/Bios/Settings when
+RedfishGetConfigLanguage() finds a ConfigLangMap record persisted by a
+PREVIOUS boot. Without one it declares "system reset detected", skips the
+consume, and says so only at DEBUG_MANAGEABILITY - invisible in this
+platform's RELEASE build. The staged attributes on the BMC are neither
+applied nor deleted, and the operator gets no signal at all.
+
+Upstream's rationale is that a missing record means a reset-to-defaults,
+after which the BMC's staged values might be stale. Neither half holds
+here: the record can be missing for benign reasons (first boot with the
+client feature layer, a replaced SD card, any loss of the RedfishClient
+variables), this board has no defaulting command that wipes the variable
+store behind the BMC's back, and the staged set is always current
+operator intent. The cost of the skip is the exact reported failure -
+"the Bios settings are staged in nanokvm-app but never applied" - while
+the cost of consuming is zero: the identify step immediately above has
+already rebuilt the in-memory ConfigLangMap that the consume path needs.
+
+Consume unconditionally; keep the detection only as a breadcrumb.
+
+Upstream-Status: Inappropriate [platform policy]
+Signed-off-by: appkins <nbatkins@gmail.com>
+---
+--- a/RedfishClientPkg/Features/Bios/v1_1_0/Common/BiosCommon.c
++++ b/RedfishClientPkg/Features/Bios/v1_1_0/Common/BiosCommon.c
+@@ -971,17 +971,24 @@
+   }
+ 
+   //
+-  // Consume first.
++  // Consume first. Upstream skips the pending settings when no history
++  // record exists (SystemResetDetected), treating such a boot as a
++  // reset-to-defaults whose staged values may be stale. On this platform
++  // the staged set is always live operator intent held by the BMC, no
++  // defaulting command wipes the variable store behind it, and the skip is
++  // invisible in a RELEASE build - a boot without history would silently
++  // discard the operator's staged settings. Consume unconditionally: the
++  // identify step above already populated the in-memory ConfigLangMap,
++  // which is everything the consume path needs.
+   //
+   if (SystemResetDetected) {
+-    DEBUG ((DEBUG_MANAGEABILITY, "%a: System has been reset to the default setting. Ignore the pending settings and don't consume it because they may be the stale values.\n", __func__));
+-    DEBUG ((DEBUG_MANAGEABILITY, "%a: Skip the consume porcess.\n", __func__));
+-  } else {
+-    DEBUG ((DEBUG_MANAGEABILITY, "%a: Consume for %s\n", __func__, Uri));
+-    Status = EdkIIRedfishResourceConfigConsume (&SchemaInfo, Uri, NULL);
+-    if (EFI_ERROR (Status)) {
+-      DEBUG ((DEBUG_ERROR, "%a: Failed to consume resource for: %s: %r\n", __func__, Uri, Status));
+-    }
++    DEBUG ((DEBUG_MANAGEABILITY, "%a: no history record (first boot or reset); consuming pending settings anyway\n", __func__));
++  }
++
++  DEBUG ((DEBUG_MANAGEABILITY, "%a: Consume for %s\n", __func__, Uri));
++  Status = EdkIIRedfishResourceConfigConsume (&SchemaInfo, Uri, NULL);
++  if (EFI_ERROR (Status)) {
++    DEBUG ((DEBUG_ERROR, "%a: Failed to consume resource for: %s: %r\n", __func__, Uri, Status));
+   }
+ 
+   //

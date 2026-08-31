@@ -1179,5 +1179,25 @@
       gFmpDevicePkgTokenSpaceGuid.PcdFmpDeviceImageIdName|L"Raspberry Pi 5 UEFI Firmware"
       gFmpDevicePkgTokenSpaceGuid.PcdFmpDeviceBuildTimeLowestSupportedVersion|0
       gFmpDevicePkgTokenSpaceGuid.PcdFmpDeviceProgressWatchdogTimeInSeconds|0
+      #
+      # A GUID nothing ever signals, so FmpDxe never locks the device.
+      #
+      # Left unset, FmpDxe locks at EndOfDxe -- and it latches
+      # FmpDeviceLocked even though Rpi5FmpDeviceLib's FmpDeviceLock()
+      # honestly returns EFI_UNSUPPORTED. From then on SetTheImage()
+      # refuses with "Device is already locked", which the capsule path
+      # SWALLOWS: DxeCapsuleLibFmp's ProcessFmpCapsuleImage returns
+      # success for any processed capsule and only records the SetImage
+      # status. Every consumer on this platform applies after EndOfDxe by
+      # design (Rpi5CapsuleApp boots as an option; RpiCapsuleOnDiskLib
+      # scans at ReadyToBoot), so the default lock made every apply a
+      # silent no-op -- UpdateCapsule() succeeded, the FD never changed.
+      #
+      # Not a lost protection: the FD is a file on a FAT partition any OS
+      # can write, so the lock never was a boundary here (see
+      # FmpDeviceLock's comment). What gates updates is FmpDxe's PKCS#7
+      # authentication against PcdFmpDevicePkcs7CertBufferXdr.
+      #
+      gFmpDevicePkgTokenSpaceGuid.PcdFmpDeviceLockEventGuid|{GUID("83921751-BDB1-4162-99D0-DCDF975854AE")}
   }
   MdeModulePkg/Universal/EsrtFmpDxe/EsrtFmpDxe.inf

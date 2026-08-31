@@ -1,0 +1,200 @@
+# Firmware build with the whole Yocto state cached in this repo's OCI
+# storage (ghcr.io/<repo>/yocto-cache): the kas layer checkouts, DL_DIR,
+# and SSTATE_DIR each live as an ORAS artifact of chunked zstd tarballs
+# (chunks stay under ghcr's per-layer limit). GitHub's actions/cache is
+# the wrong tool here -- 10 GB per repo with LRU eviction, while a warm
+# sstate for this build alone is comfortably past that.
+#
+# Runner choice (deliberate): ubuntu-24.04-arm.
+#   * This repo is public, so the arm64 hosted runner (4 vCPU Cobalt 100)
+#     is free, and its cores compile faster than the standard x64 runner's.
+#   * Yocto cross-compiles, so host ISA is NOT required to match the
+#     cortexa76 target -- but matching it runs the few target-ISA steps
+#     (pseudo/qemu-usermode during image assembly) natively, and the
+#     arm64 image ships less preinstalled bloat, i.e. more free disk,
+#     which is this build's binding constraint.
+#   * sstate for -native/-cross recipes is HOST-arch-keyed: pick one
+#     arch and stay on it, or every switch is a cold build. The sstate
+#     tag embeds the runner arch so an experiment on the other arch can
+#     never poison this cache.
+#   * If the repo ever goes private, arm64 hosted runners stop being in
+#     the included free minutes: switch runs-on to ubuntu-24.04 (and
+#     accept one cold build as the sstate re-keys to amd64).
+#
+# Capsule signing in CI: none of the managed key material is here (see
+# the FMP README). The recipe auto-generates a throwaway keypair per
+# run, so CI proves the build and signing *machinery*; release capsules
+# are signed offline with the managed key.
+
+name: Build firmware
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      fresh-cache:
+        description: Ignore the OCI build cache and rebuild from scratch
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CACHE_REPO: ghcr.io/${{ github.repository }}/yocto-cache
+  YOCTO_DIR: /opt/yocto
+  DEPLOY_DIR: build/tmp/deploy/images/raspberrypi5-uefi
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 360
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reclaim runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/.ghcup /usr/local/share/powershell \
+                      /usr/local/share/boost /opt/hostedtoolcache/CodeQL \
+                      2>/dev/null || true
+          sudo docker image prune -af >/dev/null 2>&1 || true
+          df -h /
+
+      - name: Install kas and bitbake host dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gawk wget git diffstat unzip texinfo build-essential chrpath \
+            socat cpio python3-pip python3-pexpect python3-git \
+            python3-jinja2 python3-subunit xz-utils debianutils \
+            iputils-ping zstd liblz4-tool file locales
+          sudo locale-gen en_US.UTF-8
+          pipx install kas
+          kas --version
+          sudo mkdir -p "$YOCTO_DIR"
+          sudo chown "$USER" "$YOCTO_DIR"
+
+      - uses: oras-project/setup-oras@v1
+
+      - name: Log in to ghcr.io
+        run: |
+          echo '${{ secrets.GITHUB_TOKEN }}' \
+            | oras login ghcr.io -u '${{ github.actor }}' --password-stdin
+
+      - name: Restore build caches from OCI storage
+        if: ${{ inputs.fresh-cache != true }}
+        run: |
+          set -o pipefail
+          restore() { # <tag> <extract-into>
+            local tmp
+            tmp=$(mktemp -d)
+            if oras pull "$CACHE_REPO:$1" -o "$tmp" 2>/dev/null; then
+              cat "$tmp"/*.part.* | zstd -d -T0 | tar -xf - -C "$2"
+              echo "cache $1: restored" | tee -a "$GITHUB_STEP_SUMMARY"
+            else
+              echo "cache $1: miss (cold build)" | tee -a "$GITHUB_STEP_SUMMARY"
+            fi
+            rm -rf "$tmp"
+          }
+          # Layer checkouts land in the workspace (kas still fetches the
+          # branch tip on top -- the cache only saves the full clone).
+          restore layers "$PWD"
+          restore downloads "$YOCTO_DIR"
+          restore "sstate-${RUNNER_ARCH,,}" "$YOCTO_DIR"
+          df -h /
+
+      - name: Record pre-build cache size
+        # Fingerprint for the push step's "did this run add anything"
+        # check. poky may not exist yet on a cold run; that is fine --
+        # its later appearance changes the sum.
+        run: |
+          mkdir -p "$YOCTO_DIR/downloads" "$YOCTO_DIR/sstate-cache"
+          echo "PRE_CACHE_BYTES=$(du -sb "$YOCTO_DIR/downloads" "$YOCTO_DIR/sstate-cache" poky 2>/dev/null | awk '{s+=$1} END {print s}')" >> "$GITHUB_ENV"
+
+      - name: Build (kas)
+        id: build
+        # Bounded below the job's 360m so that even a timed-out cold
+        # build leaves time to push the sstate it did produce -- sstate
+        # is written per-task on completion, so a killed build's cache
+        # is valid, just incomplete.
+        timeout-minutes: 280
+        run: kas build .config.yaml:hack/kas-ci.yaml
+
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpi5-uefi-${{ github.sha }}
+          retention-days: 14
+          if-no-files-found: error
+          path: |
+            ${{ env.DEPLOY_DIR }}/RPI_EFI.fd
+            ${{ env.DEPLOY_DIR }}/RPI_EFI.report.txt
+            ${{ env.DEPLOY_DIR }}/RPi5Firmware.cap
+            ${{ env.DEPLOY_DIR }}/Rpi5CapsuleApp.efi
+            ${{ env.DEPLOY_DIR }}/rpi5-uefi-sd.img.xz
+            ${{ env.DEPLOY_DIR }}/rpi5-capsule.img.gz
+
+      - name: Upload build logs
+        # The push step deletes build/tmp even after a failure, so the
+        # evidence is rescued first. bitbake already echoes failing task
+        # logs to the console; this keeps the full set.
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-${{ github.sha }}
+          retention-days: 7
+          if-no-files-found: ignore
+          path: build/tmp/log/
+
+      - name: Push refreshed caches to OCI storage
+        # Runs on FAILURE too (not on cancellation): a build that died
+        # partway still minted sstate for every task that completed, and
+        # pushing it makes the retry warm instead of cold. Only trusted
+        # refs may write: pull requests get read-only reuse, so a PR can
+        # never poison what main builds from (workflow_dispatch is
+        # maintainer-triggered, so it counts). Skipped when the build
+        # step never ran, or when it changed nothing worth re-pushing.
+        if: ${{ !cancelled() && github.event_name != 'pull_request' && steps.build.outcome != 'skipped' }}
+        run: |
+          set -o pipefail
+          POST=$(du -sb "$YOCTO_DIR/downloads" "$YOCTO_DIR/sstate-cache" poky 2>/dev/null | awk '{s+=$1} END {print s}')
+          if [ "$POST" = "$PRE_CACHE_BYTES" ]; then
+            echo "cache unchanged since restore; skipping push" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          # tmp/work is not cache -- drop it so packing has disk headroom.
+          rm -rf build/tmp
+          push() { # <tag> <parent-dir> <dir>
+            local staging
+            staging=$(mktemp -d)
+            tar -cf - -C "$2" "$3" | zstd -T0 -3 | split -b 6G - "$staging/$3.tzst.part."
+            ( cd "$staging" && oras push "$CACHE_REPO:$1" ./*.part.* )
+            du -sh "$staging" | sed "s|$staging|cache $1: pushed|" \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+            rm -rf "$staging"
+          }
+          push layers "$PWD" poky
+          push downloads "$YOCTO_DIR" downloads
+          push "sstate-${RUNNER_ARCH,,}" "$YOCTO_DIR" sstate-cache
+
+      - name: Prune untagged cache versions
+        # Every cache push orphans the previous tag's blobs; without this
+        # the package grows by tens of GB per merge.
+        if: ${{ !cancelled() && github.event_name != 'pull_request' && steps.build.outcome != 'skipped' }}
+        continue-on-error: true
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: ${{ github.event.repository.name }}/yocto-cache
+          package-type: container
+          delete-only-untagged-versions: 'true'

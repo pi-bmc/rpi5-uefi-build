@@ -15,12 +15,18 @@ PV = "202605+git${SRCPV}"
 
 FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
 
-# The one patch here keeps HiiToRedfishBootDxe's configure-language tags on the
-# same ComputerSystem version RPi5.fdf builds a feature driver for. A feature
+# 0001 keeps HiiToRedfishBootDxe's configure-language tags on the same
+# ComputerSystem version RPi5.fdf builds a feature driver for. A feature
 # driver looks its HII questions up by that exact string, so the two have to be
 # bumped together or the platform silently loses its boot order.
+# 0002 makes BiosDxe consume the BMC's pending settings even without a
+# prior-boot ConfigLangMap history record -- upstream's "system reset
+# detected" skip silently discards the operator's staged Bios attributes on
+# any boot without one, and this board has no reset-to-defaults path that
+# would make the staged set stale.
 SRC_URI = "git://github.com/tianocore/edk2-redfish-client.git;protocol=https;branch=main;destsuffix=edk2-redfish-client \
            file://0001-HiiToRedfishBootDxe-track-the-ComputerSystem-version-.patch \
+           file://0002-BiosDxe-consume-pending-settings-without-a-history-r.patch \
            "
 
 # edk2-redfish-client tracks edk2 MASTER. The window below was measured
