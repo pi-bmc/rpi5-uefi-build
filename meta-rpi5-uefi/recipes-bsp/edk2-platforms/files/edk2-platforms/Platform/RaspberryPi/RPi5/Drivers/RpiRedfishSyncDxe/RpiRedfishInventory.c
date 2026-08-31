@@ -1293,6 +1293,7 @@ RpiRedfishCollectNics (
   EFI_SIMPLE_NETWORK_PROTOCOL  *Snp;
   EFI_DEVICE_PATH_PROTOCOL     *DevicePath;
   RPI_REDFISH_NIC              *Nic;
+  UINTN                        Existing;
 
   if ((Nics == NULL) || (Count == NULL)) {
     return EFI_INVALID_PARAMETER;
@@ -1338,6 +1339,26 @@ RpiRedfishCollectNics (
                     (VOID **)&DevicePath
                     );
     if (EFI_ERROR (Status) || NicPathHasUsbNode (DevicePath)) {
+      continue;
+    }
+
+    //
+    // Dedup by MAC: the network stack surfaces one physical NIC on a
+    // varying number of SNP-bearing handles depending on what has been
+    // connected when the sync runs, and index-keyed Ids turned that
+    // variance into ghost members accumulating on the BMC (observed on
+    // hardware as eth0/eth1/eth2, all the GEM's MAC). One MAC = one
+    // report; link state is OR-merged so any live handle counts.
+    //
+    for (Existing = 0; Existing < *Count; Existing++) {
+      if (CompareMem (Nics[Existing].Mac, Snp->Mode->CurrentAddress.Addr, sizeof (Nics[Existing].Mac)) == 0) {
+        break;
+      }
+    }
+
+    if (Existing < *Count) {
+      Nics[Existing].MediaPresentSupported |= Snp->Mode->MediaPresentSupported;
+      Nics[Existing].MediaPresent          |= Snp->Mode->MediaPresent;
       continue;
     }
 

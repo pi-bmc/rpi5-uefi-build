@@ -24,17 +24,23 @@
 
 [Packages]
   MdePkg/MdePkg.dec
+  MdeModulePkg/MdeModulePkg.dec
+  ArmPkg/ArmPkg.dec
+  Platform/RaspberryPi/RaspberryPi.dec
 
 [LibraryClasses]
   BaseLib
+  BaseMemoryLib
   DebugLib
   FileHandleLib
   MemoryAllocationLib
+  PcdLib
   UefiBootServicesTableLib
   UefiLib
   UefiRuntimeServicesTableLib
 
 [Protocols]
+  gEfiFirmwareManagementProtocolGuid ## CONSUMES
   gEfiSimpleFileSystemProtocolGuid  ## CONSUMES
   gEfiUsb2HcProtocolGuid            ## CONSUMES
   gEfiUsbIoProtocolGuid             ## CONSUMES
@@ -42,4 +48,10 @@
 [Guids]
   gEfiEventReadyToBootGuid  ## CONSUMES ## Event
   gEfiFileInfoGuid          ## CONSUMES
+  gEfiFmpCapsuleGuid        ## CONSUMES
+  gEfiSystemNvDataFvGuid    ## CONSUMES
   gEfiGlobalVariableGuid    ## SOMETIMES_PRODUCES ## Variable:L"OsIndicationsSupported"
+
+[FixedPcd]
+  gRaspberryPiTokenSpaceGuid.PcdNvStorageVariableBase
+  gArmTokenSpaceGuid.PcdFdBaseAddress

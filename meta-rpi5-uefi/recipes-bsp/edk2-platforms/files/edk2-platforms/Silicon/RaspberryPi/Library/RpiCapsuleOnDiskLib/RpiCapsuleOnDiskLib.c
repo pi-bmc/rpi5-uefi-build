@@ -53,6 +53,12 @@
 **/
 
 #include <Uefi.h>
+#include <Guid/FmpCapsule.h>
+#include <Guid/SystemNvDataGuid.h>
+#include <Library/BaseMemoryLib.h>
+#include <Library/PcdLib.h>
+#include <Pi/PiFirmwareVolume.h>
+#include <Protocol/FirmwareManagement.h>
 
 #include <IndustryStandard/Usb.h>
 
@@ -387,6 +393,389 @@ FirmwareTargetPresent (
   return FALSE;
 }
 
+//
+// FMP_PAYLOAD_HEADER, as GenerateCapsule emits it ahead of the firmware
+// image. Upstream keeps this struct private to FmpDevicePkg; the layout
+// is stable and pinned by the "MSS1" signature.
+//
+#pragma pack(1)
+typedef struct {
+  UINT32    Signature;
+  UINT32    HeaderSize;
+  UINT32    FwVersion;
+  UINT32    LowestSupportedVersion;
+} RPI_COD_FMP_PAYLOAD_HEADER;
+#pragma pack()
+
+#define RPI_COD_FMP_PAYLOAD_SIGNATURE  SIGNATURE_32 ('M', 'S', 'S', '1')
+#define RPI_COD_HEADER_SEARCH_LIMIT    SIZE_64KB
+
+//
+// Byte range of the firmware file a capsule replaces -- the same two PCDs
+// Rpi5FmpDeviceLib subtracts, so the readback verify measures exactly
+// what the writer wrote.
+//
+#define RPI_COD_UPDATABLE_SIZE \
+  ((UINTN)(FixedPcdGet32 (PcdNvStorageVariableBase) - FixedPcdGet64 (PcdFdBaseAddress)))
+
+/**
+  Locate the FMP payload header and image-type GUID inside a capsule.
+
+  @param[in]  Capsule      The capsule, fully read into memory.
+  @param[in]  CapsuleSize  Its size.
+  @param[out] TypeId       Receives UpdateImageTypeId when parseable.
+  @param[out] FwVersion    Receives the payload's declared version.
+  @param[out] Payload      Receives a pointer to the firmware image bytes.
+  @param[out] PayloadSize  Receives the byte count from there to the end.
+
+  @retval TRUE   Parsed; outputs are valid.
+  @retval FALSE  Not an FMP capsule this platform built.
+**/
+STATIC
+BOOLEAN
+ParseFmpCapsule (
+  IN  CONST EFI_CAPSULE_HEADER  *Capsule,
+  IN  UINTN                     CapsuleSize,
+  OUT EFI_GUID                  *TypeId,
+  OUT UINT32                    *FwVersion,
+  OUT CONST UINT8               **Payload,
+  OUT UINTN                     *PayloadSize
+  )
+{
+  CONST UINT8                                         *Bytes;
+  CONST EFI_FIRMWARE_MANAGEMENT_CAPSULE_HEADER        *FmpHeader;
+  CONST UINT64                                        *ItemOffsets;
+  CONST EFI_FIRMWARE_MANAGEMENT_CAPSULE_IMAGE_HEADER  *ImageHeader;
+  CONST RPI_COD_FMP_PAYLOAD_HEADER                    *PayloadHeader;
+  UINTN                                               Offset;
+  UINTN                                               Limit;
+
+  if (!CompareGuid (&Capsule->CapsuleGuid, &gEfiFmpCapsuleGuid)) {
+    return FALSE;
+  }
+
+  Bytes = (CONST UINT8 *)Capsule;
+  if ((UINTN)Capsule->HeaderSize + sizeof (*FmpHeader) <= CapsuleSize) {
+    FmpHeader   = (CONST VOID *)(Bytes + Capsule->HeaderSize);
+    ItemOffsets = (CONST UINT64 *)(FmpHeader + 1);
+    if ((FmpHeader->PayloadItemCount > 0) &&
+        ((UINTN)Capsule->HeaderSize + sizeof (*FmpHeader) +
+         ((UINTN)FmpHeader->EmbeddedDriverCount + FmpHeader->PayloadItemCount) * sizeof (UINT64) <= CapsuleSize))
+    {
+      Offset = (UINTN)ItemOffsets[FmpHeader->EmbeddedDriverCount];
+      if ((UINTN)Capsule->HeaderSize + Offset + sizeof (*ImageHeader) <= CapsuleSize) {
+        ImageHeader = (CONST VOID *)(Bytes + Capsule->HeaderSize + Offset);
+        CopyGuid (TypeId, &ImageHeader->UpdateImageTypeId);
+      }
+    }
+  }
+
+  Limit = MIN (CapsuleSize, RPI_COD_HEADER_SEARCH_LIMIT);
+  for (Offset = 0; Offset + sizeof (*PayloadHeader) <= Limit; Offset++) {
+    PayloadHeader = (CONST VOID *)(Bytes + Offset);
+    if ((PayloadHeader->Signature == RPI_COD_FMP_PAYLOAD_SIGNATURE) &&
+        (PayloadHeader->HeaderSize >= sizeof (*PayloadHeader)) &&
+        (PayloadHeader->HeaderSize < SIZE_4KB) &&
+        (Offset + PayloadHeader->HeaderSize < CapsuleSize))
+    {
+      *FwVersion   = PayloadHeader->FwVersion;
+      *Payload     = Bytes + Offset + PayloadHeader->HeaderSize;
+      *PayloadSize = CapsuleSize - (Offset + PayloadHeader->HeaderSize);
+      return TRUE;
+    }
+  }
+
+  return FALSE;
+}
+
+/**
+  Decode a LastAttemptStatus into the UEFI spec's name for it.
+
+  @param[in] LastAttemptStatus  The value FmpDxe recorded.
+
+  @return A static string; never NULL.
+**/
+STATIC
+CONST CHAR16 *
+LastAttemptStatusName (
+  IN UINT32  LastAttemptStatus
+  )
+{
+  switch (LastAttemptStatus) {
+    case 0: return L"success";
+    case 1: return L"unsuccessful";
+    case 2: return L"insufficient resources";
+    case 3: return L"incorrect version";
+    case 4: return L"invalid image format";
+    case 5: return L"authentication error (capsule not signed with the certificate this firmware trusts)";
+    case 6: return L"AC power not connected";
+    case 7: return L"insufficient battery";
+    default: return L"vendor/device specific";
+  }
+}
+
+/**
+  Read the running firmware's version and last-attempt record from the
+  platform FMP. FmpDxe updates the record synchronously while SetTheImage
+  runs; UpdateCapsule() itself never surfaces the failure (upstream
+  ProcessFmpCapsuleImage returns success for any processed capsule).
+
+  @param[in]  TypeId       Image type to match; zero GUID matches first.
+  @param[out] Version      Receives the running version.
+  @param[out] LastStatus   Receives LastAttemptStatus; optional.
+  @param[out] LastVersion  Receives LastAttemptVersion; optional.
+
+  @retval TRUE   Found.
+  @retval FALSE  No matching FMP descriptor.
+**/
+STATIC
+BOOLEAN
+GetRunningFmpVersion (
+  IN  CONST EFI_GUID  *TypeId,
+  OUT UINT32          *Version,
+  OUT UINT32          *LastStatus   OPTIONAL,
+  OUT UINT32          *LastVersion  OPTIONAL
+  )
+{
+  EFI_STATUS                        Status;
+  EFI_HANDLE                        *Handles;
+  UINTN                             HandleCount;
+  UINTN                             Index;
+  EFI_FIRMWARE_MANAGEMENT_PROTOCOL  *Fmp;
+  EFI_FIRMWARE_IMAGE_DESCRIPTOR     *Info;
+  UINTN                             InfoSize;
+  UINT32                            Ver;
+  UINT32                            PackageVer;
+  CHAR16                            *PackageVerName;
+  UINT8                             DescCount;
+  UINTN                             DescSize;
+  EFI_GUID                          ZeroGuid;
+  BOOLEAN                           Found;
+
+  ZeroMem (&ZeroGuid, sizeof (ZeroGuid));
+  Found  = FALSE;
+  Status = gBS->LocateHandleBuffer (
+                  ByProtocol,
+                  &gEfiFirmwareManagementProtocolGuid,
+                  NULL,
+                  &HandleCount,
+                  &Handles
+                  );
+  if (EFI_ERROR (Status)) {
+    return FALSE;
+  }
+
+  for (Index = 0; (Index < HandleCount) && !Found; Index++) {
+    Status = gBS->HandleProtocol (
+                    Handles[Index],
+                    &gEfiFirmwareManagementProtocolGuid,
+                    (VOID **)&Fmp
+                    );
+    if (EFI_ERROR (Status)) {
+      continue;
+    }
+
+    InfoSize = 0;
+    if (Fmp->GetImageInfo (Fmp, &InfoSize, NULL, NULL, NULL, NULL, NULL, NULL) != EFI_BUFFER_TOO_SMALL) {
+      continue;
+    }
+
+    Info = AllocateZeroPool (InfoSize);
+    if (Info == NULL) {
+      continue;
+    }
+
+    PackageVerName = NULL;
+    Status         = Fmp->GetImageInfo (
+                            Fmp,
+                            &InfoSize,
+                            Info,
+                            &Ver,
+                            &DescCount,
+                            &DescSize,
+                            &PackageVer,
+                            &PackageVerName
+                            );
+    if (!EFI_ERROR (Status) && (DescCount > 0)) {
+      if (CompareGuid (TypeId, &ZeroGuid) ||
+          CompareGuid (TypeId, &Info->ImageTypeId))
+      {
+        *Version = Info->Version;
+        if ((LastStatus != NULL) && (LastVersion != NULL)) {
+          *LastStatus  = 0;
+          *LastVersion = 0;
+          if (Ver >= 3) {
+            *LastStatus  = Info->LastAttemptStatus;
+            *LastVersion = Info->LastAttemptVersion;
+          }
+        }
+
+        Found = TRUE;
+      }
+    }
+
+    if (PackageVerName != NULL) {
+      FreePool (PackageVerName);
+    }
+
+    FreePool (Info);
+  }
+
+  FreePool (Handles);
+  return Found;
+}
+
+/**
+  Print the FMP's freshly recorded last-attempt status.
+
+  @param[in] TypeId  The image type the apply targeted.
+**/
+STATIC
+VOID
+ReportLastAttempt (
+  IN CONST EFI_GUID  *TypeId
+  )
+{
+  UINT32  Version;
+  UINT32  LastStatus;
+  UINT32  LastVersion;
+
+  if (GetRunningFmpVersion (TypeId, &Version, &LastStatus, &LastVersion)) {
+    Print (
+      L"RpiCapsuleOnDisk:   FMP recorded: LastAttemptVersion %u, LastAttemptStatus %u (%s)\n",
+      LastVersion,
+      LastStatus,
+      LastAttemptStatusName (LastStatus)
+      );
+  }
+}
+
+/**
+  Is this open file this platform's firmware image? Same identity test
+  Rpi5FmpDeviceLib and VarBlockServiceDxe make.
+
+  @param[in] File  Open file to test.
+
+  @retval TRUE   It is.
+  @retval FALSE  It is not.
+**/
+STATIC
+BOOLEAN
+FileIsThisFirmware (
+  IN EFI_FILE_HANDLE  File
+  )
+{
+  EFI_STATUS                  Status;
+  EFI_FIRMWARE_VOLUME_HEADER  Header;
+  UINTN                       Size;
+
+  Status = File->SetPosition (File, RPI_COD_UPDATABLE_SIZE);
+  if (EFI_ERROR (Status)) {
+    return FALSE;
+  }
+
+  Size   = sizeof (Header);
+  Status = File->Read (File, &Size, &Header);
+
+  return !EFI_ERROR (Status) &&
+         (Size == sizeof (Header)) &&
+         (Header.Signature == EFI_FVH_SIGNATURE) &&
+         CompareGuid (&Header.FileSystemGuid, &gEfiSystemNvDataFvGuid);
+}
+
+/**
+  Read the firmware region back off the media and compare it against what
+  the capsule carried. Only a verified write counts as applied.
+
+  @param[in] Payload      The capsule's firmware image bytes.
+  @param[in] PayloadSize  Its size; must cover the updatable region.
+
+  @retval TRUE   At least one firmware file matches, and none mismatch.
+  @retval FALSE  No firmware file found, or any copy differs.
+**/
+STATIC
+BOOLEAN
+VerifyFirmwareOnDisk (
+  IN CONST UINT8  *Payload,
+  IN UINTN        PayloadSize
+  )
+{
+  EFI_STATUS       Status;
+  EFI_HANDLE       *Handles;
+  UINTN            HandleCount;
+  UINTN            Index;
+  UINTN            NameIndex;
+  EFI_FILE_HANDLE  Root;
+  EFI_FILE_HANDLE  File;
+  UINT8            *OnDisk;
+  UINTN            ReadSize;
+  UINTN            Matched;
+  UINTN            Mismatched;
+
+  if (PayloadSize < RPI_COD_UPDATABLE_SIZE) {
+    return FALSE;
+  }
+
+  OnDisk = AllocatePool (RPI_COD_UPDATABLE_SIZE);
+  if (OnDisk == NULL) {
+    return FALSE;
+  }
+
+  Matched    = 0;
+  Mismatched = 0;
+  Status     = gBS->LocateHandleBuffer (
+                      ByProtocol,
+                      &gEfiSimpleFileSystemProtocolGuid,
+                      NULL,
+                      &HandleCount,
+                      &Handles
+                      );
+  if (EFI_ERROR (Status)) {
+    FreePool (OnDisk);
+    return FALSE;
+  }
+
+  for (Index = 0; Index < HandleCount; Index++) {
+    if (!OpenVolumeRoot (Handles[Index], &Root)) {
+      continue;
+    }
+
+    for (NameIndex = 0; NameIndex < ARRAY_SIZE (mFirmwareFileNames); NameIndex++) {
+      if (EFI_ERROR (Root->Open (Root, &File, (CHAR16 *)mFirmwareFileNames[NameIndex], EFI_FILE_MODE_READ, 0))) {
+        continue;
+      }
+
+      if (FileIsThisFirmware (File)) {
+        ReadSize = RPI_COD_UPDATABLE_SIZE;
+        if (!EFI_ERROR (File->SetPosition (File, 0)) &&
+            !EFI_ERROR (File->Read (File, &ReadSize, OnDisk)) &&
+            (ReadSize == RPI_COD_UPDATABLE_SIZE) &&
+            (CompareMem (OnDisk, Payload, RPI_COD_UPDATABLE_SIZE) == 0))
+        {
+          Matched++;
+          Print (L"RpiCapsuleOnDisk:   %s on volume %u matches the capsule payload\n", mFirmwareFileNames[NameIndex], (UINT32)Index);
+        } else {
+          Mismatched++;
+          Print (L"RpiCapsuleOnDisk:   %s on volume %u DIFFERS from the capsule payload\n", mFirmwareFileNames[NameIndex], (UINT32)Index);
+        }
+      }
+
+      FileHandleClose (File);
+    }
+
+    Root->Close (Root);
+  }
+
+  FreePool (Handles);
+  FreePool (OnDisk);
+
+  if ((Matched + Mismatched) > 1) {
+    Print (L"RpiCapsuleOnDisk: warning: %u firmware files exist across volumes; the VPU boots only one of them\n", (UINT32)(Matched + Mismatched));
+  }
+
+  return (Matched > 0) && (Mismatched == 0);
+}
+
 /**
   Apply one capsule file from a drop box. Mirrors Rpi5CapsuleApp's
   checks and contract exactly.
@@ -411,6 +800,13 @@ ApplyOneCapsule (
   UINTN               ReadSize;
   EFI_CAPSULE_HEADER  *Capsule;
   EFI_CAPSULE_HEADER  *HeaderArray[1];
+  EFI_GUID            TypeId;
+  UINT32              CapsuleVersion;
+  UINT32              RunningVersion;
+  BOOLEAN             HaveCapsuleVersion;
+  BOOLEAN             HaveRunningVersion;
+  CONST UINT8         *Payload;
+  UINTN               PayloadSize;
 
   //
   // Read-write so a successful apply can delete the file; a physically
@@ -487,6 +883,52 @@ ApplyOneCapsule (
     return FALSE;
   }
 
+  //
+  // Version gate. FmpDxe compares an incoming image only against the
+  // lowest supported version, never the running one -- without this an
+  // undeletable capsule (read-only stick) re-applies identical bytes and
+  // cold-resets on every boot, forever.
+  //
+  ZeroMem (&TypeId, sizeof (TypeId));
+  HaveCapsuleVersion = ParseFmpCapsule (
+                         Capsule,
+                         (UINTN)FileSize,
+                         &TypeId,
+                         &CapsuleVersion,
+                         &Payload,
+                         &PayloadSize
+                         );
+  HaveRunningVersion = GetRunningFmpVersion (&TypeId, &RunningVersion, NULL, NULL);
+
+  if (HaveCapsuleVersion && HaveRunningVersion) {
+    Print (
+      L"RpiCapsuleOnDisk: %s carries version %u; running firmware is %u\n",
+      Name,
+      CapsuleVersion,
+      RunningVersion
+      );
+
+    if (CapsuleVersion == RunningVersion) {
+      Print (L"RpiCapsuleOnDisk: %s is the running version already, skipping\n", Name);
+      if (CanDelete) {
+        if (EFI_ERROR (FileHandleDelete (File))) {
+          FileHandleClose (File);
+        }
+      } else {
+        FileHandleClose (File);
+      }
+
+      FreePool (Capsule);
+      return FALSE;
+    }
+
+    if (CapsuleVersion < RunningVersion) {
+      Print (L"RpiCapsuleOnDisk: *** DOWNGRADING from %u to %u ***\n", RunningVersion, CapsuleVersion);
+    }
+  } else {
+    Print (L"RpiCapsuleOnDisk: warning: cannot compare versions; applying blind\n");
+  }
+
   Print (
     L"RpiCapsuleOnDisk: applying %s (%u bytes, %g)...\n",
     Name,
@@ -502,16 +944,36 @@ ApplyOneCapsule (
   HeaderArray[0] = Capsule;
   Status         = gRT->UpdateCapsule (HeaderArray, 1, 0);
 
-  FreePool (Capsule);
-
   if (EFI_ERROR (Status)) {
     Print (L"RpiCapsuleOnDisk: %s NOT applied: %r\n", Name, Status);
-    Print (L"  (a security violation here means the capsule is not signed with the running firmware's certificate)\n");
+    ReportLastAttempt (&TypeId);
+    FreePool (Capsule);
     FileHandleClose (File);
     return FALSE;
   }
 
-  Print (L"RpiCapsuleOnDisk: %s applied\n", Name);
+  //
+  // UpdateCapsule() success means "processed", never "applied" --
+  // upstream records the SetImage status and returns success either way.
+  // Only the media's own bytes prove the write. No legacy bootstrap here,
+  // deliberately: any firmware carrying this library postdates the FMP
+  // lock disarm, so the one state that needed it cannot occur.
+  //
+  if (HaveCapsuleVersion) {
+    if (!VerifyFirmwareOnDisk (Payload, PayloadSize)) {
+      Print (L"RpiCapsuleOnDisk: %s MISMATCH: the firmware file still carries the OLD bytes -- the write never happened\n", Name);
+      ReportLastAttempt (&TypeId);
+      FreePool (Capsule);
+      FileHandleClose (File);
+      return FALSE;
+    }
+
+    Print (L"RpiCapsuleOnDisk: %s applied and VERIFIED on disk\n", Name);
+  } else {
+    Print (L"RpiCapsuleOnDisk: %s applied (unverified: payload location unknown)\n", Name);
+  }
+
+  FreePool (Capsule);
 
   if (CanDelete) {
     //

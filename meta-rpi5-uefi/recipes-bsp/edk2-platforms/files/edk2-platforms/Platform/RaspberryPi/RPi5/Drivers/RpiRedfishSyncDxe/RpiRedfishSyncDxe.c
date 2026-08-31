@@ -1011,6 +1011,94 @@ ReportDrives (
 }
 
 /**
+  Delete stale members from the BMC's EthernetInterfaces collection.
+
+  Member ids are eth0..eth(Count-1); anything else in the collection is a
+  ghost from an earlier boot (index-keyed ids plus per-boot handle-count
+  variance minted eth1/eth2 duplicates before the collector deduped by
+  MAC). The BMC persists host collections, so the host is the only party
+  that can retire them -- same stale-member DELETE contract the BootOption
+  feature driver uses.
+
+  @param[in] Service  The Redfish service.
+  @param[in] Count    Number of NICs about to be reported.
+**/
+STATIC
+VOID
+PruneStaleNics (
+  IN REDFISH_SERVICE  Service,
+  IN UINTN            Count
+  )
+{
+  EFI_STATUS        Status;
+  REDFISH_RESPONSE  Response;
+  REDFISH_RESPONSE  DelResponse;
+  EDKII_JSON_VALUE  Root;
+  EDKII_JSON_VALUE  Members;
+  EDKII_JSON_VALUE  Member;
+  EDKII_JSON_VALUE  OdataId;
+  CONST CHAR8       *IdPath;
+  CONST CHAR8       *Tail;
+  UINTN             Index;
+  UINTN             Nic;
+  BOOLEAN           Keep;
+  CHAR8             Expect[16];
+  CHAR16            MemberUri[128];
+
+  ZeroMem (&Response, sizeof (Response));
+  Status = RedfishHttpGetResource (Service, RPI_REDFISH_ETHERNET_URI, NULL, &Response, FALSE);
+  if (EFI_ERROR (Status) || (Response.Payload == NULL)) {
+    RedfishHttpFreeResponse (&Response);
+    return;
+  }
+
+  Root    = RedfishJsonInPayload (Response.Payload);
+  Members = (Root == NULL) ? NULL :
+            JsonObjectGetValue (JsonValueGetObject (Root), "Members");
+  if ((Members != NULL) && JsonValueIsArray (Members)) {
+    for (Index = 0; Index < JsonArrayCount (JsonValueGetArray (Members)); Index++) {
+      Member  = JsonArrayGetValue (JsonValueGetArray (Members), Index);
+      OdataId = (Member == NULL) ? NULL :
+                JsonObjectGetValue (JsonValueGetObject (Member), "@odata.id");
+      IdPath  = (OdataId == NULL) ? NULL : JsonValueGetAsciiString (OdataId);
+      if (IdPath == NULL) {
+        continue;
+      }
+
+      Tail = IdPath;
+      while (AsciiStrStr (Tail, "/") != NULL) {
+        Tail = AsciiStrStr (Tail, "/") + 1;
+      }
+
+      Keep = FALSE;
+      for (Nic = 0; Nic < Count; Nic++) {
+        AsciiSPrint (Expect, sizeof (Expect), "eth%u", (UINT32)Nic);
+        if (AsciiStrCmp (Tail, Expect) == 0) {
+          Keep = TRUE;
+          break;
+        }
+      }
+
+      if (!Keep) {
+        UnicodeSPrint (
+          MemberUri,
+          sizeof (MemberUri),
+          L"%s/%a",
+          RPI_REDFISH_ETHERNET_URI,
+          Tail
+          );
+        ZeroMem (&DelResponse, sizeof (DelResponse));
+        Status = RedfishHttpDeleteResource (Service, MemberUri, &DelResponse);
+        LogResult ("DELETE(stale-nic)", MemberUri, Status, &DelResponse);
+        RedfishHttpFreeResponse (&DelResponse);
+      }
+    }
+  }
+
+  RedfishHttpFreeResponse (&Response);
+}
+
+/**
   Report the host's Ethernet interfaces to the BMC's EthernetInterfaces
   collection.
 
@@ -1040,6 +1128,12 @@ ReportEthernetInterfaces (
     DEBUG ((DEBUG_ERROR, "RpiRedfishSync: no NICs to report - %r\n", Status));
     return;
   }
+
+  //
+  // Retire ghosts before reporting, so the collection converges on this
+  // boot's truth in one pass.
+  //
+  PruneStaleNics (Service, Count);
 
   for (Index = 0; Index < Count; Index++) {
     Body   = NULL;
