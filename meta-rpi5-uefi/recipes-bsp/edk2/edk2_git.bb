@@ -31,10 +31,14 @@ PV = "202608"
 # datagram), 0108 (NetworkCommon refuses to bind until the platform
 # installs the USB NIC gate protocol -- the platform half that opens the gate
 # after boot option enumeration is edk2-platforms patch 0034; the GUID
-# literal is duplicated across the two trees) and 0109 (Device Manager hides
+# literal is duplicated across the two trees), 0109 (Device Manager hides
 # the USB NIC's IP4/IP6/VLAN/HTTP-Boot formsets -- 0103's USB+MAC test again;
 # the skip is total because a formset that merely fails the network test
-# falls through to the Device Manager top level).
+# falls through to the Device Manager top level) and 0110 (adds UsbCdcEem, a
+# USB CDC-EEM class driver: none of edk2's shipped ECM/NCM/RNDIS drivers bind
+# CDC-EEM, which is what the BMC's Redfish host interface gadget now uses --
+# see rpi5-uefi-firmware.bb's redfish_marker block for where the station
+# address PCD this driver requires gets its value).
 #
 # Patches to the OTHER trees live with those trees: the RPi5 port and its
 # series in recipes-bsp/edk2-platforms, the HII-to-Redfish boot fix in
@@ -51,6 +55,7 @@ SRC_URI = "gitsm://github.com/tianocore/edk2.git;protocol=https;branch=master;de
            file://0107-UsbCdcNcm-deliver-one-Ethernet-frame-per-NTB-datagra.patch \
            file://0108-NetworkCommon-hold-off-binding-until-the-platform-op.patch \
            file://0109-DeviceManagerUiLib-hide-the-USB-NIC-s-config-formset.patch \
+           file://0110-MdeModulePkg-add-a-USB-CDC-EEM-class-driver.patch \
            "
 
 # edk2-stable202608, the August 2026 quarterly release tag. A release tag

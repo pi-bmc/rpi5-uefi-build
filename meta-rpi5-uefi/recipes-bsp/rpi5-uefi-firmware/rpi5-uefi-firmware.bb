@@ -97,10 +97,11 @@ COMPATIBLE_MACHINE = "raspberrypi5-uefi"
 
 inherit deploy
 
-# Wire edk2's own USB CDC-ECM/NCM/RNDIS class drivers (present in the
-# pinned tree, not in RPi5.dsc) into the build, so a USB Ethernet gadget on
-# an RP1 port becomes an SNP interface. The BMC's host-interface link rides
-# the ncm.usb0 function of this -- the Redfish host interface has no link
+# Wire edk2's own USB CDC-ECM/NCM/EEM/RNDIS class drivers (ECM/NCM/RNDIS
+# present in the pinned tree, not in RPi5.dsc; EEM is this layer's own,
+# patch 0110) into the build, so a USB Ethernet gadget on an RP1 port
+# becomes an SNP interface. The BMC's host-interface link rides the
+# eem.usb0 function of this -- the Redfish host interface has no link
 # without it.
 RPI5_USBNET ??= "1"
 
@@ -120,7 +121,7 @@ PROFILING_ENABLED ??= "0"
 # The wire contract with the BMC. RPi5.dec carries the documented defaults and
 # RPi5.dsc the rest of the Redfish PCDs; do_compile appends overrides for the
 # three below.
-# RPI5_REDFISH_MAC is the gadget's host_addr (the MAC the Pi's NCM NIC
+# RPI5_REDFISH_MAC is the gadget's host_addr (the MAC the Pi's EEM NIC
 # comes up with) -- the BMC must present exactly this fixed value, or
 # RedfishDiscoverDxe rejects the interface. Colon-separated, lowercase ok.
 RPI5_REDFISH_MAC ??= "da:c0:ff:ee:10:02"
@@ -516,7 +517,8 @@ do_compile() {
     # hand-edited or half-applied tree from ever producing duplicate includes,
     # which mean duplicate FFS files and a GenFv failure.
 
-    # edk2's own USB CDC-ECM/NCM/RNDIS drivers (in-tree, unwired upstream).
+    # edk2's own USB CDC-ECM/NCM/EEM/RNDIS drivers (ECM/NCM/RNDIS in-tree and
+    # unwired upstream; EEM added by this layer's patch 0110).
     if [ "${RPI5_USBNET}" = "1" ]; then
         grep -qF 'UsbNetwork/NetworkCommon/NetworkCommon.inf' "${dsc}" || \
             sed -i "\|${dsc_marker}|r ${WORKDIR}/usbnet-dsc-snippet.inc" "${dsc}"
@@ -544,9 +546,12 @@ do_compile() {
     # RPi5.dsc builds the whole Redfish stack (host interface + the
     # edk2-redfish-client feature layer) unconditionally, and RPi5.dec carries
     # the contract's documented defaults. What the recipe still owns is the
-    # three values an operator may need to change per deployment -- the NCM
+    # three values an operator may need to change per deployment -- the EEM
     # gadget's MAC and the HTTP Basic credentials -- plus the RestEx device
-    # path that has to match that MAC.
+    # path that has to match that MAC. The same MAC also seeds
+    # PcdUsbCdcEemMacAddress below: UsbCdcEem has no functional descriptor to
+    # read a station address from, so this is the only place that value ever
+    # comes from.
     #
     # They are appended as a fresh [PcdsFixedAtBuild.common] section at the END
     # of the DSC, the same way the FMP certificate below is appended and for
@@ -564,6 +569,7 @@ do_compile() {
     grep -qF "${redfish_marker}" "${dsc}" || {
         printf '\n#\n%s\n#\n[PcdsFixedAtBuild.common]\n' "${redfish_marker}" >> "${dsc}"
         printf '  gRpiRedfishTokenSpaceGuid.PcdRpiRedfishGadgetMac|{%s}\n' "${mac_bytes}" >> "${dsc}"
+        printf '  gEfiMdeModulePkgTokenSpaceGuid.PcdUsbCdcEemMacAddress|{%s}\n' "${mac_bytes}" >> "${dsc}"
         printf '  gRpiRedfishTokenSpaceGuid.PcdRpiRedfishUser|"%s"\n' "${RPI5_REDFISH_USER}" >> "${dsc}"
         printf '  gRpiRedfishTokenSpaceGuid.PcdRpiRedfishPassword|"%s"\n' "${RPI5_REDFISH_PASSWORD}" >> "${dsc}"
         printf '  gEfiRedfishPkgTokenSpaceGuid.PcdRedfishRestExServiceDevicePath.DevicePath|{DEVICE_PATH("MAC(%s,0x1)")}\n' "${mac_plain}" >> "${dsc}"

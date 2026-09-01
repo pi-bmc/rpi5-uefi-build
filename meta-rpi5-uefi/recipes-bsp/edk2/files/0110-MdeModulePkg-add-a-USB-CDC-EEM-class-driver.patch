@@ -1,0 +1,1396 @@
+From: appkins <nbatkins@gmail.com>
+Date: Tue, 1 Sep 2026 12:00:00 -0500
+Subject: [PATCH] MdeModulePkg: add a USB CDC-EEM class driver
+
+edk2 ships UsbCdcEcm, UsbCdcNcm and UsbRndis, and none of them binds
+CDC-EEM (class 02, subclass 0C, protocol 07). The BMC's Redfish host
+interface NIC is an EEM gadget, because EEM has no notification interface
+and so costs one device IN endpoint where the other three cost two -- the
+difference that lets a NIC and a CDC-ACM console share a six-endpoint
+core.
+
+The driver produces gEdkIIUsbEthProtocolGuid like its siblings, so the
+existing NetworkCommon UNDI binds it unchanged. EEM carries no Ethernet
+functional descriptor, so the station address comes from
+PcdUsbCdcEemMacAddress rather than iMACAddress, and the driver declines to
+bind when that PCD is unset.
+
+Upstream-Status: Pending
+
+---
+diff --git a/MdeModulePkg/Bus/Usb/UsbNetwork/UsbCdcEem/UsbCdcEem.c b/MdeModulePkg/Bus/Usb/UsbNetwork/UsbCdcEem/UsbCdcEem.c
+new file mode 100644
+--- /dev/null
++++ b/MdeModulePkg/Bus/Usb/UsbNetwork/UsbCdcEem/UsbCdcEem.c
+@@ -0,0 +1,353 @@
++/** @file
++  This file contains code for the USB CDC Ethernet Emulation Model (EEM)
++  driver binding.
++
++  Copyright (c) 2026, appkins. All rights reserved.<BR>
++  SPDX-License-Identifier: BSD-2-Clause-Patent
++**/
++#include "UsbCdcEem.h"
++
++EFI_DRIVER_BINDING_PROTOCOL  gUsbEemDriverBinding = {
++  UsbEemDriverSupported,
++  UsbEemDriverStart,
++  UsbEemDriverStop,
++  USB_EEM_DRIVER_VERSION,
++  NULL,
++  NULL
++};
++
++/**
++  Check if this interface is the USB CDC EEM SubClass/Protocol.
++
++  Unlike ECM/NCM, EEM has no companion CDC Data interface to pair with: the
++  single interface tested here carries both bulk endpoints, so a positive
++  match is sufficient to bind.
++
++  @param[in]  UsbIo     A pointer to the EFI_USB_IO_PROTOCOL instance.
++
++  @retval TRUE          USB CDC EEM SubClass/Protocol.
++  @retval FALSE         Not USB CDC EEM SubClass/Protocol.
++
++**/
++BOOLEAN
++IsSupportedDevice (
++  IN EFI_USB_IO_PROTOCOL  *UsbIo
++  )
++{
++  EFI_STATUS                    Status;
++  EFI_USB_INTERFACE_DESCRIPTOR  InterfaceDescriptor;
++
++  Status = UsbIo->UsbGetInterfaceDescriptor (UsbIo, &InterfaceDescriptor);
++  if (EFI_ERROR (Status)) {
++    return FALSE;
++  }
++
++  if ((InterfaceDescriptor.InterfaceClass == USB_CDC_CLASS) &&
++      (InterfaceDescriptor.InterfaceSubClass == USB_CDC_EEM_SUBCLASS) &&
++      (InterfaceDescriptor.InterfaceProtocol == USB_CDC_EEM_PROTOCOL))
++  {
++    return TRUE;
++  }
++
++  return FALSE;
++}
++
++/**
++  USB CDC EEM Driver Binding Support.
++
++  @param[in]  This                  Protocol instance pointer.
++  @param[in]  ControllerHandle      Handle of device to test.
++  @param[in]  RemainingDevicePath   Optional parameter use to pick a specific child
++                                    device to start.
++
++  @retval EFI_SUCCESS               This driver supports this device.
++  @retval EFI_ALREADY_STARTED       This driver is already running on this device.
++  @retval other                     This driver does not support this device.
++
++**/
++EFI_STATUS
++EFIAPI
++UsbEemDriverSupported (
++  IN EFI_DRIVER_BINDING_PROTOCOL  *This,
++  IN EFI_HANDLE                   ControllerHandle,
++  IN EFI_DEVICE_PATH_PROTOCOL     *RemainingDevicePath
++  )
++{
++  EFI_STATUS           Status;
++  EFI_USB_IO_PROTOCOL  *UsbIo;
++
++  Status = gBS->OpenProtocol (
++                  ControllerHandle,
++                  &gEfiUsbIoProtocolGuid,
++                  (VOID **)&UsbIo,
++                  This->DriverBindingHandle,
++                  ControllerHandle,
++                  EFI_OPEN_PROTOCOL_BY_DRIVER
++                  );
++  if (EFI_ERROR (Status)) {
++    return Status;
++  }
++
++  Status = IsSupportedDevice (UsbIo) ? EFI_SUCCESS : EFI_UNSUPPORTED;
++
++  gBS->CloseProtocol (
++         ControllerHandle,
++         &gEfiUsbIoProtocolGuid,
++         This->DriverBindingHandle,
++         ControllerHandle
++         );
++  return Status;
++}
++
++/**
++  USB CDC EEM Driver Binding Start.
++
++  There is no companion CDC Data interface to wait for, so unlike UsbCdcEcm
++  this never defers via RegisterProtocolNotify: the single interface tested
++  by UsbEemDriverSupported already carries both bulk endpoints, so binding
++  either succeeds now or fails outright.
++
++  @param[in]  This                    Protocol instance pointer.
++  @param[in]  ControllerHandle        Handle of device to bind driver to.
++  @param[in]  RemainingDevicePath     Optional parameter use to pick a specific child
++                                      device to start.
++
++  @retval EFI_SUCCESS                 This driver is added to ControllerHandle
++  @retval EFI_OUT_OF_RESOURCES        The driver could not install successfully due to a lack of resources.
++  @retval EFI_UNSUPPORTED             The station address PCD is unset, zero-length, or all zero.
++  @retval other                       This driver does not support this device
++
++**/
++EFI_STATUS
++EFIAPI
++UsbEemDriverStart (
++  IN EFI_DRIVER_BINDING_PROTOCOL  *This,
++  IN EFI_HANDLE                   ControllerHandle,
++  IN EFI_DEVICE_PATH_PROTOCOL     *RemainingDevicePath
++  )
++{
++  EFI_STATUS                    Status;
++  USB_ETHERNET_DRIVER           *UsbEthDriver;
++  EFI_USB_IO_PROTOCOL           *UsbIo;
++  EFI_USB_INTERFACE_DESCRIPTOR  Interface;
++  UINT8                         *MacPcd;
++  UINTN                         MacLen;
++
++  UsbEthDriver = NULL;
++
++  Status = gBS->OpenProtocol (
++                  ControllerHandle,
++                  &gEfiUsbIoProtocolGuid,
++                  (VOID **)&UsbIo,
++                  This->DriverBindingHandle,
++                  ControllerHandle,
++                  EFI_OPEN_PROTOCOL_BY_DRIVER
++                  );
++  if (EFI_ERROR (Status)) {
++    return Status;
++  }
++
++  UsbEthDriver = AllocateZeroPool (sizeof (USB_ETHERNET_DRIVER));
++  if (UsbEthDriver == NULL) {
++    Status = EFI_OUT_OF_RESOURCES;
++    goto ErrorExit;
++  }
++
++  Status = LoadAllDescriptor (UsbIo, &UsbEthDriver->Config);
++  ASSERT_EFI_ERROR (Status);
++  if (EFI_ERROR (Status)) {
++    goto ErrorExit;
++  }
++
++  GetEndpoint (UsbIo, UsbEthDriver);
++
++  Status = UsbIo->UsbGetInterfaceDescriptor (UsbIo, &Interface);
++  ASSERT_EFI_ERROR (Status);
++
++  UsbEthDriver->RxBuffer = AllocatePool (USB_EEM_MAX_BULK_SIZE);
++  if (UsbEthDriver->RxBuffer == NULL) {
++    Status = EFI_OUT_OF_RESOURCES;
++    goto ErrorExit;
++  }
++
++  UsbEthDriver->TxBuffer = AllocatePool (USB_EEM_MAX_BULK_SIZE);
++  if (UsbEthDriver->TxBuffer == NULL) {
++    Status = EFI_OUT_OF_RESOURCES;
++    goto ErrorExit;
++  }
++
++  MacPcd = (UINT8 *)PcdGetPtr (PcdUsbCdcEemMacAddress);
++  MacLen = PcdGetSize (PcdUsbCdcEemMacAddress);
++
++  //
++  // An all-zero or wrong-sized PCD means the platform never set the station
++  // address. A NIC with an invalid MAC would fail Redfish discovery anyway,
++  // so decline to bind: a missing interface is diagnosable, a mystery MAC
++  // is not.
++  //
++  if ((MacPcd == NULL) || (MacLen < USB_EEM_MAC_LEN)) {
++    Status = EFI_UNSUPPORTED;
++    goto ErrorExit;
++  }
++
++  ZeroMem (&UsbEthDriver->MacAddress, sizeof (EFI_MAC_ADDRESS));
++  CopyMem (&UsbEthDriver->MacAddress, MacPcd, USB_EEM_MAC_LEN);
++
++  if (IsZeroBuffer (&UsbEthDriver->MacAddress, USB_EEM_MAC_LEN)) {
++    Status = EFI_UNSUPPORTED;
++    goto ErrorExit;
++  }
++
++  UsbEthDriver->Signature                    = USB_EEM_SIGNATURE;
++  UsbEthDriver->NumOfInterface               = Interface.InterfaceNumber;
++  UsbEthDriver->UsbIo                        = UsbIo;
++  UsbEthDriver->UsbEth.UsbEthReceive         = UsbEthEemReceive;
++  UsbEthDriver->UsbEth.UsbEthTransmit        = UsbEthEemTransmit;
++  UsbEthDriver->UsbEth.UsbEthInterrupt       = UsbEthEemInterrupt;
++  UsbEthDriver->UsbEth.UsbEthMacAddress      = GetUsbEthMacAddress;
++  UsbEthDriver->UsbEth.UsbEthMaxBulkSize     = UsbEthEemBulkSize;
++  UsbEthDriver->UsbEth.UsbEthFunDescriptor   = GetUsbEthFunDescriptor;
++  UsbEthDriver->UsbEth.SetUsbEthPacketFilter = SetUsbEthPacketFilter;
++
++  Status = gBS->InstallProtocolInterface (
++                  &ControllerHandle,
++                  &gEdkIIUsbEthProtocolGuid,
++                  EFI_NATIVE_INTERFACE,
++                  &(UsbEthDriver->UsbEth)
++                  );
++  if (EFI_ERROR (Status)) {
++    goto ErrorExit;
++  }
++
++  return EFI_SUCCESS;
++
++ErrorExit:
++  if (UsbEthDriver != NULL) {
++    if (UsbEthDriver->TxBuffer != NULL) {
++      FreePool (UsbEthDriver->TxBuffer);
++    }
++
++    if (UsbEthDriver->RxBuffer != NULL) {
++      FreePool (UsbEthDriver->RxBuffer);
++    }
++
++    if (UsbEthDriver->Config != NULL) {
++      FreePool (UsbEthDriver->Config);
++    }
++
++    FreePool (UsbEthDriver);
++  }
++
++  gBS->CloseProtocol (
++         ControllerHandle,
++         &gEfiUsbIoProtocolGuid,
++         This->DriverBindingHandle,
++         ControllerHandle
++         );
++
++  return Status;
++}
++
++/**
++  USB CDC EEM Driver Binding Stop.
++
++  @param[in]  This                Protocol instance pointer.
++  @param[in]  ControllerHandle    Handle of device to stop driver on
++  @param[in]  NumberOfChildren    Number of Handles in ChildHandleBuffer. If number of
++                                  children is zero stop the entire bus driver.
++  @param[in]  ChildHandleBuffer   List of Child Handles to Stop.
++
++  @retval EFI_SUCCESS             This driver is removed ControllerHandle
++  @retval other                   This driver was not removed from this device
++
++**/
++EFI_STATUS
++EFIAPI
++UsbEemDriverStop (
++  IN EFI_DRIVER_BINDING_PROTOCOL  *This,
++  IN EFI_HANDLE                   ControllerHandle,
++  IN UINTN                        NumberOfChildren,
++  IN EFI_HANDLE                   *ChildHandleBuffer
++  )
++{
++  EFI_STATUS                   Status;
++  EDKII_USB_ETHERNET_PROTOCOL  *UsbEthProtocol;
++  USB_ETHERNET_DRIVER          *UsbEthDriver;
++
++  Status = gBS->OpenProtocol (
++                  ControllerHandle,
++                  &gEdkIIUsbEthProtocolGuid,
++                  (VOID **)&UsbEthProtocol,
++                  This->DriverBindingHandle,
++                  ControllerHandle,
++                  EFI_OPEN_PROTOCOL_GET_PROTOCOL
++                  );
++  if (EFI_ERROR (Status)) {
++    return Status;
++  }
++
++  UsbEthDriver = USB_EEM_DEV_FROM_THIS (UsbEthProtocol);
++
++  Status = gBS->UninstallProtocolInterface (
++                  ControllerHandle,
++                  &gEdkIIUsbEthProtocolGuid,
++                  UsbEthProtocol
++                  );
++  if (EFI_ERROR (Status)) {
++    return Status;
++  }
++
++  Status = gBS->CloseProtocol (
++                  ControllerHandle,
++                  &gEfiUsbIoProtocolGuid,
++                  This->DriverBindingHandle,
++                  ControllerHandle
++                  );
++
++  if (UsbEthDriver->TxBuffer != NULL) {
++    FreePool (UsbEthDriver->TxBuffer);
++  }
++
++  if (UsbEthDriver->RxBuffer != NULL) {
++    FreePool (UsbEthDriver->RxBuffer);
++  }
++
++  if (UsbEthDriver->Config != NULL) {
++    FreePool (UsbEthDriver->Config);
++  }
++
++  FreePool (UsbEthDriver);
++  return Status;
++}
++
++/**
++  Entrypoint of EEM Driver.
++
++  This function is the entrypoint of EEM Driver. It installs Driver Binding
++  Protocols together with Component Name Protocols.
++
++  @param[in]  ImageHandle       The firmware allocated handle for the EFI image.
++  @param[in]  SystemTable       A pointer to the EFI System Table.
++
++  @retval EFI_SUCCESS           The entry point is executed successfully.
++
++**/
++EFI_STATUS
++EFIAPI
++UsbEemEntry (
++  IN EFI_HANDLE        ImageHandle,
++  IN EFI_SYSTEM_TABLE  *SystemTable
++  )
++{
++  gUsbEemDriverBinding.DriverBindingHandle = ImageHandle;
++  gUsbEemDriverBinding.ImageHandle         = ImageHandle;
++
++  return gBS->InstallMultipleProtocolInterfaces (
++                &gUsbEemDriverBinding.DriverBindingHandle,
++                &gEfiDriverBindingProtocolGuid,
++                &gUsbEemDriverBinding,
++                &gEfiComponentName2ProtocolGuid,
++                &gUsbEemComponentName2,
++                NULL
++                );
++}
+diff --git a/MdeModulePkg/Bus/Usb/UsbNetwork/UsbCdcEem/UsbCdcEem.h b/MdeModulePkg/Bus/Usb/UsbNetwork/UsbCdcEem/UsbCdcEem.h
+new file mode 100644
+--- /dev/null
++++ b/MdeModulePkg/Bus/Usb/UsbNetwork/UsbCdcEem/UsbCdcEem.h
+@@ -0,0 +1,168 @@
++/** @file
++  Header for the USB CDC Ethernet Emulation Model (EEM) driver.
++
++  Copyright (c) 2026, appkins. All rights reserved.<BR>
++  SPDX-License-Identifier: BSD-2-Clause-Patent
++**/
++
++#pragma once
++
++#include <Library/UefiDriverEntryPoint.h>
++#include <Library/UefiBootServicesTableLib.h>
++#include <Library/UefiLib.h>
++#include <Library/DevicePathLib.h>
++#include <Library/DebugLib.h>
++#include <Library/MemoryAllocationLib.h>
++#include <Library/BaseMemoryLib.h>
++#include <Library/PcdLib.h>
++#include <Library/UefiUsbLib.h>
++#include <Protocol/UsbIo.h>
++#include <Protocol/UsbEthernetProtocol.h>
++
++#include "UsbEemFraming.h"
++
++//
++// CDC EEM is a single interface carrying two bulk endpoints: no control
++// interface, no CDC functional descriptors, no notification endpoint and no
++// alternate settings. That is the whole reason it is used here -- it costs
++// one device IN endpoint where ECM/NCM/RNDIS cost two, and the BMC's dwc2
++// core has exactly six to spend.
++//
++#define USB_CDC_EEM_SUBCLASS  0x0C
++#define USB_CDC_EEM_PROTOCOL  0x07
++
++#define USB_EEM_DRIVER_VERSION         1
++#define USB_ETHERNET_BULK_TIMEOUT      1
++#define USB_ETHERNET_TRANSFER_TIMEOUT  200
++
++//
++// Six, spelled locally rather than as NetLib's NET_ETHER_ADDR_LEN: NetLib is
++// a NetworkPkg library class and none of the other class drivers in this
++// directory depend on it.
++//
++#define USB_EEM_MAC_LEN  6
++
++typedef struct {
++  UINTN                          Signature;
++  EDKII_USB_ETHERNET_PROTOCOL    UsbEth;
++  EFI_USB_IO_PROTOCOL            *UsbIo;
++  EFI_USB_CONFIG_DESCRIPTOR      *Config;
++  UINT8                          NumOfInterface;
++  UINT8                          BulkInEndpoint;
++  UINT8                          BulkOutEndpoint;
++  EFI_MAC_ADDRESS                MacAddress;
++
++  //
++  // Receive staging. One bulk transfer may carry several EEM packets, and
++  // NetworkCommon wants exactly one Ethernet frame per call, so the buffer
++  // is walked with a byte cursor across calls.
++  //
++  // A cursor rather than a datagram index pair on purpose: the index
++  // arithmetic UsbCdcNcm uses is what produced its underflow-to-255 bug.
++  //
++  UINT8    *RxBuffer;
++  UINTN    RxLength;
++  UINTN    RxOffset;
++
++  //
++  // Transmit staging, so a frame can be wrapped without allocating per send.
++  //
++  UINT8    *TxBuffer;
++} USB_ETHERNET_DRIVER;
++
++#define USB_EEM_SIGNATURE  SIGNATURE_32('u','e','e','m')
++#define USB_EEM_DEV_FROM_THIS(a)  CR (a, USB_ETHERNET_DRIVER, UsbEth, USB_EEM_SIGNATURE)
++
++extern EFI_COMPONENT_NAME2_PROTOCOL  gUsbEemComponentName2;
++
++EFI_STATUS
++EFIAPI
++UsbEemDriverSupported (
++  IN EFI_DRIVER_BINDING_PROTOCOL  *This,
++  IN EFI_HANDLE                   ControllerHandle,
++  IN EFI_DEVICE_PATH_PROTOCOL     *RemainingDevicePath
++  );
++
++EFI_STATUS
++EFIAPI
++UsbEemDriverStart (
++  IN EFI_DRIVER_BINDING_PROTOCOL  *This,
++  IN EFI_HANDLE                   ControllerHandle,
++  IN EFI_DEVICE_PATH_PROTOCOL     *RemainingDevicePath
++  );
++
++EFI_STATUS
++EFIAPI
++UsbEemDriverStop (
++  IN EFI_DRIVER_BINDING_PROTOCOL  *This,
++  IN EFI_HANDLE                   ControllerHandle,
++  IN UINTN                        NumberOfChildren,
++  IN EFI_HANDLE                   *ChildHandleBuffer
++  );
++
++VOID
++GetEndpoint (
++  IN     EFI_USB_IO_PROTOCOL  *UsbIo,
++  IN OUT USB_ETHERNET_DRIVER  *UsbEthDriver
++  );
++
++EFI_STATUS
++LoadAllDescriptor (
++  IN     EFI_USB_IO_PROTOCOL        *UsbIo,
++  IN OUT EFI_USB_CONFIG_DESCRIPTOR  **ConfigDesc
++  );
++
++EFI_STATUS
++EFIAPI
++UsbEthEemReceive (
++  IN     PXE_CDB                      *Cdb,
++  IN     EDKII_USB_ETHERNET_PROTOCOL  *This,
++  IN OUT VOID                         *Packet,
++  IN OUT UINTN                        *PacketLength
++  );
++
++EFI_STATUS
++EFIAPI
++UsbEthEemTransmit (
++  IN     PXE_CDB                      *Cdb,
++  IN     EDKII_USB_ETHERNET_PROTOCOL  *This,
++  IN     VOID                         *Packet,
++  IN OUT UINTN                        *PacketLength
++  );
++
++EFI_STATUS
++EFIAPI
++UsbEthEemInterrupt (
++  IN EDKII_USB_ETHERNET_PROTOCOL  *This,
++  IN BOOLEAN                      IsNewTransfer,
++  IN UINTN                        PollingInterval,
++  IN EFI_USB_DEVICE_REQUEST       *Request
++  );
++
++EFI_STATUS
++EFIAPI
++GetUsbEthMacAddress (
++  IN  EDKII_USB_ETHERNET_PROTOCOL  *This,
++  OUT EFI_MAC_ADDRESS              *MacAddress
++  );
++
++EFI_STATUS
++EFIAPI
++UsbEthEemBulkSize (
++  IN  EDKII_USB_ETHERNET_PROTOCOL  *This,
++  OUT UINTN                        *BulkSize
++  );
++
++EFI_STATUS
++EFIAPI
++GetUsbEthFunDescriptor (
++  IN  EDKII_USB_ETHERNET_PROTOCOL  *This,
++  OUT USB_ETHERNET_FUN_DESCRIPTOR  *UsbEthFunDescriptor
++  );
++
++EFI_STATUS
++EFIAPI
++SetUsbEthPacketFilter (
++  IN EDKII_USB_ETHERNET_PROTOCOL  *This,
++  IN UINT16                       Value
++  );
+diff --git a/MdeModulePkg/Bus/Usb/UsbNetwork/UsbCdcEem/UsbCdcEem.inf b/MdeModulePkg/Bus/Usb/UsbNetwork/UsbCdcEem/UsbCdcEem.inf
+new file mode 100644
+--- /dev/null
++++ b/MdeModulePkg/Bus/Usb/UsbNetwork/UsbCdcEem/UsbCdcEem.inf
+@@ -0,0 +1,45 @@
++## @file
++#   USB CDC Ethernet Emulation Model (EEM) driver for the DXE phase.
++#
++# Copyright (c) 2026, appkins. All rights reserved.<BR>
++# SPDX-License-Identifier: BSD-2-Clause-Patent
++##
++
++[Defines]
++  INF_VERSION                    = 0x00010005
++  BASE_NAME                      = UsbCdcEem
++  FILE_GUID                      = 2ce7bcaf-b1e5-458a-b6ea-048292c45e1f
++  MODULE_TYPE                    = UEFI_DRIVER
++  VERSION_STRING                 = 1.0
++  ENTRY_POINT                    = UsbEemEntry
++
++[Sources]
++  UsbCdcEem.c
++  UsbCdcEem.h
++  UsbEemFraming.c
++  UsbEemFraming.h
++  UsbEemFunction.c
++  ComponentName.c
++
++[Packages]
++  MdePkg/MdePkg.dec
++  MdeModulePkg/MdeModulePkg.dec
++
++[LibraryClasses]
++  UefiDriverEntryPoint
++  UefiBootServicesTableLib
++  UefiLib
++  DebugLib
++  UefiUsbLib
++  MemoryAllocationLib
++  BaseMemoryLib
++  PcdLib
++
++[Protocols]
++  gEfiUsbIoProtocolGuid
++  gEfiDevicePathProtocolGuid
++  gEfiDriverBindingProtocolGuid
++  gEdkIIUsbEthProtocolGuid
++
++[Pcd]
++  gEfiMdeModulePkgTokenSpaceGuid.PcdUsbCdcEemMacAddress
+diff --git a/MdeModulePkg/Bus/Usb/UsbNetwork/UsbCdcEem/UsbEemFraming.c b/MdeModulePkg/Bus/Usb/UsbNetwork/UsbCdcEem/UsbEemFraming.c
+new file mode 100644
+--- /dev/null
++++ b/MdeModulePkg/Bus/Usb/UsbNetwork/UsbCdcEem/UsbEemFraming.c
+@@ -0,0 +1,125 @@
++/** @file
++  CDC-EEM wire framing.
++
++  Copyright (c) 2026, appkins. All rights reserved.<BR>
++  SPDX-License-Identifier: BSD-2-Clause-Patent
++**/
++
++#include "UsbEemFraming.h"
++
++EFI_STATUS
++UsbEemFrameTx (
++  OUT UINT8        *Out,
++  IN  UINTN        OutSize,
++  IN  CONST UINT8  *Eth,
++  IN  UINTN        EthLen,
++  OUT UINTN        *OutLen
++  )
++{
++  UINTN  Len;
++
++  if ((Out == NULL) || (Eth == NULL) || (OutLen == NULL)) {
++    return EFI_INVALID_PARAMETER;
++  }
++
++  //
++  // The length field counts the CRC field as well: the peer trims to
++  // len - ETH_FCS_LEN after validating it.
++  //
++  Len = EthLen + USB_EEM_CRC_LEN;
++
++  if ((Len < USB_EEM_MIN_DATA_LEN) || (Len > 0x3FFF)) {
++    return EFI_INVALID_PARAMETER;
++  }
++
++  if (OutSize < (USB_EEM_HEADER_LEN + Len)) {
++    return EFI_BUFFER_TOO_SMALL;
++  }
++
++  //
++  // bmType = 0 (data), bmCRC = 0 (sentinel). Little-endian.
++  //
++  Out[0] = (UINT8)(Len & 0xFF);
++  Out[1] = (UINT8)((Len >> 8) & 0x3F);
++
++  CopyMem (Out + USB_EEM_HEADER_LEN, Eth, EthLen);
++
++  //
++  // Written big-endian: the peer reads it with get_unaligned_be32 and
++  // compares against 0xdeadbeef. Little-endian here silently drops the
++  // frame -- no error is reported on either side.
++  //
++  Out[USB_EEM_HEADER_LEN + EthLen + 0] = 0xDE;
++  Out[USB_EEM_HEADER_LEN + EthLen + 1] = 0xAD;
++  Out[USB_EEM_HEADER_LEN + EthLen + 2] = 0xBE;
++  Out[USB_EEM_HEADER_LEN + EthLen + 3] = 0xEF;
++
++  *OutLen = USB_EEM_HEADER_LEN + Len;
++  return EFI_SUCCESS;
++}
++
++EFI_STATUS
++UsbEemNextRxFrame (
++  IN     CONST UINT8  *Buf,
++  IN     UINTN        BufLen,
++  IN OUT UINTN        *Offset,
++  OUT    CONST UINT8  **Frame,
++  OUT    UINTN        *FrameLen
++  )
++{
++  UINT16  Header;
++  UINTN   Len;
++
++  if ((Buf == NULL) || (Offset == NULL) || (Frame == NULL) || (FrameLen == NULL)) {
++    return EFI_INVALID_PARAMETER;
++  }
++
++  while ((*Offset + USB_EEM_HEADER_LEN) <= BufLen) {
++    Header   = (UINT16)(Buf[*Offset] | (Buf[*Offset + 1] << 8));
++    *Offset += USB_EEM_HEADER_LEN;
++
++    //
++    // Padding the device appends to force a short packet. Not an error, and
++    // not necessarily the end of the buffer.
++    //
++    if (Header == 0) {
++      continue;
++    }
++
++    if ((Header & BIT15) != 0) {
++      //
++      // A command packet. Nothing here needs answering: the peer only ever
++      // responds to Echo, and the hints carry no state this driver keeps.
++      // Step over its parameter bytes and keep walking.
++      //
++      Len = Header & 0x7FF;
++      if ((*Offset + Len) > BufLen) {
++        *Offset = BufLen;
++        return EFI_NOT_FOUND;
++      }
++
++      *Offset += Len;
++      continue;
++    }
++
++    Len = Header & 0x3FFF;
++
++    //
++    // A length that reaches past the buffer, or that leaves no Ethernet
++    // bytes once the CRC field is removed, means framing sync is lost.
++    // Abandon the whole buffer rather than walk it further.
++    //
++    if ((Len <= USB_EEM_CRC_LEN) || ((*Offset + Len) > BufLen)) {
++      *Offset = BufLen;
++      return EFI_NOT_FOUND;
++    }
++
++    *Frame    = Buf + *Offset;
++    *FrameLen = Len - USB_EEM_CRC_LEN;
++    *Offset  += Len;
++    return EFI_SUCCESS;
++  }
++
++  *Offset = BufLen;
++  return EFI_NOT_FOUND;
++}
+diff --git a/MdeModulePkg/Bus/Usb/UsbNetwork/UsbCdcEem/UsbEemFraming.h b/MdeModulePkg/Bus/Usb/UsbNetwork/UsbCdcEem/UsbEemFraming.h
+new file mode 100644
+--- /dev/null
++++ b/MdeModulePkg/Bus/Usb/UsbNetwork/UsbCdcEem/UsbEemFraming.h
+@@ -0,0 +1,96 @@
++/** @file
++  CDC-EEM wire framing, isolated from the UEFI driver so it can be unit
++  tested on a build host.
++
++  Copyright (c) 2026, appkins. All rights reserved.<BR>
++  SPDX-License-Identifier: BSD-2-Clause-Patent
++**/
++
++#pragma once
++
++#include <Uefi.h>
++#include <Library/BaseMemoryLib.h>
++
++//
++// CDC EEM 1.0, section 3. Every packet on either bulk pipe carries a 2-byte
++// little-endian header:
++//
++//   bit 15    bmType   0 = data, 1 = command
++//   Data:     bit 14   bmCRC (0 = sentinel, 1 = real CRC32)
++//             bits 13:0 length of the Ethernet frame INCLUDING the CRC field
++//   Command:  bit 14   reserved, bits 13:11 bmEEMCmd, bits 10:0 parameter
++//
++// A header of 0x0000 is a zero-length packet the device appends purely to
++// force a short packet; it is padding, not an error.
++//
++#define USB_EEM_HEADER_LEN  2
++#define USB_EEM_CRC_LEN     4
++
++//
++// The peer (Linux f_eem, eem_unwrap) rejects a data packet whose length is
++// below ETH_HLEN + ETH_FCS_LEN and frees the ENTIRE transfer when it does,
++// so one runt frame would take every frame bundled with it. Never emit one.
++//
++#define USB_EEM_MIN_DATA_LEN  18
++
++//
++// Largest Ethernet frame carried, matching UsbCdcNcm's USB_ETHERNET_FRAME_SIZE.
++//
++#define USB_EEM_MAX_FRAME  0x5F2
++
++//
++// Receive staging buffer. One max frame plus header, CRC and a possible
++// 2-byte pad is 1530; 4096 leaves room for a bundle at negligible cost.
++//
++#define USB_EEM_MAX_BULK_SIZE  0x1000
++
++/**
++  Wrap one Ethernet frame in an EEM data packet.
++
++  @param[out] Out       Destination buffer.
++  @param[in]  OutSize   Bytes available at Out.
++  @param[in]  Eth       The Ethernet frame, without any FCS.
++  @param[in]  EthLen    Length of Eth.
++  @param[out] OutLen    Bytes written to Out.
++
++  @retval EFI_SUCCESS            The packet was written.
++  @retval EFI_INVALID_PARAMETER  A pointer was NULL, or EthLen is outside
++                                 what EEM can express or what the peer accepts.
++  @retval EFI_BUFFER_TOO_SMALL   Out is too small for the wrapped frame.
++**/
++EFI_STATUS
++UsbEemFrameTx (
++  OUT UINT8        *Out,
++  IN  UINTN        OutSize,
++  IN  CONST UINT8  *Eth,
++  IN  UINTN        EthLen,
++  OUT UINTN        *OutLen
++  );
++
++/**
++  Walk the next Ethernet frame out of a received bulk transfer, stepping over
++  command packets and zero-length padding.
++
++  Offset is the caller's cursor into Buf and is advanced past whatever this
++  call consumed. On a malformed buffer the cursor is moved to BufLen so the
++  caller abandons it rather than re-walking it.
++
++  @param[in]      Buf       The received transfer.
++  @param[in]      BufLen    Valid bytes in Buf.
++  @param[in, out] Offset    Cursor into Buf.
++  @param[out]     Frame     Set to the frame inside Buf (no copy is made).
++  @param[out]     FrameLen  Length of Frame, with the CRC field removed.
++
++  @retval EFI_SUCCESS            A frame was found.
++  @retval EFI_NOT_FOUND          The buffer holds no further frame, or is
++                                 malformed and has been abandoned.
++  @retval EFI_INVALID_PARAMETER  A pointer was NULL.
++**/
++EFI_STATUS
++UsbEemNextRxFrame (
++  IN     CONST UINT8  *Buf,
++  IN     UINTN        BufLen,
++  IN OUT UINTN        *Offset,
++  OUT    CONST UINT8  **Frame,
++  OUT    UINTN        *FrameLen
++  );
+diff --git a/MdeModulePkg/Bus/Usb/UsbNetwork/UsbCdcEem/UsbEemFunction.c b/MdeModulePkg/Bus/Usb/UsbNetwork/UsbCdcEem/UsbEemFunction.c
+new file mode 100644
+--- /dev/null
++++ b/MdeModulePkg/Bus/Usb/UsbNetwork/UsbCdcEem/UsbEemFunction.c
+@@ -0,0 +1,366 @@
++/** @file
++  This file contains code for the USB CDC EEM descriptor and bulk-transfer
++  implementation of EDKII_USB_ETHERNET_PROTOCOL.
++
++  Copyright (c) 2026, appkins. All rights reserved.<BR>
++  SPDX-License-Identifier: BSD-2-Clause-Patent
++**/
++
++#include "UsbCdcEem.h"
++
++/**
++  Load the entire configuration descriptor for the device.
++
++  @param[in]      UsbIo       A pointer to the EFI_USB_IO_PROTOCOL instance.
++  @param[in, out] ConfigDesc  On output, the allocated configuration descriptor.
++                              Caller frees it.
++
++  @retval EFI_SUCCESS           The request executed successfully.
++  @retval EFI_OUT_OF_RESOURCES  The configuration descriptor could not be
++                                allocated.
++  @retval EFI_TIMEOUT           A timeout occurred executing the request.
++  @retval EFI_DEVICE_ERROR      The request failed due to a device error.
++
++**/
++EFI_STATUS
++LoadAllDescriptor (
++  IN     EFI_USB_IO_PROTOCOL        *UsbIo,
++  IN OUT EFI_USB_CONFIG_DESCRIPTOR  **ConfigDesc
++  )
++{
++  EFI_STATUS                 Status;
++  UINT32                     TransStatus;
++  EFI_USB_CONFIG_DESCRIPTOR  Tmp;
++
++  Status = UsbIo->UsbGetConfigDescriptor (UsbIo, &Tmp);
++  ASSERT_EFI_ERROR (Status);
++  if (EFI_ERROR (Status)) {
++    return Status;
++  }
++
++  Status = gBS->AllocatePool (EfiBootServicesData, Tmp.TotalLength, (VOID **)ConfigDesc);
++  ASSERT_EFI_ERROR (Status);
++  if (EFI_ERROR (Status)) {
++    return Status;
++  }
++
++  Status = UsbGetDescriptor (
++             UsbIo,
++             USB_DESC_TYPE_CONFIG << 8 | (Tmp.ConfigurationValue - 1), // zero based
++             0,
++             Tmp.TotalLength,
++             *ConfigDesc,
++             &TransStatus
++             );
++  return Status;
++}
++
++/**
++  Locate the two bulk endpoints of the single CDC EEM interface.
++
++  EEM has no interrupt endpoint and no alternate settings to probe, unlike
++  UsbCdcEcm's GetEndpoint: this interface always presents both of its
++  endpoints on the current (and only) alternate setting.
++
++  @param[in]      UsbIo         A pointer to the EFI_USB_IO_PROTOCOL instance.
++  @param[in, out] UsbEthDriver  The driver context to fill in with endpoint
++                                addresses.
++
++**/
++VOID
++GetEndpoint (
++  IN     EFI_USB_IO_PROTOCOL  *UsbIo,
++  IN OUT USB_ETHERNET_DRIVER  *UsbEthDriver
++  )
++{
++  EFI_STATUS                    Status;
++  UINT8                         Index;
++  EFI_USB_INTERFACE_DESCRIPTOR  Interface;
++  EFI_USB_ENDPOINT_DESCRIPTOR   Endpoint;
++
++  Status = UsbIo->UsbGetInterfaceDescriptor (UsbIo, &Interface);
++  if (EFI_ERROR (Status)) {
++    return;
++  }
++
++  for (Index = 0; Index < Interface.NumEndpoints; Index++) {
++    Status = UsbIo->UsbGetEndpointDescriptor (UsbIo, Index, &Endpoint);
++    if (EFI_ERROR (Status)) {
++      continue;
++    }
++
++    if ((Endpoint.Attributes & (BIT0 | BIT1)) != USB_ENDPOINT_BULK) {
++      continue;
++    }
++
++    if ((Endpoint.EndpointAddress & BIT7) != 0) {
++      UsbEthDriver->BulkInEndpoint = Endpoint.EndpointAddress;
++    } else {
++      UsbEthDriver->BulkOutEndpoint = Endpoint.EndpointAddress;
++    }
++  }
++}
++
++/**
++  Receive one Ethernet frame.
++
++  One bulk transfer may carry several EEM data packets bundled together, and
++  NetworkCommon wants exactly one Ethernet frame per call, so the staged
++  transfer is walked with a byte cursor (UsbEthDriver->RxOffset) and refilled
++  with a new bulk transfer only once it is exhausted.
++
++  @param[in]      Cdb           A pointer to the command descriptor block.
++  @param[in]      This          A pointer to the EDKII_USB_ETHERNET_PROTOCOL
++                                instance.
++  @param[in, out] Packet        On output, one Ethernet frame.
++  @param[in, out] PacketLength  On input, the size of Packet. On output, the
++                                length of the frame written to Packet.
++
++  @retval EFI_SUCCESS      One frame was copied to Packet.
++  @retval EFI_NOT_READY    No frame is available right now.
++  @retval other            The underlying bulk transfer failed.
++
++**/
++EFI_STATUS
++EFIAPI
++UsbEthEemReceive (
++  IN     PXE_CDB                      *Cdb,
++  IN     EDKII_USB_ETHERNET_PROTOCOL  *This,
++  IN OUT VOID                         *Packet,
++  IN OUT UINTN                        *PacketLength
++  )
++{
++  EFI_STATUS           Status;
++  USB_ETHERNET_DRIVER  *UsbEthDriver;
++  UINT32               TransStatus;
++  UINTN                BulkDataLength;
++  CONST UINT8          *Frame;
++  UINTN                FrameLen;
++
++  UsbEthDriver = USB_EEM_DEV_FROM_THIS (This);
++
++  if (UsbEthDriver->BulkInEndpoint == 0) {
++    GetEndpoint (UsbEthDriver->UsbIo, UsbEthDriver);
++  }
++
++  //
++  // Refill only when the previous transfer is walked out.
++  //
++  if (UsbEthDriver->RxOffset >= UsbEthDriver->RxLength) {
++    BulkDataLength         = USB_EEM_MAX_BULK_SIZE;
++    UsbEthDriver->RxOffset = 0;
++    UsbEthDriver->RxLength = 0;
++
++    Status = UsbEthDriver->UsbIo->UsbBulkTransfer (
++                                    UsbEthDriver->UsbIo,
++                                    UsbEthDriver->BulkInEndpoint,
++                                    UsbEthDriver->RxBuffer,
++                                    &BulkDataLength,
++                                    USB_ETHERNET_BULK_TIMEOUT,
++                                    &TransStatus
++                                    );
++    if (EFI_ERROR (Status)) {
++      //
++      // An empty poll is the normal case on an idle link, not a fault.
++      //
++      return (Status == EFI_TIMEOUT) ? EFI_NOT_READY : Status;
++    }
++
++    UsbEthDriver->RxLength = BulkDataLength;
++  }
++
++  Status = UsbEemNextRxFrame (
++             UsbEthDriver->RxBuffer,
++             UsbEthDriver->RxLength,
++             &UsbEthDriver->RxOffset,
++             &Frame,
++             &FrameLen
++             );
++  if (EFI_ERROR (Status)) {
++    return EFI_NOT_READY;
++  }
++
++  if (FrameLen > *PacketLength) {
++    return EFI_NOT_READY;
++  }
++
++  CopyMem (Packet, Frame, FrameLen);
++  *PacketLength = FrameLen;
++
++  return EFI_SUCCESS;
++}
++
++/**
++  Transmit one Ethernet frame, wrapped in an EEM data packet.
++
++  @param[in]      Cdb           A pointer to the command descriptor block.
++  @param[in]      This          A pointer to the EDKII_USB_ETHERNET_PROTOCOL
++                                instance.
++  @param[in]      Packet        The Ethernet frame to send.
++  @param[in, out] PacketLength  The length of Packet.
++
++  @retval EFI_SUCCESS      The frame was wrapped and transmitted.
++  @retval other            UsbEemFrameTx or the underlying bulk transfer
++                           failed.
++
++**/
++EFI_STATUS
++EFIAPI
++UsbEthEemTransmit (
++  IN     PXE_CDB                      *Cdb,
++  IN     EDKII_USB_ETHERNET_PROTOCOL  *This,
++  IN     VOID                         *Packet,
++  IN OUT UINTN                        *PacketLength
++  )
++{
++  EFI_STATUS           Status;
++  USB_ETHERNET_DRIVER  *UsbEthDriver;
++  UINT32               TransStatus;
++  UINTN                WrappedLength;
++
++  UsbEthDriver = USB_EEM_DEV_FROM_THIS (This);
++
++  if (UsbEthDriver->BulkOutEndpoint == 0) {
++    GetEndpoint (UsbEthDriver->UsbIo, UsbEthDriver);
++  }
++
++  Status = UsbEemFrameTx (
++             UsbEthDriver->TxBuffer,
++             USB_EEM_MAX_BULK_SIZE,
++             (CONST UINT8 *)Packet,
++             *PacketLength,
++             &WrappedLength
++             );
++  if (EFI_ERROR (Status)) {
++    return Status;
++  }
++
++  Status = UsbEthDriver->UsbIo->UsbBulkTransfer (
++                                  UsbEthDriver->UsbIo,
++                                  UsbEthDriver->BulkOutEndpoint,
++                                  UsbEthDriver->TxBuffer,
++                                  &WrappedLength,
++                                  USB_ETHERNET_TRANSFER_TIMEOUT,
++                                  &TransStatus
++                                  );
++  return Status;
++}
++
++/**
++  EEM has no notification interface, so there is no interrupt endpoint to
++  arm and no link-state or speed change will ever be reported. Succeed
++  silently: NetworkCommon calls this under ASSERT_EFI_ERROR, so returning
++  EFI_UNSUPPORTED would assert every DEBUG boot.
++
++  This is also how the contract's two consequences are satisfied, and both
++  are satisfied by inaction rather than by code:
++
++    * Link-up is assumed on enumeration -- NetworkCommon patch 0100 already
++      defaults CableDetect to 1 and makes it sticky, so nothing here waits
++      for a NETWORK_CONNECTION notification that can never arrive.
++    * The link speed is fixed -- ECM and NCM only ever change the reported
++      speed on a CONNECTION_SPEED_CHANGE notification, so a driver that
++      never delivers one reports a constant speed for the life of the link.
++**/
++EFI_STATUS
++EFIAPI
++UsbEthEemInterrupt (
++  IN EDKII_USB_ETHERNET_PROTOCOL  *This,
++  IN BOOLEAN                      IsNewTransfer,
++  IN UINTN                        PollingInterval,
++  IN EFI_USB_DEVICE_REQUEST       *Request
++  )
++{
++  return EFI_SUCCESS;
++}
++
++/**
++  The station address comes from a build-time PCD: EEM carries no Ethernet
++  functional descriptor, so unlike ECM/NCM there is no iMACAddress to read.
++  The BMC identifies the Redfish host interface by this address, so it is a
++  contract value, not a discovered one.
++**/
++EFI_STATUS
++EFIAPI
++GetUsbEthMacAddress (
++  IN  EDKII_USB_ETHERNET_PROTOCOL  *This,
++  OUT EFI_MAC_ADDRESS              *MacAddress
++  )
++{
++  USB_ETHERNET_DRIVER  *UsbEthDriver;
++
++  if ((This == NULL) || (MacAddress == NULL)) {
++    return EFI_INVALID_PARAMETER;
++  }
++
++  UsbEthDriver = USB_EEM_DEV_FROM_THIS (This);
++  CopyMem (MacAddress, &UsbEthDriver->MacAddress, sizeof (EFI_MAC_ADDRESS));
++
++  return EFI_SUCCESS;
++}
++
++EFI_STATUS
++EFIAPI
++UsbEthEemBulkSize (
++  IN  EDKII_USB_ETHERNET_PROTOCOL  *This,
++  OUT UINTN                        *BulkSize
++  )
++{
++  if (BulkSize == NULL) {
++    return EFI_INVALID_PARAMETER;
++  }
++
++  *BulkSize = USB_EEM_MAX_FRAME;
++  return EFI_SUCCESS;
++}
++
++/**
++  Synthesized: EEM sends no CDC Ethernet functional descriptor at all.
++
++  NumberMcFilters is reported as 0 deliberately. PxeFunction.c branches on
++  it, and zero selects the RECEIVE_FILTER_ALL_MULTICAST path, which never
++  calls SetUsbEthMcastFilter. A point-to-point link has no use for hardware
++  multicast filtering.
++**/
++EFI_STATUS
++EFIAPI
++GetUsbEthFunDescriptor (
++  IN  EDKII_USB_ETHERNET_PROTOCOL  *This,
++  OUT USB_ETHERNET_FUN_DESCRIPTOR  *UsbEthFunDescriptor
++  )
++{
++  if (UsbEthFunDescriptor == NULL) {
++    return EFI_INVALID_PARAMETER;
++  }
++
++  ZeroMem (UsbEthFunDescriptor, sizeof (USB_ETHERNET_FUN_DESCRIPTOR));
++
++  UsbEthFunDescriptor->FunctionLength = sizeof (USB_ETHERNET_FUN_DESCRIPTOR);
++  //
++  // 0x24 is CS_INTERFACE. The pinned tree defines ETHERNET_FUN_DESCRIPTOR
++  // (0x0F) but has no CS_INTERFACE macro, and nothing re-parses this as a
++  // real USB descriptor -- NetworkCommon reads only NumberMcFilters -- so the
++  // literal is honest rather than inventing a macro upstream does not have.
++  //
++  UsbEthFunDescriptor->DescriptorType     = 0x24;
++  UsbEthFunDescriptor->DescriptorSubtype  = ETHERNET_FUN_DESCRIPTOR;
++  UsbEthFunDescriptor->MaxSegmentSize     = USB_EEM_MAX_FRAME;
++  UsbEthFunDescriptor->NumberMcFilters    = 0;
++  UsbEthFunDescriptor->NumberPowerFilters = 0;
++
++  return EFI_SUCCESS;
++}
++
++/**
++  There is no control interface to send SetEthernetPacketFilter to, and the
++  peer is a point-to-point gadget that filters nothing. Accept and ignore.
++**/
++EFI_STATUS
++EFIAPI
++SetUsbEthPacketFilter (
++  IN EDKII_USB_ETHERNET_PROTOCOL  *This,
++  IN UINT16                       Value
++  )
++{
++  return EFI_SUCCESS;
++}
+diff --git a/MdeModulePkg/Bus/Usb/UsbNetwork/UsbCdcEem/ComponentName.c b/MdeModulePkg/Bus/Usb/UsbNetwork/UsbCdcEem/ComponentName.c
+new file mode 100644
+--- /dev/null
++++ b/MdeModulePkg/Bus/Usb/UsbNetwork/UsbCdcEem/ComponentName.c
+@@ -0,0 +1,170 @@
++/** @file
++  This file contains code for USB Eem Driver Component Name definitions
++
++  Copyright (c) 2026, appkins. All rights reserved.<BR>
++  SPDX-License-Identifier: BSD-2-Clause-Patent
++**/
++#include "UsbCdcEem.h"
++
++GLOBAL_REMOVE_IF_UNREFERENCED EFI_UNICODE_STRING_TABLE  gUsbEemDriverNameTable[] = {
++  {
++    "eng;en",
++    L"USB CDC EEM Driver"
++  },
++  {
++    NULL,
++    NULL
++  }
++};
++
++EFI_STATUS
++EFIAPI
++UsbEemComponentNameGetDriverName (
++  IN  EFI_COMPONENT_NAME_PROTOCOL  *This,
++  IN  CHAR8                        *Language,
++  OUT CHAR16                       **DriverName
++  );
++
++EFI_STATUS
++EFIAPI
++UsbEemComponentNameGetControllerName (
++  IN EFI_COMPONENT_NAME_PROTOCOL  *This,
++  IN EFI_HANDLE                   Controller,
++  IN EFI_HANDLE                   ChildHandle        OPTIONAL,
++  IN CHAR8                        *Language,
++  OUT CHAR16                      **ControllerName
++  );
++
++GLOBAL_REMOVE_IF_UNREFERENCED EFI_COMPONENT_NAME_PROTOCOL  gUsbEemComponentName = {
++  UsbEemComponentNameGetDriverName,
++  UsbEemComponentNameGetControllerName,
++  "eng"
++};
++
++GLOBAL_REMOVE_IF_UNREFERENCED EFI_COMPONENT_NAME2_PROTOCOL  gUsbEemComponentName2 = {
++  (EFI_COMPONENT_NAME2_GET_DRIVER_NAME)UsbEemComponentNameGetDriverName,
++  (EFI_COMPONENT_NAME2_GET_CONTROLLER_NAME)UsbEemComponentNameGetControllerName,
++  "en"
++};
++
++/**
++  Retrieves a Unicode string that is the user readable name of the driver.
++
++  This function retrieves the user readable name of a driver in the form of a
++  Unicode string. If the driver specified by This has a user readable name in
++  the language specified by Language, then a pointer to the driver name is
++  returned in DriverName, and EFI_SUCCESS is returned. If the driver specified
++  by This does not support the language specified by Language,
++  then EFI_UNSUPPORTED is returned.
++
++  @param[in]  This              A pointer to the EFI_COMPONENT_NAME2_PROTOCOL or
++                                EFI_COMPONENT_NAME_PROTOCOL instance.
++  @param[in]  Language          A pointer to a Null-terminated ASCII string
++                                array indicating the language. This is the
++                                language of the driver name that the caller is
++                                requesting, and it must match one of the
++                                languages specified in SupportedLanguages. The
++                                number of languages supported by a driver is up
++                                to the driver writer. Language is specified
++                                in RFC 4646 or ISO 639-2 language code format.
++  @param[out] DriverName        A pointer to the Unicode string to return.
++                                This Unicode string is the name of the
++                                driver specified by This in the language
++                                specified by Language.
++
++  @retval EFI_SUCCESS           The Unicode string for the Driver specified by
++                                This and the language specified by Language was
++                                returned in DriverName.
++  @retval EFI_INVALID_PARAMETER Language is NULL.
++  @retval EFI_INVALID_PARAMETER DriverName is NULL.
++  @retval EFI_UNSUPPORTED       The driver specified by This does not support
++                                the language specified by Language.
++
++**/
++EFI_STATUS
++EFIAPI
++UsbEemComponentNameGetDriverName (
++  IN  EFI_COMPONENT_NAME_PROTOCOL  *This,
++  IN  CHAR8                        *Language,
++  OUT CHAR16                       **DriverName
++  )
++{
++  return LookupUnicodeString2 (
++           Language,
++           This->SupportedLanguages,
++           gUsbEemDriverNameTable,
++           DriverName,
++           (BOOLEAN)(This == &gUsbEemComponentName)
++           );
++}
++
++/**
++  Retrieves a Unicode string that is the user readable name of the controller
++  that is being managed by a driver.
++
++  This function retrieves the user readable name of the controller specified by
++  ControllerHandle and ChildHandle in the form of a Unicode string. If the
++  driver specified by This has a user readable name in the language specified by
++  Language, then a pointer to the controller name is returned in ControllerName,
++  and EFI_SUCCESS is returned.  If the driver specified by This is not currently
++  managing the controller specified by ControllerHandle and ChildHandle,
++  then EFI_UNSUPPORTED is returned.  If the driver specified by This does not
++  support the language specified by Language, then EFI_UNSUPPORTED is returned.
++
++  @param[in]  This              A pointer to the EFI_COMPONENT_NAME2_PROTOCOL or
++                                EFI_COMPONENT_NAME_PROTOCOL instance.
++  @param[in]  Controller        The handle of a controller that the driver
++                                specified by This is managing.  This handle
++                                specifies the controller whose name is to be
++                                returned.
++  @param[in]  ChildHandle       The handle of the child controller to retrieve
++                                the name of.  This is an optional parameter that
++                                may be NULL.  It will be NULL for device
++                                drivers.  It will also be NULL for a bus drivers
++                                that wish to retrieve the name of the bus
++                                controller.  It will not be NULL for a bus
++                                driver that wishes to retrieve the name of a
++                                child controller.
++  @param[in]  Language          A pointer to a Null-terminated ASCII string
++                                array indicating the language.  This is the
++                                language of the driver name that the caller is
++                                requesting, and it must match one of the
++                                languages specified in SupportedLanguages. The
++                                number of languages supported by a driver is up
++                                to the driver writer. Language is specified in
++                                RFC 4646 or ISO 639-2 language code format.
++  @param[out] ControllerName    A pointer to the Unicode string to return.
++                                This Unicode string is the name of the
++                                controller specified by ControllerHandle and
++                                ChildHandle in the language specified by
++                                Language from the point of view of the driver
++                                specified by This.
++
++  @retval EFI_SUCCESS           The Unicode string for the user readable name in
++                                the language specified by Language for the
++                                driver specified by This was returned in
++                                DriverName.
++  @retval EFI_INVALID_PARAMETER ControllerHandle is not a valid EFI_HANDLE.
++  @retval EFI_INVALID_PARAMETER ChildHandle is not NULL and it is not a valid
++                                EFI_HANDLE.
++  @retval EFI_INVALID_PARAMETER Language is NULL.
++  @retval EFI_INVALID_PARAMETER ControllerName is NULL.
++  @retval EFI_UNSUPPORTED       The driver specified by This is not currently
++                                managing the controller specified by
++                                ControllerHandle and ChildHandle.
++  @retval EFI_UNSUPPORTED       The driver specified by This does not support
++                                the language specified by Language.
++
++**/
++EFI_STATUS
++EFIAPI
++UsbEemComponentNameGetControllerName (
++  IN EFI_COMPONENT_NAME_PROTOCOL  *This,
++  IN EFI_HANDLE                   Controller,
++  IN EFI_HANDLE                   ChildHandle        OPTIONAL,
++  IN CHAR8                        *Language,
++  OUT CHAR16                      **ControllerName
++  )
++{
++  return EFI_UNSUPPORTED;
++}
+diff --git a/MdeModulePkg/MdeModulePkg.dec b/MdeModulePkg/MdeModulePkg.dec
+--- a/MdeModulePkg/MdeModulePkg.dec
++++ b/MdeModulePkg/MdeModulePkg.dec
+@@ -1250,6 +1250,14 @@
+   # @Prompt USB Network periodic timer interval for asynchronous transfers in ms.
+   # @ValidRange 0x80000001 | 1 - 255
+   gEfiMdeModulePkgTokenSpaceGuid.PcdUsbNetworkPeriodicTimerInterval|16|UINT8|0x30001063
++
++  ## Station address for the USB CDC-EEM NIC.
++  #  CDC-EEM carries no Ethernet functional descriptor, so unlike ECM and NCM
++  #  there is no iMACAddress to read the address from. All zeroes means the
++  #  platform has not set it, and UsbCdcEem then declines to bind rather than
++  #  present a NIC with an invalid station address.
++  # @Prompt USB CDC-EEM station address.
++  gEfiMdeModulePkgTokenSpaceGuid.PcdUsbCdcEemMacAddress|{0x00, 0x00, 0x00, 0x00, 0x00, 0x00}|VOID*|0x30001064
+ 
+ [PcdsFixedAtBuild, PcdsPatchableInModule]
+   ## Dynamic type PCD can be registered callback function for Pcd setting action.
