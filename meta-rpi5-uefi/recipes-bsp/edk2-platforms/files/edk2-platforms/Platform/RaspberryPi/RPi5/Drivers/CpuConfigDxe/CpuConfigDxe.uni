@@ -9,24 +9,24 @@
 #langdef en-US "English"
 
 #string STR_FORM_SET_TITLE     #language en-US "CPU Configuration"
-#string STR_FORM_SET_TITLE_HELP #language en-US "ARM clock policy: an explicit frequency cap up to the customary 3.0 GHz Pi 5 overclock, mirrored as the Redfish Processor properties SpeedLimitMHz and SpeedLocked. Changes are written to config.txt and take effect at the next reset."
+#string STR_FORM_SET_TITLE_HELP #language en-US "ARM clock policy: an explicit frequency cap up to the customary 3.0 GHz Pi 5 overclock, mirrored as the Redfish Processor properties SpeedLimitMHz and SpeedLocked. Changes are written to uefi-cfg.txt on the boot volume (included last by config.txt) and take effect at the next reset."
 #string STR_FORM_TITLE         #language en-US "CPU Configuration"
 
-#string STR_CONFIGURED_PROMPT  #language en-US "Configured in config.txt"
-#string STR_CONFIGURED_HELP    #language en-US "What the boot volume's config.txt currently requests - the frequency the VPU will program at the NEXT reset. After an apply this line is ahead of what the cores are running right now."
+#string STR_CONFIGURED_PROMPT  #language en-US "Configured on boot volume"
+#string STR_CONFIGURED_HELP    #language en-US "What the boot volume's config.txt plus the uefi-cfg.txt override currently request - the frequency the VPU will program at the NEXT reset. After an apply this line is ahead of what the cores are running right now."
 #string STR_CONFIGURED_VALUE   #language en-US "(not read)"
 
 #string STR_LIMIT_PROMPT       #language en-US "CPU Speed Limit (MHz)"
-#string STR_LIMIT_HELP         #language en-US "Explicit ARM frequency cap (config.txt arm_freq). 0 removes the override entirely and the SoC runs the shipped stock configuration (2400 MHz). Nonzero values are applied clamped to 1500-3000 MHz. Overclocks an individual SoC cannot hold may hang or fail to boot; recover by editing config.txt from any FAT reader (the BMC's mass-storage view included)."
+#string STR_LIMIT_HELP         #language en-US "Explicit ARM frequency cap (arm_freq in the managed uefi-cfg.txt block). 0 sets no cap: the SoC keeps its stock 2400 MHz ceiling. Nonzero values are applied clamped to 1500-3000 MHz. Lowering the cap also takes effect for the current boot (VPU mailbox); raising it needs the reset that rebuilds the DVFS table. Overclocks an individual SoC cannot hold may hang or fail to boot; recover by deleting the managed block from uefi-cfg.txt with any FAT reader (the BMC's mass-storage view included)."
 
 #string STR_LOCKED_PROMPT      #language en-US "Lock at Speed Limit"
-#string STR_LOCKED_HELP        #language en-US "Checked (default): the cores are pinned at the configured limit (force_turbo), for deterministic performance. Unchecked: force_turbo=0 is written and DVFS may scale the cores below the limit under light load."
+#string STR_LOCKED_HELP        #language en-US "Checked (default): the OS runs with the cores pinned at the configured ceiling (force_turbo=1 in the managed uefi-cfg.txt block), for deterministic performance. Unchecked: force_turbo=0 is written and the OS's DVFS may scale the cores below the ceiling under light load. The firmware phase always runs at the allowed maximum - it requests its own clock over the VPU mailbox."
 
 #string STR_DELTA_PROMPT       #language en-US "Over-Voltage Delta (uV)"
-#string STR_DELTA_HELP         #language en-US "Extra core voltage headroom in microvolts (config.txt over_voltage_delta), written only when the configured limit exceeds the stock 2400 MHz. Raising voltage increases heat; the VPU still thermal-throttles regardless."
+#string STR_DELTA_HELP         #language en-US "Extra core voltage headroom in microvolts (over_voltage_delta in the managed uefi-cfg.txt block), written only when the configured limit exceeds the stock 2400 MHz. Raising voltage increases heat; the VPU still thermal-throttles regardless."
 
 #string STR_WARNING_1          #language en-US "Overclocking is at your own risk. The VPU firmware still"
 #string STR_WARNING_2          #language en-US "thermal-throttles; an unstable overclock can fail to boot."
 
-#string STR_APPLY_PROMPT       #language en-US "Apply to config.txt now"
-#string STR_APPLY_HELP         #language en-US "Save the settings, rewrite the managed block in config.txt immediately, and offer a reset. Without this, the change is applied to config.txt automatically at the end of this boot and takes effect one reset later."
+#string STR_APPLY_PROMPT       #language en-US "Apply to uefi-cfg.txt now"
+#string STR_APPLY_HELP         #language en-US "Save the settings, apply the clock to the current boot (up to this boot's ceiling), rewrite the managed block in uefi-cfg.txt, and offer a reset. Without this, the change is applied automatically at the end of this boot and the new ceiling takes effect one reset later."

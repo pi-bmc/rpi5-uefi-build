@@ -81,6 +81,7 @@ do_stage_bootfiles () {
     # candidate list is updated to match.
     install -m 0644 "${DEPLOY_DIR_IMAGE}/RPI_EFI.fd" "${boot}/armstub8-2712.bin"
     install -m 0644 "${DEPLOY_DIR_IMAGE}/config.txt" "${boot}/config.txt"
+    install -m 0644 "${DEPLOY_DIR_IMAGE}/uefi-cfg.txt" "${boot}/uefi-cfg.txt"
 
     # The VPU bootloader's tree (see linux-stable-dtbs for why it is the
     # base tree only). Twice: at the root and under broadcom/ (the layout

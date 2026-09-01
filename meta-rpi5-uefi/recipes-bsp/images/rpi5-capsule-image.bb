@@ -71,6 +71,20 @@ do_stage_capsule () {
     install -m 0644 "${DEPLOY_DIR_IMAGE}/RPi5Firmware.cap" \
         "${staging}/EFI/UpdateCapsule/RPi5Firmware.cap"
 
+    # The build's config.txt rides beside the capsule as a sidecar (never
+    # a capsule payload: the appliers skip it by name). Once the firmware
+    # on the boot medium is proven to match this build -- verified apply
+    # or already-running version -- Rpi5CapsuleApp / RpiCapsuleOnDiskLib
+    # converge it onto every volume carrying the firmware file. config.txt
+    # is firmware-owned and coupled to the FD layout (device_tree_address);
+    # user overrides belong in uefi-cfg.txt, which updates never touch.
+    if [ ! -f "${DEPLOY_DIR_IMAGE}/config.txt" ]; then
+        bbfatal "No config.txt in ${DEPLOY_DIR_IMAGE}: rebuild rpi5-uefi-firmware (its do_deploy ships it)."
+    fi
+
+    install -m 0644 "${DEPLOY_DIR_IMAGE}/config.txt" \
+        "${staging}/EFI/UpdateCapsule/config.txt"
+
     # The self-applying updater, on the removable-media default boot path:
     # booting this volume (BMC boot override, boot menu, or fallback) runs
     # it, and it applies the capsule above and deletes it. See

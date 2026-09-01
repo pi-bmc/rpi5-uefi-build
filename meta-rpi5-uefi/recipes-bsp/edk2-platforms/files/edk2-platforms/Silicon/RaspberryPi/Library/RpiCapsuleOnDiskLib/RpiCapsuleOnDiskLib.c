@@ -112,6 +112,27 @@ STATIC CONST CHAR16  *mFirmwareFileNames[] = {
 
 STATIC BOOLEAN  mRpiCodScanDone = FALSE;
 
+//
+// The build's config.txt rides the capsule volume as a sidecar in the
+// drop box (staged by rpi5-capsule-image.bb). It is not a capsule --
+// the collectors skip it by name -- and it is firmware-owned state,
+// coupled to the FD layout through device_tree_address: once the
+// firmware on the media is proven to match the capsule build, the
+// sidecar is converged onto every volume carrying the firmware file.
+// User overrides belong in uefi-cfg.txt, which config.txt includes
+// last and which no update path ever touches.
+//
+#define SIDECAR_CONFIG_NAME  L"config.txt"
+
+//
+// Set only at the points that prove the firmware on the media is the
+// capsule's build: a verified apply, or a capsule already running.
+// A blind (unverifiable) apply does not count -- pairing a config.txt
+// with firmware it was not built against is how device_tree_address
+// breaks.
+//
+STATIC BOOLEAN  mMediaFirmwareCurrent = FALSE;
+
 /**
   Advertise EFI_OS_INDICATIONS_FILE_CAPSULE_DELIVERY_SUPPORTED.
 
@@ -335,7 +356,10 @@ DropBoxHasCapsules (
        !EFI_ERROR (Status) && !NoFile && (Info != NULL) && !Found;
        Status = FileHandleFindNextFile (Dir, Info, &NoFile))
   {
-    if (((Info->Attribute & EFI_FILE_DIRECTORY) == 0) && (Info->FileSize > 0)) {
+    if (((Info->Attribute & EFI_FILE_DIRECTORY) == 0) &&
+        (Info->FileSize > 0) &&
+        (StrCmp (Info->FileName, SIDECAR_CONFIG_NAME) != 0))
+    {
       Found = TRUE;
     }
   }
@@ -910,6 +934,7 @@ ApplyOneCapsule (
 
     if (CapsuleVersion == RunningVersion) {
       Print (L"RpiCapsuleOnDisk: %s is the running version already, skipping\n", Name);
+      mMediaFirmwareCurrent = TRUE;
       if (CanDelete) {
         if (EFI_ERROR (FileHandleDelete (File))) {
           FileHandleClose (File);
@@ -969,6 +994,7 @@ ApplyOneCapsule (
     }
 
     Print (L"RpiCapsuleOnDisk: %s applied and VERIFIED on disk\n", Name);
+    mMediaFirmwareCurrent = TRUE;
   } else {
     Print (L"RpiCapsuleOnDisk: %s applied (unverified: payload location unknown)\n", Name);
   }
@@ -991,6 +1017,220 @@ ApplyOneCapsule (
   }
 
   return TRUE;
+}
+
+/**
+  Converge config.txt on every firmware-carrying volume to the sidecar
+  copy shipped beside the capsule. Compare-first and quiet work when
+  already current; loud on failure but never fatal to the update that
+  already applied -- the next capsule event retries. The write is in
+  place with the truncate last, so config.txt never transits through
+  nonexistence and a mid-write power cut garbles a tail rather than
+  losing the file.
+
+  @param[in] Dir  Open handle on the capsule volume's drop box.
+**/
+STATIC
+VOID
+InstallSidecarConfig (
+  IN EFI_FILE_HANDLE  Dir
+  )
+{
+  EFI_STATUS       Status;
+  EFI_FILE_HANDLE  File;
+  UINT64           FileSize;
+  UINTN            ReadSize;
+  UINTN            WriteLen;
+  UINT8            *Wanted;
+  UINTN            WantedLen;
+  EFI_HANDLE       *Handles;
+  UINTN            HandleCount;
+  UINTN            Index;
+  UINTN            NameIndex;
+  EFI_FILE_HANDLE  Root;
+  EFI_FILE_HANDLE  Target;
+  BOOLEAN          IsFirmwareVolume;
+  UINT8            *Current;
+  UINT64           CurrentSize;
+  UINTN            CurrentRead;
+  BOOLEAN          UpToDate;
+  UINTN            Targets;
+  BOOLEAN          AnyFailed;
+
+  Status = Dir->Open (Dir, &File, SIDECAR_CONFIG_NAME, EFI_FILE_MODE_READ, 0);
+  if (EFI_ERROR (Status)) {
+    //
+    // A capsule volume from before the sidecar existed; nothing to do.
+    //
+    return;
+  }
+
+  Wanted    = NULL;
+  WantedLen = 0;
+  Status    = FileHandleGetSize (File, &FileSize);
+  if (!EFI_ERROR (Status) && (FileSize > 0) && (FileSize <= SIZE_64KB)) {
+    Wanted = AllocatePool ((UINTN)FileSize);
+  }
+
+  if (Wanted != NULL) {
+    ReadSize = (UINTN)FileSize;
+    Status   = FileHandleRead (File, &ReadSize, Wanted);
+    if (EFI_ERROR (Status) || (ReadSize != (UINTN)FileSize)) {
+      FreePool (Wanted);
+      Wanted = NULL;
+    } else {
+      WantedLen = ReadSize;
+    }
+  }
+
+  FileHandleClose (File);
+  if (Wanted == NULL) {
+    Print (L"RpiCapsuleOnDisk: warning: could not read the sidecar config.txt; boot config left alone\n");
+    return;
+  }
+
+  Status = gBS->LocateHandleBuffer (
+                  ByProtocol,
+                  &gEfiSimpleFileSystemProtocolGuid,
+                  NULL,
+                  &HandleCount,
+                  &Handles
+                  );
+  if (EFI_ERROR (Status)) {
+    FreePool (Wanted);
+    return;
+  }
+
+  Targets   = 0;
+  AnyFailed = FALSE;
+
+  for (Index = 0; Index < HandleCount; Index++) {
+    if (!OpenVolumeRoot (Handles[Index], &Root)) {
+      continue;
+    }
+
+    IsFirmwareVolume = FALSE;
+    for (NameIndex = 0; NameIndex < ARRAY_SIZE (mFirmwareFileNames); NameIndex++) {
+      if (!EFI_ERROR (Root->Open (Root, &Target, (CHAR16 *)mFirmwareFileNames[NameIndex], EFI_FILE_MODE_READ, 0))) {
+        FileHandleClose (Target);
+        IsFirmwareVolume = TRUE;
+        break;
+      }
+    }
+
+    if (!IsFirmwareVolume) {
+      Root->Close (Root);
+      continue;
+    }
+
+    Targets++;
+
+    //
+    // Compare before writing: the steady state is a match and no write.
+    //
+    UpToDate = FALSE;
+    if (!EFI_ERROR (Root->Open (Root, &Target, SIDECAR_CONFIG_NAME, EFI_FILE_MODE_READ, 0))) {
+      if (!EFI_ERROR (FileHandleGetSize (Target, &CurrentSize)) &&
+          (CurrentSize == WantedLen))
+      {
+        Current = AllocatePool (WantedLen);
+        if (Current != NULL) {
+          CurrentRead = WantedLen;
+          if (!EFI_ERROR (FileHandleRead (Target, &CurrentRead, Current)) &&
+              (CurrentRead == WantedLen) &&
+              (CompareMem (Current, Wanted, WantedLen) == 0))
+          {
+            UpToDate = TRUE;
+          }
+
+          FreePool (Current);
+        }
+      }
+
+      FileHandleClose (Target);
+    }
+
+    if (UpToDate) {
+      Print (L"RpiCapsuleOnDisk: config.txt on volume %u is current\n", (UINT32)Index);
+      Root->Close (Root);
+      continue;
+    }
+
+    Status = Root->Open (
+                     Root,
+                     &Target,
+                     SIDECAR_CONFIG_NAME,
+                     EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE,
+                     0
+                     );
+    if (EFI_ERROR (Status)) {
+      Status = Root->Open (
+                       Root,
+                       &Target,
+                       SIDECAR_CONFIG_NAME,
+                       EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE | EFI_FILE_MODE_CREATE,
+                       0
+                       );
+    }
+
+    if (EFI_ERROR (Status)) {
+      Print (L"RpiCapsuleOnDisk: warning: cannot open config.txt on volume %u: %r\n", (UINT32)Index, Status);
+      AnyFailed = TRUE;
+      Root->Close (Root);
+      continue;
+    }
+
+    WriteLen = WantedLen;
+    Status   = Target->Write (Target, &WriteLen, Wanted);
+    if (!EFI_ERROR (Status) && (WriteLen == WantedLen)) {
+      //
+      // Truncate any stale tail only after the data is down; a leftover
+      // tail would feed the VPU's last-assignment-wins parse stale lines.
+      //
+      Status = FileHandleSetSize (Target, WantedLen);
+      if (!EFI_ERROR (Status)) {
+        Target->Flush (Target);
+        Print (L"RpiCapsuleOnDisk: config.txt updated on volume %u (read at the next boot)\n", (UINT32)Index);
+      } else {
+        Print (L"RpiCapsuleOnDisk: warning: truncating config.txt on volume %u failed: %r\n", (UINT32)Index, Status);
+        AnyFailed = TRUE;
+      }
+    } else {
+      Print (L"RpiCapsuleOnDisk: warning: writing config.txt on volume %u failed: %r\n", (UINT32)Index, Status);
+      AnyFailed = TRUE;
+    }
+
+    FileHandleClose (Target);
+    Root->Close (Root);
+  }
+
+  FreePool (Handles);
+
+  //
+  // Consumed like a capsule once every reachable target is converged:
+  // deletion is the applied-vs-pending signal the BMC reads back from
+  // the drop box (a lingering file would list as staged forever).
+  // Read-only media keeps it, matching the capsule behavior; a failed
+  // or unreachable target keeps it too, so the next capsule event
+  // retries.
+  //
+  if ((Targets > 0) && !AnyFailed) {
+    Status = Dir->Open (
+                    Dir,
+                    &File,
+                    SIDECAR_CONFIG_NAME,
+                    EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE,
+                    0
+                    );
+    if (!EFI_ERROR (Status)) {
+      //
+      // FileHandleDelete releases the handle whatever it returns.
+      //
+      FileHandleDelete (File);
+    }
+  }
+
+  FreePool (Wanted);
 }
 
 /**
@@ -1021,6 +1261,8 @@ ProcessDropBox (
     return;
   }
 
+  mMediaFirmwareCurrent = FALSE;
+
   //
   // Collect the names first, apply second: deleting entries out of a
   // directory that is being iterated is exactly the kind of FAT
@@ -1031,7 +1273,10 @@ ProcessDropBox (
        !EFI_ERROR (Status) && !NoFile && (Info != NULL);
        Status = FileHandleFindNextFile (Dir, Info, &NoFile))
   {
-    if (((Info->Attribute & EFI_FILE_DIRECTORY) == 0) && (Info->FileSize > 0)) {
+    if (((Info->Attribute & EFI_FILE_DIRECTORY) == 0) &&
+        (Info->FileSize > 0) &&
+        (StrCmp (Info->FileName, SIDECAR_CONFIG_NAME) != 0))
+    {
       if (NameCount < MAX_CAPSULES) {
         Names[NameCount] = AllocateCopyPool (StrSize (Info->FileName), Info->FileName);
         if (Names[NameCount] != NULL) {
@@ -1051,6 +1296,14 @@ ProcessDropBox (
     }
 
     FreePool (Names[Index]);
+  }
+
+  //
+  // With this media's firmware proven current, bring its config.txt to
+  // this build too -- delivered beside the capsule for exactly this.
+  //
+  if (mMediaFirmwareCurrent) {
+    InstallSidecarConfig (Dir);
   }
 
   FileHandleClose (Dir);

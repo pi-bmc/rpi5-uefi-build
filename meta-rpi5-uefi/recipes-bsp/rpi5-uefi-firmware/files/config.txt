@@ -23,8 +23,15 @@ disable_overscan=1
 # Force maximum USB power regardless of the power supply.
 usb_max_current_enable=1
 
-# Force maximum CPU speed.
-force_turbo=1
+# No clock keys here on purpose: the ARM clock is EDK2's to manage.
+# CpuConfigDxe requests the firmware phase's speed over the VPU mailbox
+# and owns a managed arm_freq/force_turbo/over_voltage_delta block it
+# appends to this file from the CpuClockPolicy variable (Setup page, or
+# Redfish SpeedLimitMHz/SpeedLocked on /Systems/1/Processors/1). A
+# clock key added here would fight that block and take the policy out
+# of EDK2's hands.
+# # Force maximum CPU speed.
+# force_turbo=1
 
 # Enable USB-C Host
 dtoverlay=dwc2,dr_mode=host
@@ -40,3 +47,7 @@ enable_uart=1
 framebuffer_depth=32
 framebuffer_ignore_alpha=1
 hdmi_force_hotplug=1
+
+[all]
+# Load user overrides
+include uefi-cfg.txt

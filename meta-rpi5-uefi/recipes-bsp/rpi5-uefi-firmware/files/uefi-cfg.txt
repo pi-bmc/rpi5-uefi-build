@@ -1,0 +1,13 @@
+# uefi-cfg.txt - the EDK2-managed override file.
+#
+# config.txt includes this file as its very last directive, so values
+# here win over anything it sets (the VPU parser is last-assignment-
+# wins). The firmware owns it: CpuConfigDxe reconverges its marked
+# block below from the CpuClockPolicy variable on every boot (Setup ->
+# Device Manager -> CPU Configuration, or Redfish
+# SpeedLimitMHz/SpeedLocked on /Systems/1/Processors/1).
+#
+# Lines OUTSIDE the marked blocks are yours and survive reconvergence;
+# hand-edits INSIDE a block are overwritten. If an overclock leaves the
+# board unbootable, delete the block from any FAT reader (the BMC's
+# mass-storage view included) to return to stock.

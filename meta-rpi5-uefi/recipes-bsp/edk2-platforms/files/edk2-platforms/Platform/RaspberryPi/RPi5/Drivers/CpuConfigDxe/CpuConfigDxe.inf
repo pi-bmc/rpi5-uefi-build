@@ -26,6 +26,7 @@
 [Packages]
   MdePkg/MdePkg.dec
   MdeModulePkg/MdeModulePkg.dec
+  Platform/RaspberryPi/RaspberryPi.dec
   Platform/RaspberryPi/RPi5/RPi5.dec
 
 [LibraryClasses]
@@ -47,6 +48,7 @@
   gEfiDevicePathProtocolGuid                    ## PRODUCES
   gEfiHiiConfigAccessProtocolGuid               ## PRODUCES
   gEfiSimpleFileSystemProtocolGuid              ## SOMETIMES_CONSUMES
+  gRaspberryPiFirmwareProtocolGuid              ## SOMETIMES_CONSUMES
 
 [Guids]
   gRpiCpuConfigFormSetGuid                      ## PRODUCES ## Variable:L"CpuClockPolicy"

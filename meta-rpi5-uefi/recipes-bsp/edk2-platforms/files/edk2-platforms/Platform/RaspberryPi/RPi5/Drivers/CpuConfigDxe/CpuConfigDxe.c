@@ -4,12 +4,18 @@
   an explicit ARM frequency cap, up to the customary 3.0 GHz Pi 5
   overclock, in Processor-schema terms (SpeedLimitMHz / SpeedLocked).
 
-  Why this is a config.txt editor and not a clock driver: the BCM2712's
-  ARM ceiling is fixed at power-on by the VPU bootloader from config.txt
-  (arm_freq, with over_voltage_delta for headroom above stock), and our
-  shipped config.txt pins the cores there with force_turbo=1. Neither is
-  changeable at runtime, so the policy IS the config.txt content and a
-  change takes effect at the next reset.
+  Why this is (mostly) a config.txt editor and not a clock driver: the
+  BCM2712's ARM *ceiling* - the DVFS operating-point table and its
+  voltage curve - is fixed at power-on by the VPU bootloader from
+  config.txt (arm_freq, with over_voltage_delta for headroom above
+  stock) and is not changeable at runtime, so the persistent policy IS
+  the config.txt content and a ceiling change takes effect at the next
+  reset. Below the ceiling, though, the clock is a mailbox call away:
+  this driver also sets the ARM clock for the CURRENT boot through
+  RASPBERRY_PI_FIRMWARE_PROTOCOL (min(cap, this boot's ceiling)), which
+  is what lets the shipped config.txt carry no clock lines at all - the
+  firmware requests its own speed instead of a static force_turbo=1
+  doing it (the RPi4 ConfigDxe model).
 
   Split of responsibilities:
 
@@ -24,7 +30,16 @@
      sync reconverges it to the variable every boot (quiet, write only
      on drift - this also restores the policy after an sdimg reflash
      resets config.txt), and the page's interactive "apply" action runs
-     the same sync immediately, then offers the reset.
+     the same sync immediately, then offers the reset. The block now
+     carries the whole clock policy, force_turbo included - it also
+     overrides the force_turbo=1 that older shipped images still set
+     outside the block (last assignment wins).
+
+  3. The current boot's clock is converged to the same policy via the
+     mailbox at driver entry, after an interactive apply, and at
+     ReadyToBoot (picking up a BMC write that landed this boot) -
+     capping applies immediately; raising above this boot's power-on
+     ceiling still needs the reset.
 
   The VPU firmware thermal-throttles regardless of what is configured
   here, and the OP-TEE fan governor sees the extra heat like any other;
@@ -37,6 +52,8 @@
 **/
 
 #include <Uefi.h>
+
+#include <IndustryStandard/RpiMbox.h>
 
 #include <Library/BaseLib.h>
 #include <Library/BaseMemoryLib.h>
@@ -53,6 +70,7 @@
 
 #include <Protocol/DevicePath.h>
 #include <Protocol/HiiConfigAccess.h>
+#include <Protocol/RpiFirmware.h>
 
 #include <Guid/RpiCpuClockPolicy.h>
 
@@ -65,11 +83,34 @@ extern UINT8  CpuConfigDxeStrings[];
 #define POPUP_ATTRIBUTES  (EFI_LIGHTGRAY | EFI_BACKGROUND_BLUE)
 
 //
-// The managed block's markers in config.txt. The BEGIN line carries
-// extra prose after the marker; searches match the marker prefix only.
+// The managed block's markers. The BEGIN line carries extra prose
+// after the marker; searches match the marker prefix only.
 //
 #define CPU_BLOCK_BEGIN  "# BEGIN CpuConfigDxe"
 #define CPU_BLOCK_END    "# END CpuConfigDxe"
+
+//
+// The override file this driver owns. config.txt includes it as its
+// very last directive, so everything in it wins over anything the
+// shipped file sets (last assignment rules the VPU's parse) - and
+// config.txt itself stays untouched in steady state. Its absence is
+// benign to the VPU (a missing include is skipped), so creating it on
+// first use is safe.
+//
+#define CPU_OVERRIDE_FILE  L"uefi-cfg.txt"
+#define CPU_INCLUDE_LINE   "include uefi-cfg.txt"
+
+//
+// Appended once to a config.txt that predates the include (an image
+// flashed before uefi-cfg.txt existed, kept current by capsule updates
+// that never touch the boot volume's files): without it the VPU would
+// never read the override file and the clock policy would silently
+// stop applying on exactly those boards.
+//
+STATIC CONST CHAR8  mIncludeStanza[] =
+  "[all]\n"
+  "# Load the EDK2-managed override file (see uefi-cfg.txt).\n"
+  CPU_INCLUDE_LINE "\n";
 
 STATIC EFI_HANDLE      mDriverHandle;
 STATIC EFI_HII_HANDLE  mHiiHandle;
@@ -161,6 +202,64 @@ EffectiveDeltaUv (
   }
 
   return Policy->OverVoltageDeltaUv;
+}
+
+/**
+  Converge the CURRENT boot's ARM clock to the policy through the VPU
+  mailbox: min(cap, this boot's power-on ceiling), or the ceiling when
+  no cap is set. This is what replaces the force_turbo=1 the shipped
+  config.txt used to carry - the firmware phase runs at the allowed
+  maximum because this driver asked for it, not because a static file
+  pinned it. SpeedLocked deliberately plays no part here: it governs
+  OS-phase behavior through the managed block; under firmware there is
+  no DVFS governor to leave in charge, so not requesting a clock would
+  just mean booting slowly.
+
+  Fail-open everywhere: no mailbox protocol yet (dispatch order) or a
+  refused call leaves the clock as the VPU set it, and the ReadyToBoot
+  pass retries once the protocol certainly exists.
+**/
+STATIC
+VOID
+ApplyClockThisBoot (
+  IN CONST RPI_CPU_CLOCK_POLICY  *Policy
+  )
+{
+  EFI_STATUS                      Status;
+  RASPBERRY_PI_FIRMWARE_PROTOCOL  *FwProtocol;
+  UINT32                          CeilingHz;
+  UINT32                          TargetHz;
+  UINT32                          CapMhz;
+
+  Status = gBS->LocateProtocol (
+                  &gRaspberryPiFirmwareProtocolGuid,
+                  NULL,
+                  (VOID **)&FwProtocol
+                  );
+  if (EFI_ERROR (Status)) {
+    return;
+  }
+
+  Status = FwProtocol->GetMaxClockRate (RPI_MBOX_CLOCK_RATE_ARM, &CeilingHz);
+  if (EFI_ERROR (Status) || (CeilingHz == 0)) {
+    DEBUG ((DEBUG_WARN, "CpuConfigDxe: ARM max clock query failed - %r\n", Status));
+    return;
+  }
+
+  TargetHz = CeilingHz;
+  CapMhz   = EffectiveMhz (Policy);
+  if ((CapMhz != 0) && (CapMhz < (CeilingHz / 1000000U))) {
+    TargetHz = CapMhz * 1000000U;
+  }
+
+  Status = FwProtocol->SetClockRate (RPI_MBOX_CLOCK_RATE_ARM, TargetHz, FALSE);
+  DEBUG ((
+    DEBUG_INFO,
+    "CpuConfigDxe: ARM clock for this boot: %u MHz (ceiling %u MHz) - %r\n",
+    TargetHz / 1000000U,
+    CeilingHz / 1000000U,
+    Status
+    ));
 }
 
 STATIC
@@ -344,10 +443,12 @@ ParseLastValue (
 }
 
 /**
-  Render the managed block for a policy; zero length when there is
-  nothing to override (no cap and locked = stock, the file returns
-  pristine - the shipped force_turbo=1 keeps ruling). The [all] line
-  lives INSIDE the markers so removal cannot strand it, and neutralizes
+  Render the managed block for a policy. Always present: the block now
+  carries the WHOLE clock policy - the shipped config.txt sets no clock
+  keys at all, and the block must also override the force_turbo=1 that
+  images flashed before this change still carry outside the markers
+  (the last assignment wins in the VPU's parse). The [all] line lives
+  INSIDE the markers so removal cannot strand it, and neutralizes
   whatever section filter precedes the block.
 **/
 STATIC
@@ -363,9 +464,6 @@ BuildManagedBlock (
   UINTN   Len;
 
   Mhz = EffectiveMhz (Policy);
-  if ((Mhz == 0) && (Policy->SpeedLocked != 0)) {
-    return 0;
-  }
 
   Len = AsciiSPrint (
           Buf,
@@ -379,12 +477,17 @@ BuildManagedBlock (
   }
 
   //
-  // SpeedLocked unchecked lifts the shipped force_turbo=1 pin so DVFS
-  // may scale below the cap; the last assignment wins in config.txt.
+  // SpeedLocked pins the cores at the ceiling for the OS phase too;
+  // unlocked leaves DVFS free to scale below it. The firmware phase is
+  // not affected either way - ApplyClockThisBoot() requests its own
+  // speed through the mailbox.
   //
-  if (Policy->SpeedLocked == 0) {
-    Len += AsciiSPrint (&Buf[Len], BufSize - Len, "force_turbo=0\n");
-  }
+  Len += AsciiSPrint (
+           &Buf[Len],
+           BufSize - Len,
+           "force_turbo=%u\n",
+           (Policy->SpeedLocked != 0) ? 1u : 0u
+           );
 
   DeltaUv = EffectiveDeltaUv (Policy);
   if ((Mhz > RPI_CPU_CLOCK_STOCK_MHZ) && (DeltaUv > 0)) {
@@ -401,22 +504,23 @@ BuildManagedBlock (
 }
 
 /**
-  Original content minus any existing managed block, plus the policy's
-  block at EOF. A BEGIN marker without its END claims through to EOF
-  (self-healing a damaged block). Caller frees *NewContent.
+  Original content minus any existing managed block, plus Append (when
+  AppendLen is nonzero) at EOF. A BEGIN marker without its END claims
+  through to EOF (self-healing a damaged block). AppendLen of zero
+  strips only - used to retire a legacy managed block from config.txt.
+  Caller frees *NewContent.
 **/
 STATIC
 EFI_STATUS
 BuildDesiredContent (
-  IN  CONST CHAR8                 *Content,
-  IN  UINTN                       ContentLen,
-  IN  CONST RPI_CPU_CLOCK_POLICY  *Policy,
-  OUT CHAR8                       **NewContent,
-  OUT UINTN                       *NewLen
+  IN  CONST CHAR8  *Content,
+  IN  UINTN        ContentLen,
+  IN  CONST CHAR8  *Append OPTIONAL,
+  IN  UINTN        AppendLen,
+  OUT CHAR8        **NewContent,
+  OUT UINTN        *NewLen
   )
 {
-  CHAR8        Block[256];
-  UINTN        BlockLen;
   CONST CHAR8  *BlockStart;
   CONST CHAR8  *EndMarker;
   CONST CHAR8  *Tail;
@@ -424,8 +528,6 @@ BuildDesiredContent (
   UINTN        TailLen;
   CHAR8        *Buf;
   UINTN        Len;
-
-  BlockLen = BuildManagedBlock (Policy, Block, sizeof (Block));
 
   BlockStart = AsciiStrStr (Content, CPU_BLOCK_BEGIN);
   if (BlockStart != NULL) {
@@ -452,7 +554,7 @@ BuildDesiredContent (
     TailLen = 0;
   }
 
-  Buf = AllocatePool (HeadLen + TailLen + BlockLen + 2);
+  Buf = AllocatePool (HeadLen + TailLen + AppendLen + 2);
   if (Buf == NULL) {
     return EFI_OUT_OF_RESOURCES;
   }
@@ -464,13 +566,13 @@ BuildDesiredContent (
     Len += TailLen;
   }
 
-  if (BlockLen != 0) {
+  if ((Append != NULL) && (AppendLen != 0)) {
     if ((Len > 0) && (Buf[Len - 1] != '\n')) {
       Buf[Len++] = '\n';
     }
 
-    CopyMem (&Buf[Len], Block, BlockLen);
-    Len += BlockLen;
+    CopyMem (&Buf[Len], Append, AppendLen);
+    Len += AppendLen;
   }
 
   *NewContent = Buf;
@@ -479,50 +581,57 @@ BuildDesiredContent (
 }
 
 /**
-  Converge config.txt's managed block to the policy. Quiet and
-  idempotent: reads, compares, writes only on drift (in place - see
-  RpiRewriteFileInPlace on why the file must never transit through
-  nonexistence). No popups here; callers own the UI.
+  Make config.txt ready for the override file, touching it at most
+  once per lifetime: retire a legacy in-config.txt managed block (from
+  firmware that predates uefi-cfg.txt) and append the include stanza
+  when it is missing (an old flashed image kept current by capsule
+  updates - those never touch the boot volume's files). In steady
+  state this reads, matches, and writes nothing.
 
-  @retval EFI_SUCCESS   In sync (already, or *Changed says a write ran).
-  @retval EFI_NOT_FOUND No boot volume, or it carries no config.txt.
+  @retval EFI_SUCCESS   config.txt carries the include (already, or
+                        *Changed says a write ran).
+  @retval EFI_NOT_FOUND No config.txt - not a state this driver invents
+                        one from: the VPU booted somehow, and a fresh
+                        file missing everything else the platform needs
+                        would not help.
 **/
 STATIC
 EFI_STATUS
-SyncConfigTxt (
-  IN  CONST RPI_CPU_CLOCK_POLICY  *Policy,
-  OUT BOOLEAN                     *Changed
+EnsureConfigTxtIncludes (
+  IN  EFI_FILE_PROTOCOL  *Root,
+  OUT BOOLEAN            *Changed
   )
 {
-  EFI_STATUS         Status;
-  EFI_FILE_PROTOCOL  *Root;
-  CHAR8              *Content;
-  UINTN              ContentLen;
-  CHAR8              *Desired;
-  UINTN              DesiredLen;
+  EFI_STATUS  Status;
+  CHAR8       *Content;
+  UINTN       ContentLen;
+  CHAR8       *Desired;
+  UINTN       DesiredLen;
+  BOOLEAN     NeedInclude;
 
   *Changed = FALSE;
 
-  Status = RpiOpenBootVolume (&Root);
-  if (EFI_ERROR (Status)) {
-    return EFI_NOT_FOUND;
-  }
-
   Status = RpiReadFileContent (Root, L"config.txt", (VOID **)&Content, &ContentLen);
   if (EFI_ERROR (Status)) {
-    //
-    // No config.txt is not a state this driver invents one from: the
-    // VPU booted somehow, and a fresh file missing everything else the
-    // platform needs would not help.
-    //
-    Root->Close (Root);
     return EFI_NOT_FOUND;
   }
 
-  Status = BuildDesiredContent (Content, ContentLen, Policy, &Desired, &DesiredLen);
+  NeedInclude = (AsciiStrStr (Content, CPU_INCLUDE_LINE) == NULL);
+  if (!NeedInclude && (AsciiStrStr (Content, CPU_BLOCK_BEGIN) == NULL)) {
+    FreePool (Content);
+    return EFI_SUCCESS;
+  }
+
+  Status = BuildDesiredContent (
+             Content,
+             ContentLen,
+             NeedInclude ? mIncludeStanza : NULL,
+             NeedInclude ? (sizeof (mIncludeStanza) - 1) : 0,
+             &Desired,
+             &DesiredLen
+             );
   if (EFI_ERROR (Status)) {
     FreePool (Content);
-    Root->Close (Root);
     return Status;
   }
 
@@ -537,15 +646,116 @@ SyncConfigTxt (
 
   FreePool (Desired);
   FreePool (Content);
+  return Status;
+}
+
+/**
+  Converge uefi-cfg.txt's managed block to the policy. Quiet and
+  idempotent: reads, compares, writes only on drift - in place when the
+  file exists (a mid-write power cut garbles a tail, never loses the
+  file), created outright when it does not (the sdimg ships a skeleton,
+  but its absence is benign: the VPU skips a missing include). Content
+  outside the markers is a human's and survives.
+**/
+STATIC
+EFI_STATUS
+SyncOverrideFile (
+  IN  EFI_FILE_PROTOCOL           *Root,
+  IN  CONST RPI_CPU_CLOCK_POLICY  *Policy,
+  OUT BOOLEAN                     *Changed
+  )
+{
+  EFI_STATUS  Status;
+  CHAR8       Block[256];
+  UINTN       BlockLen;
+  CHAR8       *Content;
+  UINTN       ContentLen;
+  BOOLEAN     Existed;
+  CHAR8       *Desired;
+  UINTN       DesiredLen;
+
+  *Changed = FALSE;
+
+  BlockLen = BuildManagedBlock (Policy, Block, sizeof (Block));
+
+  Existed = TRUE;
+  Status  = RpiReadFileContent (Root, CPU_OVERRIDE_FILE, (VOID **)&Content, &ContentLen);
+  if (EFI_ERROR (Status)) {
+    Existed    = FALSE;
+    Content    = AllocateZeroPool (1);
+    ContentLen = 0;
+    if (Content == NULL) {
+      return EFI_OUT_OF_RESOURCES;
+    }
+  }
+
+  Status = BuildDesiredContent (Content, ContentLen, Block, BlockLen, &Desired, &DesiredLen);
+  if (EFI_ERROR (Status)) {
+    FreePool (Content);
+    return Status;
+  }
+
+  if (Existed && (DesiredLen == ContentLen) && (CompareMem (Desired, Content, ContentLen) == 0)) {
+    Status = EFI_SUCCESS;
+  } else {
+    Status = Existed ?
+             RpiRewriteFileInPlace (Root, CPU_OVERRIDE_FILE, Desired, DesiredLen) :
+             RpiReplaceFileContent (Root, CPU_OVERRIDE_FILE, Desired, DesiredLen);
+    if (!EFI_ERROR (Status)) {
+      *Changed = TRUE;
+    }
+  }
+
+  FreePool (Desired);
+  FreePool (Content);
+  return Status;
+}
+
+/**
+  Converge the boot volume to the policy: config.txt readied (include
+  present, legacy block retired), then the override file's managed
+  block rebuilt. No popups here; callers own the UI.
+
+  @retval EFI_SUCCESS   In sync (already, or *Changed says a write ran).
+  @retval EFI_NOT_FOUND No boot volume, or it carries no config.txt.
+**/
+STATIC
+EFI_STATUS
+SyncClockOverrides (
+  IN  CONST RPI_CPU_CLOCK_POLICY  *Policy,
+  OUT BOOLEAN                     *Changed
+  )
+{
+  EFI_STATUS         Status;
+  EFI_FILE_PROTOCOL  *Root;
+  BOOLEAN            CfgChanged;
+  BOOLEAN            OverrideChanged;
+
+  *Changed = FALSE;
+
+  Status = RpiOpenBootVolume (&Root);
+  if (EFI_ERROR (Status)) {
+    return EFI_NOT_FOUND;
+  }
+
+  Status = EnsureConfigTxtIncludes (Root, &CfgChanged);
+  if (!EFI_ERROR (Status)) {
+    Status   = SyncOverrideFile (Root, Policy, &OverrideChanged);
+    *Changed = CfgChanged || OverrideChanged;
+  }
+
   Root->Close (Root);
   return Status;
 }
 
 /**
-  Refresh the read-only "configured in config.txt" line from the file
-  itself, at form open. Deliberately worded as what the file requests,
-  not what the cores run at: after an apply (or a ReadyToBoot sync on a
-  failed boot attempt) the file is ahead of the silicon until reset.
+  Refresh the read-only "configured for the next boot" line from the
+  files themselves, at form open: config.txt first, then - when it
+  includes the override file - uefi-cfg.txt on top, matching the VPU's
+  last-assignment-wins order (the include is config.txt's last
+  directive). Deliberately worded as what the files request, not what
+  the cores run at: after an apply the files are ahead of the DVFS
+  table until reset.
 **/
 STATIC
 VOID
@@ -557,23 +767,47 @@ UpdateConfiguredString (
   EFI_FILE_PROTOCOL  *Root;
   CHAR8              *Content;
   UINTN              ContentLen;
+  CHAR8              *Override;
+  UINTN              OverrideLen;
   UINT32             Mhz;
   UINT32             DeltaUv;
   UINT32             Locked;
   CHAR16             Line[80];
 
+  Root   = NULL;
   Status = RpiOpenBootVolume (&Root);
   if (!EFI_ERROR (Status)) {
     Status = RpiReadFileContent (Root, L"config.txt", (VOID **)&Content, &ContentLen);
-    Root->Close (Root);
   }
 
   if (EFI_ERROR (Status)) {
+    if (Root != NULL) {
+      Root->Close (Root);
+    }
+
     UnicodeSPrint (Line, sizeof (Line), L"unknown - boot volume not accessible");
   } else {
     Mhz     = ParseLastValue (Content, "arm_freq", RPI_CPU_CLOCK_STOCK_MHZ);
     DeltaUv = ParseLastValue (Content, "over_voltage_delta", 0);
-    Locked  = ParseLastValue (Content, "force_turbo", 1);
+    //
+    // No force_turbo line anywhere means DVFS rules (the VPU default);
+    // config.txt no longer sets it, the managed block always does, and
+    // images from before this change carry their own line for the
+    // parse to find.
+    //
+    Locked = ParseLastValue (Content, "force_turbo", 0);
+
+    if (AsciiStrStr (Content, CPU_INCLUDE_LINE) != NULL) {
+      Status = RpiReadFileContent (Root, CPU_OVERRIDE_FILE, (VOID **)&Override, &OverrideLen);
+      if (!EFI_ERROR (Status)) {
+        Mhz     = ParseLastValue (Override, "arm_freq", Mhz);
+        DeltaUv = ParseLastValue (Override, "over_voltage_delta", DeltaUv);
+        Locked  = ParseLastValue (Override, "force_turbo", Locked);
+        FreePool (Override);
+      }
+    }
+
+    Root->Close (Root);
     FreePool (Content);
 
     if (DeltaUv != 0) {
@@ -647,7 +881,13 @@ ApplyNow (
     return;
   }
 
-  Status = SyncConfigTxt (&Policy, &Changed);
+  //
+  // The current boot honors the new policy immediately, up to this
+  // boot's power-on ceiling; only raising the ceiling needs the reset.
+  //
+  ApplyClockThisBoot (&Policy);
+
+  Status = SyncClockOverrides (&Policy, &Changed);
   if (Status == EFI_NOT_FOUND) {
     PopupWait (
       L"No boot volume with a config.txt found.",
@@ -657,14 +897,14 @@ ApplyNow (
   }
 
   if (EFI_ERROR (Status)) {
-    PopupWait (L"Rewriting config.txt on the boot volume failed.", NULL);
+    PopupWait (L"Rewriting uefi-cfg.txt on the boot volume failed.", NULL);
     return;
   }
 
   UpdateConfiguredString ();
 
   if (!Changed) {
-    PopupWait (L"config.txt already matches - nothing to apply.", NULL);
+    PopupWait (L"uefi-cfg.txt already matches - nothing to apply.", NULL);
     return;
   }
 
@@ -672,13 +912,13 @@ ApplyNow (
     UnicodeSPrint (
       Line,
       sizeof (Line),
-      L"config.txt updated: stock configuration at the next boot."
+      L"uefi-cfg.txt updated: stock configuration at the next boot."
       );
   } else {
     UnicodeSPrint (
       Line,
       sizeof (Line),
-      L"config.txt updated: ARM frequency %u MHz at the next boot.",
+      L"uefi-cfg.txt updated: ARM frequency %u MHz at the next boot.",
       EffectiveMhz (&Policy)
       );
   }
@@ -904,16 +1144,22 @@ OnReadyToBoot (
   EFI_STATUS            Status;
 
   GetPolicyVariable (&Policy);
-  Status = SyncConfigTxt (&Policy, &Changed);
+  //
+  // Converge the running clock too: a BMC Redfish write that landed
+  // during this boot lowers the cap right here, and the entry-time
+  // attempt is retried in case the mailbox protocol dispatched late.
+  //
+  ApplyClockThisBoot (&Policy);
+  Status = SyncClockOverrides (&Policy, &Changed);
   if (Changed) {
     DEBUG ((
       DEBUG_INFO,
-      "CpuConfigDxe: config.txt reconverged (limit %u MHz, locked %u; next boot)\n",
+      "CpuConfigDxe: uefi-cfg.txt reconverged (limit %u MHz, locked %u; next boot)\n",
       EffectiveMhz (&Policy),
       Policy.SpeedLocked
       ));
   } else if (EFI_ERROR (Status) && (Status != EFI_NOT_FOUND)) {
-    DEBUG ((DEBUG_WARN, "CpuConfigDxe: config.txt sync failed - %r\n", Status));
+    DEBUG ((DEBUG_WARN, "CpuConfigDxe: uefi-cfg.txt sync failed - %r\n", Status));
   }
 }
 
@@ -924,10 +1170,20 @@ CpuConfigEntryPoint (
   IN EFI_SYSTEM_TABLE  *SystemTable
   )
 {
-  EFI_STATUS  Status;
-  EFI_EVENT   Event;
+  EFI_STATUS            Status;
+  EFI_EVENT             Event;
+  RPI_CPU_CLOCK_POLICY  Policy;
 
   EnsurePolicyVariable ();
+
+  //
+  // Ask for this boot's clock as early as possible - the shipped
+  // config.txt no longer pins the cores, so until this call the SoC
+  // runs at whatever the VPU left it (fail-open when the mailbox
+  // protocol has not dispatched yet; ReadyToBoot retries).
+  //
+  GetPolicyVariable (&Policy);
+  ApplyClockThisBoot (&Policy);
 
   mDriverHandle = NULL;
   Status        = gBS->InstallMultipleProtocolInterfaces (

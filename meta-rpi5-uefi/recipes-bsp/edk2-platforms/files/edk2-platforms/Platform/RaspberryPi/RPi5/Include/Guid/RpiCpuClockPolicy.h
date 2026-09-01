@@ -1,7 +1,7 @@
 /** @file
 
   CpuClockPolicy - the persistent ARM clock policy, shared between
-  CpuConfigDxe (efivarstore Setup page + config.txt reconvergence) and
+  CpuConfigDxe (efivarstore Setup page + uefi-cfg.txt reconvergence) and
   the Redfish Processor feature driver (RedfishProcessorDxe), which
   consumes standard /Systems/1/Processors/{id} PATCHes into these
   questions.
@@ -9,11 +9,13 @@
   The properties mirror the Processor schema (v1_10_0+):
 
     SpeedLimitMhz  the explicit frequency cap (arm_freq). 0 means "no
-                   override": the managed config.txt block is removed
-                   and the SoC runs the shipped stock configuration.
-    SpeedLocked    TRUE pins the cores at the cap (the shipped
-                   force_turbo=1 behavior); FALSE emits force_turbo=0
-                   so DVFS may scale below the cap.
+                   cap": the managed uefi-cfg.txt block carries no
+                   arm_freq line and the SoC keeps its stock ceiling.
+    SpeedLocked    TRUE pins the cores at the cap for the OS phase
+                   (force_turbo=1 in the managed uefi-cfg.txt block);
+                   FALSE emits force_turbo=0 so DVFS may scale below
+                   the cap. The firmware phase requests its own speed
+                   through the VPU mailbox either way.
 
   OverVoltageDeltaUv has no Processor-schema counterpart and stays a
   BIOS attribute (CpuOverVoltageDeltaUv).
@@ -40,8 +42,8 @@
 //
 // The supported cap range. 0 is the "no override" sentinel; a nonzero
 // cap is clamped into [MIN, MAX] by the driver (the VFR bounds it too;
-// belt and braces for a BMC-written variable). Stock is the shipped
-// config.txt ceiling, used for the over-voltage threshold.
+// belt and braces for a BMC-written variable). Stock is the SoC's own
+// default ceiling, used for the over-voltage threshold.
 //
 #define RPI_CPU_CLOCK_STOCK_MHZ  2400
 #define RPI_CPU_CLOCK_MIN_MHZ    1500

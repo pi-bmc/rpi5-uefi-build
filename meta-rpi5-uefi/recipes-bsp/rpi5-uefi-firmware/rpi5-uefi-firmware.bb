@@ -53,6 +53,7 @@ PV = "202608"
 # source: the DSC/FDF snippets that wire in the optional module sets, and the
 # config.txt deployed beside the firmware.
 SRC_URI = "file://config.txt \
+           file://uefi-cfg.txt \
            file://usbnet-dsc-snippet.inc \
            file://usbnet-fdf-snippet.fdf.inc \
            file://profiling-dsc-snippet.inc \
@@ -718,6 +719,10 @@ do_deploy() {
     # rpi5-uefi install flow with an explicit armstub= entry.
     install -m 0644 ${WORKDIR}/Build/RPi5/${RPI5_BUILD_TARGET}_GCC/FV/RPI_EFI.fd ${DEPLOYDIR}/armstub8-2712.bin
     install -m 0644 ${WORKDIR}/config.txt ${DEPLOYDIR}/config.txt
+    # The EDK2-managed override file config.txt includes last; shipped as
+    # a commented skeleton so the boot volume always carries it and the
+    # firmware's in-place rewriter has a file to converge.
+    install -m 0644 ${WORKDIR}/uefi-cfg.txt ${DEPLOYDIR}/uefi-cfg.txt
     install -m 0644 ${B}/RPI_EFI.report.txt ${DEPLOYDIR}/RPI_EFI.report.txt
 
     # The self-applying capsule updater (see Rpi5CapsuleApp in RPi5.dsc):
