@@ -155,6 +155,9 @@ UsbEemDriverStart (
 
   Status = LoadAllDescriptor (UsbIo, &UsbEthDriver->Config);
   ASSERT_EFI_ERROR (Status);
+  if (EFI_ERROR (Status)) {
+    goto ErrorExit;
+  }
 
   GetEndpoint (UsbIo, UsbEthDriver);
 

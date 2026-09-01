@@ -34,9 +34,15 @@ LoadAllDescriptor (
 
   Status = UsbIo->UsbGetConfigDescriptor (UsbIo, &Tmp);
   ASSERT_EFI_ERROR (Status);
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
 
   Status = gBS->AllocatePool (EfiBootServicesData, Tmp.TotalLength, (VOID **)ConfigDesc);
   ASSERT_EFI_ERROR (Status);
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
 
   Status = UsbGetDescriptor (
              UsbIo,
