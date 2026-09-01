@@ -27,16 +27,52 @@ two of the three stacked causes in that stall analysis outright.
 
 | Question | Decision |
 |---|---|
-| Scope | rpi5-uefi-build, nuc-bios-build, nanokvm-app. **Not** nanokvm-build. |
+| Scope | rpi5-uefi-build and nuc-bios-build only (see Scope correction below) |
 | Gadget mechanism | configfs `f_eem` / `eem.usb0`, composed like `ncm.usb0` today |
 | Replace or add | Add EEM, default to it, keep ECM/NCM/RNDIS built |
 | Driver home | New `MdeModulePkg/Bus/Usb/UsbNetwork/UsbCdcEem/`, delivered as an edk2 patch per repo |
 | Station address | Build-time PCD, defaulted to the existing `da:c0:ff:ee:10:02` |
 
-`nanokvm-build` needs no change: the built BMC kernel already carries
+### Scope correction (2026-09-01, after the first draft)
+
+The BMC side is **already done**. `nanokvm-app` commit `1b003d7`
+("feat(usbgadget): CDC-EEM RHI NIC and CDC-ACM console") moved the RHI NIC from
+`f_ncm` to `f_eem`: `eemFuncName = "eem.usb0"`, `EthernetEEM = "eem"`, the
+config default is `"eem"`, and persisted `"ncm"` already falls back to the
+default. Remaining `nanokvm-app` work is owned by another agent and is out of
+scope for this plan.
+
+`nanokvm-build` needs no change either: the built BMC kernel already carries
 `CONFIG_USB_F_EEM=y` and `CONFIG_USB_CONFIGFS_EEM=y` from the riscv defconfig.
 (`nanokvm.cfg`'s `CONFIG_USB_CONFIGFS_ECM=y` is redundant with that default and
 is not evidence of what is enabled.)
+
+This spec's remaining job is therefore exactly the half the BMC cannot do:
+**the EDK2 CDC-EEM SNP driver and its wiring into both firmwares.**
+
+### Why EEM, per the BMC's own contract
+
+`nanokvm-app/.claude/docs/host-firmware-contract.md` is the authoritative
+BMC-side statement of what host firmware must implement. It records the reason
+the transport changed at all, which is not primarily the DWC2 stall:
+
+The SG2002's dwc2 core implements **six** device IN endpoints
+(`GHWCFG4.num_dev_in_eps`). The composite spends all six:
+`mass_storage.disk0` 1, `eem.usb0` 1, `hid.GS0` 1, `hid.GS1` 1, `acm.GS0` 2.
+ECM, NCM and RNDIS all carry an interrupt-IN notification endpoint and so cost
+**two**. EEM has no notification interface and costs **one** -- and that single
+endpoint is the only reason a NIC and a CDC-ACM serial console fit at the same
+time. The DWC2 latency win is real but secondary.
+
+Two requirements follow from the missing notification endpoint, both stated in
+that contract and both binding on this driver:
+
+* **Assume link-up whenever the device is enumerated.** There is no interrupt
+  endpoint, so no connect/disconnect notification will ever arrive and the
+  driver must not wait for one. Patch 0100 already implements exactly this at
+  the `NetworkCommon` level (CableDetect defaults to 1 and is sticky), so EEM
+  inherits it -- but the EEM driver must not reintroduce a wait of its own.
+* **Report a fixed link speed.** There is no speed-change notification.
 
 Legacy `g_ether use_eem=1` was considered and rejected: it binds a UDC by
 itself and cannot compose with the existing `mass_storage.disk0` + `hid.GS0` +
@@ -53,6 +89,29 @@ NetworkCommon patches for free:
   it covers EEM without modification.
 * 0108 (hold off binding until the platform opens the gate) -- likewise. The
   gate is what keeps the RHI NIC out of `EfiBootManagerConnectAll`.
+
+### Which protocol members must be non-NULL
+
+`NetworkCommon` NULL-checks every `UsbEthUndi.*` member, `UsbEthInitialize` and
+`UsbEthStatistics`, so those may stay NULL exactly as `UsbCdcEcm` leaves them
+(the struct comes from `AllocateZeroPool`). It calls these **without a NULL
+check**, so the EEM driver must supply all of them:
+
+| Member | Call site | Note |
+| --- | --- | --- |
+| `UsbEthMacAddress` | `DriverBinding.c:191` | under `ASSERT_EFI_ERROR` -- must return `EFI_SUCCESS` |
+| `UsbEthMaxBulkSize` | `DriverBinding.c:193` | |
+| `UsbEthInterrupt` | `DriverBinding.c:368` | under `ASSERT_EFI_ERROR` -- the stub must return `EFI_SUCCESS`, not `EFI_UNSUPPORTED`, or DEBUG builds assert |
+| `UsbEthFunDescriptor` | `PxeFunction.c:831` | EEM has no such descriptor; it must be synthesized |
+| `SetUsbEthPacketFilter` | `PxeFunction.c:834, 854` | |
+| `UsbEthTransmit` | `PxeFunction.c:1427` | |
+| `UsbEthReceive` | `PxeFunction.c:1561` | |
+
+The synthesized functional descriptor reports `NumberMcFilters = 0`. That is
+not a placeholder: `PxeFunction.c:832` branches on it, and zero selects the
+simple `RECEIVE_FILTER_ALL_MULTICAST` path, which never calls
+`SetUsbEthMcastFilter` and needs no multicast list. A point-to-point link has
+no use for hardware multicast filtering.
 
 The driver body is a pure *add-files* hunk, so one identical body applies to
 both repos despite their different edk2 SRCREVs (rpi5 pins
@@ -214,15 +273,9 @@ both the PCD and the BMC constant to change).
 * Add a `bcfg driver add` line to `deploy/install-drivers.nsh`. Entries are
   sequentially numbered, so everything after the insertion point renumbers.
 
-### nanokvm-app
+### nanokvm-app / nanokvm-build
 
-* `eemFuncName = "eem.usb0"`, `EthernetEEM = "eem"`.
-* Accept `eem` in `SetEthernet`; add the `ethernetFuncName` case.
-* Config default flips to `"eem"`, with a migration for configs holding `"ncm"`.
-* The endpoint-budget table in `serialconsole.go` already carries `eem: 1`.
-* A test for the new mode alongside the existing NCM `ethernet_attr_test.go`.
-  `f_eem` is u_ether-based, so `eem.usb0` exposes the same `dev_addr` /
-  `host_addr` / `qmult` / `ifname` attributes the NCM tests exercise.
+No work in this plan. See the scope correction above.
 
 ## Unchanged
 
@@ -236,8 +289,7 @@ The MAC-matched discovery contract, `RpiRedfishSyncDxe`,
 Neither firmware repo has a host-side unit harness for EDK2 code, so:
 
 1. Both firmwares build green.
-2. `nanokvm-app`: `go test -race -count=1 ./...` including the new EEM test.
-3. On hardware: the NIC enumerates with the expected station address,
+2. On hardware: the NIC enumerates with the expected station address,
    `RedfishDiscoverDxe` accepts the interface, and a Redfish sync completes.
 
 Two build-level traps to respect: edk2 patch bodies carry **CRLF** line endings
