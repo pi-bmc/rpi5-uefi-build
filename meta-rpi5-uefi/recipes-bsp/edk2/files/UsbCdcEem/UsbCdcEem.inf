@@ -1,0 +1,45 @@
+## @file
+#   USB CDC Ethernet Emulation Model (EEM) driver for the DXE phase.
+#
+# Copyright (c) 2026, appkins. All rights reserved.<BR>
+# SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = UsbCdcEem
+  FILE_GUID                      = 2ce7bcaf-b1e5-458a-b6ea-048292c45e1f
+  MODULE_TYPE                    = UEFI_DRIVER
+  VERSION_STRING                 = 1.0
+  ENTRY_POINT                    = UsbEemEntry
+
+[Sources]
+  UsbCdcEem.c
+  UsbCdcEem.h
+  UsbEemFraming.c
+  UsbEemFraming.h
+  UsbEemFunction.c
+  ComponentName.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  MdeModulePkg/MdeModulePkg.dec
+
+[LibraryClasses]
+  UefiDriverEntryPoint
+  UefiBootServicesTableLib
+  UefiLib
+  DebugLib
+  UefiUsbLib
+  MemoryAllocationLib
+  BaseMemoryLib
+  PcdLib
+
+[Protocols]
+  gEfiUsbIoProtocolGuid
+  gEfiDevicePathProtocolGuid
+  gEfiDriverBindingProtocolGuid
+  gEdkIIUsbEthProtocolGuid
+
+[Pcd]
+  gEfiMdeModulePkgTokenSpaceGuid.PcdUsbCdcEemMacAddress
